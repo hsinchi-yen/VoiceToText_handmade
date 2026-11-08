@@ -6,6 +6,16 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# CUDA is opt-in so that `cargo build --workspace` works on machines without the CUDA Toolkit.
+# The release desktop build enables it: `cargo build --release -p v2c-cli --features cuda`.
+default = []
+cuda = ["whisper-rs/cuda"]
+
 [dependencies]
 v2c-core.workspace = true
-# T0.1 adds whisper-rs (feature "cuda"); T1.10 adds the SenseVoice binding; T1.10b adds NVML.
+async-trait.workspace = true
+# spawn_blocking for the async AsrProvider impl.
+tokio.workspace = true
+whisper-rs = "0.16"
+# T1.10 adds the SenseVoice binding; T1.10b adds NVML.

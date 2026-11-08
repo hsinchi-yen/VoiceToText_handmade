@@ -10,9 +10,14 @@ publish.workspace = true
 name = "v2c-cli"
 path = "src/main.rs"
 
+[features]
+# Build Breeze (whisper.cpp) with CUDA: `cargo run -p v2c-cli --release --features cuda -- bench ...`
+cuda = ["v2c-asr-local/cuda"]
+
 [dependencies]
 v2c-core.workspace = true
 v2c-asr-local.workspace = true
 v2c-platform.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+hound.workspace = true

@@ -21,6 +21,7 @@ v2c-platform = { path = "crates/v2c-platform" }
 anyhow = "1"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
+hound = "3.5"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
