@@ -1,0 +1,10 @@
+[package]
+name = "v2c-ffi"
+description = "uniffi bindings exposing v2c-core to the Android app (Phase 2, T2.3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+v2c-core.workspace = true

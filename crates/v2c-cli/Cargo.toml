@@ -1,0 +1,18 @@
+[package]
+name = "v2c-cli"
+description = "v2c developer tool: transcribe, bench, hotkey-test, inject-test"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "v2c-cli"
+path = "src/main.rs"
+
+[dependencies]
+v2c-core.workspace = true
+v2c-asr-local.workspace = true
+v2c-platform.workspace = true
+anyhow.workspace = true
+clap.workspace = true

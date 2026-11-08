@@ -1,0 +1,1 @@
+請把 Breeze ASR 跟 LM Studio 的設定寫進 v2c 的文件。

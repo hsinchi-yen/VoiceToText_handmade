@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/v2c-core",
+    "crates/v2c-asr-local",
+    "crates/v2c-platform",
+    "crates/v2c-cli",
+    "crates/v2c-ffi",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+v2c-core = { path = "crates/v2c-core" }
+v2c-asr-local = { path = "crates/v2c-asr-local" }
+v2c-platform = { path = "crates/v2c-platform" }
+anyhow = "1"
+async-trait = "0.1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+toml = "0.8"

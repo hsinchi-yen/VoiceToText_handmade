@@ -1,0 +1,11 @@
+[package]
+name = "v2c-platform"
+description = "All OS-specific code for v2c: hotkey hooks, text injection, foreground app, data protection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+v2c-core.workspace = true
+thiserror.workspace = true

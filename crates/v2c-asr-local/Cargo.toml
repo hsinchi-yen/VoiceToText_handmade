@@ -1,0 +1,11 @@
+[package]
+name = "v2c-asr-local"
+description = "Local speech recognition for v2c desktop: Breeze-ASR-25 (whisper.cpp, CUDA) and SenseVoice-Small (CPU)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+v2c-core.workspace = true
+# T0.1 adds whisper-rs (feature "cuda"); T1.10 adds the SenseVoice binding; T1.10b adds NVML.

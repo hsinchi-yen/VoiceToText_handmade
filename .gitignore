@@ -1,0 +1,25 @@
+# Build output
+target/
+node_modules/
+dist/
+apps/android/.gradle/
+apps/android/build/
+apps/android/app/build/
+apps/android/local.properties
+
+# Test audio is the user's own voice — never commit it
+tests/fixtures/audio/*.wav
+
+# Model files
+*.gguf
+*.bin
+*.onnx
+models/
+
+# Local config / secrets
+*.local.toml
+.env
+
+# Claude Code local state
+.claude/*.local.*
+.claude/worktrees/
