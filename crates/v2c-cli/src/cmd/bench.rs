@@ -118,6 +118,8 @@ struct Row {
     audio_ms: u64,
     asr_ms: u64,
     cer: f64,
+    speed_ok: bool,
+    simplified: bool,
 }
 
 pub fn run(args: Args) -> anyhow::Result<()> {
@@ -187,11 +189,25 @@ pub fn run(args: Args) -> anyhow::Result<()> {
             println!("  got:      {}", out.transcript.text);
             println!("  expected: {expected}");
             println!("  CER {:.1}% | {}", c * 100.0, describe(&out));
+            let speed_ok = within_latency_target(out.total_ms(), clip.duration_ms());
+            let simplified = has_simplified(&out.transcript.text);
+            println!(
+                "  {} speed ({} ms per 10 s of audio, target <= {TARGET_MS_PER_10S}){}",
+                if speed_ok { "PASS" } else { "FAIL" },
+                per_10s(out.total_ms(), clip.duration_ms()),
+                if simplified {
+                    " | FAIL: output contains simplified characters"
+                } else {
+                    ""
+                }
+            );
             rows.push(Row {
                 name: f.name.clone(),
                 audio_ms: clip.duration_ms(),
                 asr_ms: out.total_ms(),
                 cer: c,
+                speed_ok,
+                simplified,
             });
         }
     }
@@ -241,7 +257,39 @@ fn print_summary(rows: &[Row], skipped: usize) {
             asr as f64 / audio as f64
         }
     );
-    println!("target: a 10 s clip in <= 1200 ms of ASR time");
+    let slow = rows.iter().filter(|r| !r.speed_ok).count();
+    let simp = rows.iter().filter(|r| r.simplified).count();
+    println!("target: a 10 s clip in <= {TARGET_MS_PER_10S} ms of ASR time");
+    println!(
+        "verdict: {} (speed failures {slow}, simplified-output failures {simp})",
+        if slow == 0 && simp == 0 {
+            "PASS"
+        } else {
+            "FAIL"
+        }
+    );
+}
+
+/// Acceptance target from the T0.1 card: 10 s of audio in at most 1.2 s of ASR.
+const TARGET_MS_PER_10S: u64 = 1200;
+
+/// ASR time scaled to 10 s of audio. Short clips scale up their fixed overhead, so this
+/// errs on the strict side.
+fn per_10s(asr_ms: u64, audio_ms: u64) -> u64 {
+    asr_ms * 10_000 / audio_ms.max(1)
+}
+
+fn within_latency_target(asr_ms: u64, audio_ms: u64) -> bool {
+    per_10s(asr_ms, audio_ms) <= TARGET_MS_PER_10S
+}
+
+/// Common characters that only exist in Simplified Chinese (their Traditional forms differ).
+/// A heuristic, not a converter: any hit means the zh-TW requirement failed.
+const SIMPLIFIED_ONLY: &str =
+    "这们说个会时来对开发过还关头问见长车东门实现应该电话国学经机么吗让认识请谢给钟点读书";
+
+fn has_simplified(text: &str) -> bool {
+    text.chars().any(|c| SIMPLIFIED_ONLY.contains(c))
 }
 
 #[cfg(test)]
@@ -274,6 +322,24 @@ mod tests {
     fn cer_simplified_output_is_penalised() {
         // 開會 vs 开会: two of four characters differ.
         assert!((cer("今天開會", "今天开会") - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn latency_target_scales_to_ten_seconds() {
+        assert!(within_latency_target(1200, 10_000));
+        assert!(!within_latency_target(1201, 10_000));
+        assert!(within_latency_target(600, 5_000));
+        assert!(!within_latency_target(700, 5_000));
+        assert_eq!(per_10s(100, 0), 1_000_000);
+    }
+
+    #[test]
+    fn detects_simplified_output() {
+        assert!(has_simplified("这个 meeting 我们 delay 一下"));
+        assert!(!has_simplified(
+            "這個 meeting 我們 delay 一下，改到下禮拜。"
+        ));
+        assert!(!has_simplified("Hello world"));
     }
 
     #[test]

@@ -116,11 +116,14 @@ thread_local! {
 unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 && lparam != 0 {
         // SAFETY: for WH_KEYBOARD_LL with HC_ACTION, lparam points to a KBDLLHOOKSTRUCT.
-        let vk = unsafe { (*(lparam as *const KBDLLHOOKSTRUCT)).vkCode };
+        let info = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
+        let vk = info.vkCode;
+        // Ignore keystrokes v2c itself injected (see `INJECT_MARKER`).
+        let ours = info.dwExtraInfo == super::INJECT_MARKER;
         let msg = wparam as u32;
         let is_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
         let is_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
-        if is_down || is_up {
+        if (is_down || is_up) && !ours {
             let _ = catch_unwind(AssertUnwindSafe(|| {
                 HOOK_STATE.with(|cell| {
                     let Ok(mut guard) = cell.try_borrow_mut() else {

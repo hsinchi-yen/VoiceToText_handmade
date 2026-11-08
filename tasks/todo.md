@@ -10,9 +10,15 @@
   - [x] 2026-11-09 驗證：rustc 1.99.1、CUDA 13.5；`cargo build`、`cargo test`（14 項通過）、`cargo clippy -D warnings`、`cargo fmt --check` 全部通過
   - [x] 🧑 你審查介面後合併（2026-11-09 核准）
 - [ ] W1 T0.1 Breeze-ASR-25 轉 GGML＋量測（≤ 1.2 秒、繁體、英文保留、純英不被翻譯）＋ VRAM 實測
+  - [x] 程式已合併（2026-11-09）：`BreezeAsr`、轉檔腳本、`transcribe`/`bench`（含 PASS/FAIL 判定、簡體字偵測）；CPU 與 CUDA 版皆可編譯
+  - [ ] 🧑 轉檔、錄音、量測、VRAM（見 human-checklist）
 - [ ] W1 T0.2 熱鍵狀態機＋Windows 掛勾
+  - [x] 程式已合併（2026-11-09）：狀態機 30 個測試涵蓋第 3 節每一列；掛勾忽略 v2c 自己注入的按鍵
+  - [ ] 🧑 `hotkey-test` 實機按鍵
 - [ ] W1 T0.3 注入計畫＋SendInput
-- [ ] **檢查點 0**：結果寫入 `spike-results.md`
+  - [x] 程式已合併（2026-11-09）：`plan()`、`SendInputInjector`（注入標記、部分失敗時放開 Shift）、前景 App 偵測
+  - [ ] 🧑 5 個 App 實機 `inject-test`
+- [ ] **檢查點 0**：結果寫入 `spike-results.md`（你已同意 Phase 1 平行開發，實測失敗時回頭修）
 
 ## Phase 1 — Windows MVP
 - [ ] W2 T1.1 最小可用路徑（≤ 1.5 秒、預錄緩衝）

@@ -55,6 +55,8 @@ impl Injector for SendInputInjector {
             let accepted = send(batch);
             sent += accepted;
             if accepted < batch.len() {
+                // A half-sent Shift+Enter batch could leave Shift stuck down.
+                send(&[vk_input(VK_SHIFT, true)]);
                 return Err(InjectError::Partial { sent, total });
             }
         }
@@ -178,7 +180,7 @@ fn key_input(vk: VIRTUAL_KEY, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
                 wScan: scan,
                 dwFlags: flags,
                 time: 0,
-                dwExtraInfo: 0,
+                dwExtraInfo: super::INJECT_MARKER,
             },
         },
     }
