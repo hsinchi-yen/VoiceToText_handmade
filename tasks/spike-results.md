@@ -1,0 +1,153 @@
+# Phase 0 量測結果
+
+## T0.1 Breeze-ASR-25
+
+### 【實作前確認】結果（2026-11-09 查證）
+
+| 項目 | 結果 | 來源 |
+|------|------|------|
+| 授權 | **Apache-2.0**（模型卡 metadata `license: apache-2.0`，repo 附 `LICENSE`）。訓練資料授權為 ODC-By＋Apache-2.0（合成中文）、CC0、MIT 等寬鬆授權。可轉檔、量化並放到你自己的 HF repo 散布（附 LICENSE 與出處）。 | https://huggingface.co/MediaTek-Research/Breeze-ASR-25 |
+| 基底模型 | `openai/whisper-large-v2` 微調（`config.json`：`WhisperForConditionalGeneration`、d_model 1280、32+32 層、80 mel、vocab 51865） | https://huggingface.co/MediaTek-Research/Breeze-ASR-25/blob/main/config.json |
+| repo 檔案 | `model.safetensors` 3.09 GB（16-bit 權重）、tokenizer 檔齊全（`vocab.json`、`added_tokens.json`、`merges.txt`…）；另有 `optimizer.bin` 3.6 GB 與兩個 OpenAI 格式 `.pt`（3.1 GB / 6.2 GB），轉檔不需要，腳本不下載 | HF API `api/models/MediaTek-Research/Breeze-ASR-25` |
+| whisper.cpp 轉檔 | **支援**。`models/convert-h5-to-ggml.py` 專給 HF 微調的 Whisper 用：讀 `vocab.json`、`added_tokens.json`、`config.json`，以 `WhisperForConditionalGeneration.from_pretrained` 載入，加上 openai/whisper 的 `mel_filters.npz`。Breeze 的檔案與欄位都符合。v1.8.3 與 master 的腳本內容相同。注意：`transformers` 須用 4.x（5.x 預設以 bf16 載入，腳本的 `.numpy()` 會失敗）。 | https://github.com/ggml-org/whisper.cpp/blob/v1.8.3/models/convert-h5-to-ggml.py |
+| 量化 | whisper.cpp `examples/quantize`（CMake target `whisper-quantize`），用法 `whisper-quantize in.bin out.bin q5_0\|q8_0` | https://github.com/ggml-org/whisper.cpp/tree/v1.8.3/examples/quantize |
+| whisper-rs | 最新 **0.16.0**（2026-03-12），內建 whisper.cpp **1.8.3**（`whisper-rs-sys` 0.15.0）。features：`cuda`、`vulkan`、`log_backend`/`tracing_backend` 等 | https://crates.io/crates/whisper-rs 、https://docs.rs/whisper-rs/0.16.0 |
+
+**whisper-rs 0.16 API 重點**（依 crate 原始碼確認）
+- `WhisperContext::new_with_params(path, WhisperContextParameters)`；`WhisperContextParameters { use_gpu, flash_attn, gpu_device, dtw_parameters }` —— **有 flash attention 開關**，已預設開啟。
+- `ctx.create_state()` → `WhisperState`（`Send + Sync`）；`state.pcm_to_mel()` + `state.lang_detect(offset_ms, threads)` 回傳 `(lang_id, probs)`；`whisper_rs::get_lang_str(id)` 轉成 `"en"`、`"zh"`。
+- `state.full(FullParams, &samples)`；`FullParams::set_language(Some("zh"))`、`set_initial_prompt`（字串含 NUL 會 panic，已先移除）、`set_no_context`、`set_single_segment`、`set_audio_ctx`。
+- 輸出：`state.as_iter()` 逐段 `segment.to_str_lossy()`。
+- `whisper_rs::install_logging_hooks()`：沒開 `log_backend`／`tracing_backend` 時等於把 whisper.cpp 的日誌全部丟掉 —— 已在載入模型時呼叫，避免 whisper.cpp 的 debug 輸出帶出 token 文字（遵守「日誌不記錄辨識文字」）。
+
+### 實作決策
+
+- **語言策略**：`LanguageMode::Detect`（預設）先跑 `lang_detect`；偵測為 `en` → 以 `en` 解碼，其他一律 `zh`。`bench`／`transcribe` 可用 `--lang zh|en` 強制語言做對照。
+- **`Lang` 對應**：依輸出文字的字元類別判斷（只看字元類別，不保存文字）：同時有中文字與拉丁字母 → `Mixed`；只有中文 → `Zh`；只有拉丁字母 → `En`；都沒有 → 依解碼語言。
+- **initial prompt**：`AsrContext.prompt` 有值就用，否則用 `prompts::ASR_BASE_PROMPT`（`prompts::asr_initial_prompt` 尚未實作，T1.8 由呼叫端組好放進 `ctx.prompt`）。英文解碼也帶同一個 prompt。
+- **解碼參數**：greedy（best_of 1）、`no_context`、`single_segment`、`no_timestamps`；其餘（溫度 fallback 等）用 whisper.cpp 預設值。
+- **`cuda` feature 預設關閉**：`v2c-asr-local` 與 `v2c-cli` 各有 `cuda` feature（CLI 轉發給 asr-local，asr-local 轉發給 `whisper-rs/cuda`）。理由：開 CUDA 需要 CUDA Toolkit 且 nvcc 編譯 whisper.cpp 要數分鐘，預設關閉讓其他開發者與 CI 的 `cargo build --workspace` 不需 CUDA 也能過。正式桌面版（T1.x）在 `apps/desktop` 依賴時開 `features = ["cuda"]`。沒開 cuda 時會在 stderr 提醒「running on CPU」。
+- `AsrProvider::transcribe`：在 Tokio runtime 內用 `spawn_blocking` 跑推論；不在 runtime 內就直接在呼叫端執行緒跑。單一 `WhisperState` 常駐（GPU 暫存只配置一次），推論以 `Mutex` 序列化。
+- **錯誤**：找不到／載不了模型 → `V2cError::Config`（含模型路徑，不含文字）；取樣率不對／空音檔 → `V2cError::Audio`；推論失敗 → `V2cError::Provider { stage: Asr, provider: "breeze", kind: Server }`。錯誤訊息都不含辨識文字。
+
+### CER 計算方式
+
+`v2c-cli bench` 的 CER（字元錯誤率）＝ `Levenshtein(辨識結果, 期望文字) / 期望文字長度`，兩邊都先做以下正規化：
+1. 全形 ASCII（U+FF01–U+FF5E）轉半形；全形空白轉一般空白。
+2. ASCII 字母轉小寫。
+3. 移除所有「非字母、非數字」的字元（空白、標點、符號；判斷用 Rust `char::is_alphanumeric`）。中文字算字母，所以**每個中文字、每個英文字母、每個數字各算一個單位**。
+4. 不做簡繁轉換 —— 輸出簡體字會被算成錯字（這正是要驗收的「輸出繁體」）。
+5. 不做數字正規化 —— 「三點」辨識成「3點」會算 1 個錯字。
+
+期望文字：有 `<name>.raw.txt` 就用它（逐字稿，例如 `filler-01.raw.txt`），否則用 `<name>.txt`。期望文字為空時，辨識也為空記 0%，否則 100%。
+
+### 建置筆記（這台電腦）
+
+| 項目 | 結果 |
+|------|------|
+| CPU 版 `cargo build/test/clippy --workspace` | ✅ 通過 |
+| `--features cuda`（CUDA 13.5、RTX 2060 = sm_75） | ✅ 編譯成功；用 whisper `ggml-base` 測試模型實測 GPU 推論正常（`CUDA : ARCHS = 750`） |
+
+需要的環境設定（只在當次 PowerShell 有效，不改系統設定）：
+
+```powershell
+# 1. CMake：不在 PATH 上，用 VS Build Tools 內建的
+$env:Path = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;$env:Path"
+# 2. bindgen 需要 libclang（你的使用者環境變數已有，新開的視窗會自動帶入）
+$env:LIBCLANG_PATH = 'C:\Program Files\LLVM\bin'
+# 3. 短的 target 目錄：whisper.cpp 的 CMake/MSBuild 在太深的路徑會失敗（MSB4018，Windows 路徑長度上限）
+$env:CARGO_TARGET_DIR = "$env:USERPROFILE\.v2ct"
+# 4. 只有 --features cuda 需要：
+$env:CUDA_PATH = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.5'   # 目前系統值指向舊的 v11.0
+$env:CUDA_PATH_V13_5 = $env:CUDA_PATH       # CUDA 13.5 的 MSBuild 整合靠這個找 Toolkit
+$env:CMAKE_CUDA_ARCHITECTURES = '75'         # 只編 RTX 2060 (Turing)，省很多編譯時間
+```
+
+遇到的錯誤與解法：
+1. `error MSB4018 ... GetItemSpecModifier`（CMake TryCompile 失敗）：worktree 路徑太深，超過 Windows 260 字元上限 → 設 `CARGO_TARGET_DIR` 為短路徑。（或你自行在 Windows 開啟長路徑支援，這是系統設定，agent 不動。）
+2. `CUDA 13.5.targets(688,9): error : The CUDA Toolkit directory '' does not exist.` → 系統的 `CUDA_PATH` 指向 v11.0、且沒有 `CUDA_PATH_V13_5` → 依上面第 4 點設定即可。**建議你**把系統環境變數 `CUDA_PATH` 改成 v13.5 並新增 `CUDA_PATH_V13_5`（之後桌面 App 的 release build 也需要）。
+3. 首次 CUDA 編譯約 5～8 分鐘（nvcc 編 ggml-cuda）。
+
+其他觀察（以 whisper `ggml-base` 測試模型＋Windows 內建 TTS 產生的英文／中文音檔做端到端驗證，**不是 Breeze 的數據**）：
+- GPU：4～5 秒音檔 ASR 130～150 ms（語言偵測約 35 ms＋解碼約 100 ms），偵測 `en` p=0.99、`zh` p=1.00，策略運作正常。
+- CPU（同一個 base 模型）：約 19～20 秒 —— Windows MSVC 版 whisper.cpp 的 CPU 推論非常慢，large-v2 等級的 Breeze 在 CPU 上不可行，CPU 備援必須是 SenseVoice（與計畫一致）。
+- 語言偵測會多跑一次 encoder：Breeze 上這段的耗時就是 `detect` 欄位，若總時間超標，可比較 `--lang zh` 的耗時判斷偵測成本。
+
+### 你要執行的步驟（🧑）
+
+1. **錄音**：依 `tests/fixtures/audio/README.md` 錄 10 段 WAV。
+2. **轉檔**：在 repo 根目錄
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File tools\convert-breeze\convert-breeze.ps1
+   ```
+   問 `Proceed? [y/N]` 時輸入 `y`。完成後把印出的檔案大小與 SHA-256 填到下方「模型檔」表。
+3. **量測**（先設好上面「建置筆記」的環境變數 1～4）：
+   ```powershell
+   cargo run -p v2c-cli --release --features cuda -- bench --asr breeze --model models\ggml-breeze-asr-25-q5_0.bin tests\fixtures\audio
+   cargo run -p v2c-cli --release --features cuda -- bench --asr breeze --model models\ggml-breeze-asr-25-q8_0.bin tests\fixtures\audio
+   # 對照「強制 zh」會不會把純英文翻成中文：
+   cargo run -p v2c-cli --release --features cuda -- bench --asr breeze --model models\ggml-breeze-asr-25-q5_0.bin --lang zh tests\fixtures\audio
+   ```
+   每段會印出辨識文字、期望文字、CER、ASR 毫秒（偵測＋解碼）、音檔長度；最後有總表。把數字填進下方「延遲與準確度」表，並檢查：輸出是繁體、夾雜句的英文有保留、`en-01`/`en-02` 沒被翻成中文。
+   超標時可試 `--audio-ctx 768`（encoder 只看約 15 秒，較快但可能較不準）。
+4. **VRAM**：平常的使用狀態（Chrome、Teams 等照開），另開一個視窗執行
+   ```powershell
+   nvidia-smi --query-gpu=memory.used,memory.total --format=csv -l 1
+   ```
+   再用 `--repeat 20` 讓模型常駐一段時間：
+   ```powershell
+   cargo run -p v2c-cli --release --features cuda -- bench --asr breeze --model models\ggml-breeze-asr-25-q5_0.bin --repeat 20 tests\fixtures\audio
+   ```
+   記錄「執行前」與「執行中最高」的 `memory.used`，相減就是 Breeze 用量。LM Studio 載入 3B／4B（Q4_K_M、context 2048）後再各量一次組合。量測中拖曳視窗、播 YouTube，觀察 2560×1440 畫面是否卡頓。
+5. **AMD 內顯**：查筆電 BIOS／廠商工具（MUX 開關、Advanced Optimus），或 NVIDIA 控制面板「管理顯示模式」，看內建螢幕能不能交給 AMD 內顯。
+
+### 模型檔（🧑 轉檔後填）
+
+| 檔案 | 大小 (MB) | SHA-256 |
+|------|-----------|---------|
+| ggml-breeze-asr-25-q5_0.bin | | |
+| ggml-breeze-asr-25-q8_0.bin | | |
+
+### 延遲與準確度（🧑 填，release＋cuda）
+
+驗收：10 秒音檔 ASR ≤ 1200 ms；輸出繁體；夾雜句英文保留；純英文不被翻成中文。
+
+| 段落 | 音檔 ms | q5_0 ASR ms（偵測＋解碼） | q5_0 CER | q8_0 ASR ms | q8_0 CER | 偵測語言 | 繁體？ | 英文保留／未被翻譯？ |
+|------|---------|---------------------------|----------|-------------|----------|----------|--------|----------------------|
+| zh-01 | | | | | | | | |
+| zh-02 | | | | | | | | |
+| zh-03 | | | | | | | | |
+| en-01 | | | | | | | | |
+| en-02 | | | | | | | | |
+| mix-01 | | | | | | | | |
+| mix-02 | | | | | | | | |
+| mix-03 | | | | | | | | |
+| filler-01 | | | | | | | | |
+| vocab-01 | | | | | | | | |
+| **平均／最大** | | | | | | | | |
+
+`--lang zh` 對照：en-01 輸出＿＿＿＿、en-02 輸出＿＿＿＿（有沒有被翻成中文？）
+
+### VRAM（🧑 填，`nvidia-smi` memory.used，MiB）
+
+執行前（平常狀態）基準：＿＿＿＿ MiB／6144 MiB
+
+| 組合 | Breeze 用量 | LM Studio 用量 | 合計（v2c＋LM Studio） | 剩餘 | 畫面卡頓？（拖曳視窗／播影片） |
+|------|-------------|----------------|------------------------|------|------------------------------|
+| Breeze q5_0 ＋ LM Studio 3B | | | | | 是／否 |
+| Breeze q5_0 ＋ LM Studio 4B | | | | | 是／否 |
+| Breeze q8_0 ＋ LM Studio 3B | | | | | 是／否 |
+| Breeze q8_0 ＋ LM Studio 4B | | | | | 是／否 |
+
+「均衡」方案合計 ≤ 4 GB？ 是／否
+
+### 筆電能否把畫面輸出切到 AMD 內顯（🧑 填）
+
+- 機型：＿＿＿＿
+- MUX 開關／Advanced Optimus：有／沒有
+- 結果：＿＿＿＿
+
+### 結論（量測後填）
+
+- 預設量化：q5_0／q8_0
+- 是否需要備案（Whisper large-v3-turbo）：是／否
