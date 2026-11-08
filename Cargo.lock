@@ -377,6 +377,7 @@ version = "0.1.0"
 dependencies = [
  "thiserror",
  "v2c-core",
+ "windows-sys",
 ]
 
 [[package]]
