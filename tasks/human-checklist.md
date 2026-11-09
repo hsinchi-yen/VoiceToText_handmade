@@ -51,6 +51,12 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] 檢查點 0 核准
 
 ## Phase 1
+- [ ] T1.1 桌面 App 第一次實機說話（需要先完成 Breeze 轉檔）
+  1. 把 `ggml-breeze-asr-25-q5_0.bin` 放到 `%LOCALAPPDATA%\v2c\models\`（或設 `V2C_MODEL_DIR`）
+  2. 設好 CUDA 環境變數（見上方「建議的系統設定」），在 `apps\desktop` 執行 `npm install`，再執行 `npm run tauri dev -- --release --features cuda`（不加 cuda 是 CPU 版，很慢，只能確認流程）
+  3. 主視窗顯示「speech recognition ready」後，開記事本，按住右 Ctrl 說話、放開；中文、英文、中英夾雜各 3 句
+  4. 延遲：主視窗顯示「放開到出字 X ms」，或看 `%APPDATA%\v2c\logs\v2c.log.<日期>` 的 `latency_ms`（目標 ≤ 1500）
+  5. 第一個字有沒有被吃掉；說話中拔掉／切換麥克風，看是否自動恢復（主視窗顯示「麥克風已重新連線」）
 - [ ] T1.10 SenseVoice（模型已下載到 `%LOCALAPPDATA%\v2c\models\sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17\`；同層的 `dl-sensevoice\sv.tar.bz2` 可刪）：錄好音檔後執行 `cargo run -p v2c-cli --release --features sensevoice -- bench --asr sensevoice --model "$env:LOCALAPPDATA\v2c\models\sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17" tests/fixtures/audio`
 - [ ] T1.2 剪貼簿貼上＋還原（指令：`cargo run -p v2c-cli -- inject-test --paste "測試\n第二行"`，3 秒內切到目標視窗）
   1. `cargo test -p v2c-platform -- --ignored`（兩個實機剪貼簿測試，會短暫改動剪貼簿；應全部通過）；`inject-test` 結束時應印 `clipboard: restored`
@@ -69,7 +75,11 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
   5. 閒置 15 分鐘 → 卸載；再按熱鍵第一句稍慢
   6. profile 切到 `cpu_only` 再切回 → 立即卸載、切回後重新載入
   7. 依 `docs/local-setup.md` 設定 NVIDIA 控制面板、Windows 圖形設定、LM Studio
-- [ ] 在 LM Studio 載入 3B 模型並啟動伺服器（T1.5 前）
+- [ ] 在 LM Studio 載入 3B 模型並啟動伺服器（T1.5 前）；模型的 Context Length 設 **8192**（預設 4096 時，長篇免持口述會超出而退回規則式去贅字）
+- [ ] T1.5 潤飾實測：`cargo run -p v2c-cli --release --features cuda -- bench --asr breeze --model <breeze.bin> --llm lmstudio tests/fixtures/audio`（還沒錄音時 `filler-01` 會直接拿 `.raw.txt` 做純文字潤飾）
+  - polished 那行沒有改變語意、沒有多出或少掉內容、問句沒被回答、「幫我寫一封信…」這類請求沒被執行
+  - filler-01 應得到「我們後天早上十點見面。」；沒有簡體字
+  - 每段的 `PASS/FAIL asr+polish (… per 10 s, target <= 2500)` 與摘要的 `polish verdict`
 - [ ] 各卡的實機驗收（見各卡「🧑 需人工」）
 - [ ] 檢查點 1：日常使用一週，問題記在 `tasks/dogfood-windows.md`
 
