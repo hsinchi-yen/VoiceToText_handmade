@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-use super::http::{join_url, CallSite};
+use super::http::{join_url, CallSite, CloudHttp};
 use super::wav::encode_wav_pcm16;
 use super::{script_lang, AsrContext, AsrProvider, Transcript};
 use crate::audio::AudioClip;
@@ -28,7 +28,7 @@ If there is no speech, output nothing.";
 
 /// One Gemini `generateContent` call, shared by ASR and LLM.
 pub(crate) struct GeminiCall<'a> {
-    pub http: &'a reqwest::Client,
+    pub http: &'a CloudHttp,
     pub base_url: &'a str,
     pub api_key: &'a ApiKey,
     pub model: &'a str,
@@ -44,12 +44,11 @@ impl GeminiCall<'_> {
             "contents": [{ "role": "user", "parts": parts }],
             "generationConfig": { "temperature": 0 },
         });
-        let url = join_url(
-            self.base_url,
-            &format!("models/{}:generateContent", self.model),
-        );
+        let model = path_model(self.model)?;
+        let url = join_url(self.base_url, &format!("models/{model}:generateContent"));
         let req = self
             .http
+            .client()
             .post(url)
             .header("x-goog-api-key", self.api_key.expose())
             .json(&body);
@@ -58,10 +57,31 @@ impl GeminiCall<'_> {
     }
 }
 
-/// `candidates[0].content.parts[].text` joined. `None` when there is no candidate content
-/// (e.g. blocked by safety filters); an empty string is a valid (silent) answer.
+/// Model id safe to put in a URL path segment. Accepts `models/<id>` (the form the models
+/// list returns) and rejects ids that could alter the URL.
+pub(crate) fn path_model(model: &str) -> Result<&str> {
+    let id = model.trim();
+    let id = id.strip_prefix("models/").unwrap_or(id);
+    let bad = id.is_empty()
+        || id
+            .chars()
+            .any(|c| matches!(c, '/' | '?' | '#' | '%' | '\\') || c.is_whitespace());
+    if bad {
+        return Err(crate::V2cError::Config("invalid model name".into()));
+    }
+    Ok(id)
+}
+
+/// `candidates[0].content.parts[].text` joined. `None` when there is no usable answer:
+/// no candidate (blocked prompt), or a `finishReason` other than `STOP` (e.g. `MAX_TOKENS`
+/// = truncated, `SAFETY`), so the caller falls back to local. An empty string is a valid
+/// (silent) answer.
 pub(crate) fn candidate_text(v: &Value) -> Option<String> {
     let cand = v.get("candidates")?.get(0)?;
+    match cand.get("finishReason").and_then(Value::as_str) {
+        None | Some("STOP") => {}
+        Some(_) => return None,
+    }
     let parts = match cand.get("content").and_then(|c| c.get("parts")) {
         Some(p) => p.as_array()?,
         // Finished normally with no parts = empty output.
@@ -80,7 +100,7 @@ pub(crate) fn candidate_text(v: &Value) -> Option<String> {
 }
 
 pub struct GeminiAsr {
-    http: reqwest::Client,
+    http: CloudHttp,
     base_url: String,
     api_key: ApiKey,
     model: String,
@@ -91,7 +111,7 @@ impl GeminiAsr {
     /// `base_url` e.g. `https://generativelanguage.googleapis.com/v1beta`
     /// (see `route::default_base_url`); `model` from `CloudService::asr_model`.
     pub fn new(
-        http: reqwest::Client,
+        http: CloudHttp,
         base_url: impl Into<String>,
         api_key: ApiKey,
         model: impl Into<String>,
@@ -158,6 +178,7 @@ impl AsrProvider for GeminiAsr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asr::http::cloud_http_client;
     use crate::asr::test_support::*;
     use crate::{Lang, V2cError};
     use wiremock::matchers::{header, method, path};
@@ -165,7 +186,7 @@ mod tests {
 
     fn asr(server: &MockServer) -> GeminiAsr {
         GeminiAsr::new(
-            reqwest::Client::new(),
+            cloud_http_client().unwrap(),
             format!("{}/v1beta", server.uri()),
             ApiKey::new("AIza-TEST"),
             "gemini-test-flash",
@@ -279,12 +300,74 @@ mod tests {
         let empty = json!({"candidates": [{"finishReason": "STOP"}]});
         assert_eq!(candidate_text(&empty).unwrap(), "");
         assert!(candidate_text(&json!({"candidates": []})).is_none());
+        for reason in ["MAX_TOKENS", "SAFETY", "RECITATION"] {
+            let v = json!({"candidates": [{"content": {"parts": [{"text": "partial"}]},
+                "finishReason": reason}]});
+            assert!(candidate_text(&v).is_none(), "{reason}");
+        }
+    }
+
+    #[tokio::test]
+    async fn truncated_or_filtered_answer_is_bad_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "candidates": [{"content": {"parts": [{"text": "half"}]}, "finishReason": "MAX_TOKENS"}]
+            })))
+            .mount(&server)
+            .await;
+        let err = asr(&server).transcribe(&tone(), &ctx()).await.unwrap_err();
+        assert_provider_err(&err, Stage::Asr, ProviderErrorKind::BadResponse);
+    }
+
+    #[test]
+    fn path_model_validation() {
+        assert_eq!(path_model("gemini-x").unwrap(), "gemini-x");
+        assert_eq!(path_model("models/gemini-x").unwrap(), "gemini-x");
+        for bad in ["", "a/b", "a?b", "a#b", "a b", "a%2Fb", "../x"] {
+            assert!(matches!(path_model(bad), Err(V2cError::Config(_))), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_model_sends_nothing() {
+        let server = MockServer::start().await;
+        let a = GeminiAsr::new(
+            cloud_http_client().unwrap(),
+            server.uri(),
+            ApiKey::new("AIza-TEST"),
+            "x?key=1",
+            Duration::from_millis(300),
+        );
+        let err = a.transcribe(&tone(), &ctx()).await.unwrap_err();
+        assert!(matches!(err, V2cError::Config(_)));
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn redirect_to_other_host_does_not_forward_key() {
+        let attacker = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(ok_body("x")))
+            .mount(&attacker)
+            .await;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", format!("{}/steal", attacker.uri()).as_str()),
+            )
+            .mount(&server)
+            .await;
+        let err = asr(&server).transcribe(&tone(), &ctx()).await.unwrap_err();
+        assert_provider_err(&err, Stage::Asr, ProviderErrorKind::BadResponse);
+        assert!(attacker.received_requests().await.unwrap().is_empty());
     }
 
     #[test]
     fn debug_hides_key() {
         let a = GeminiAsr::new(
-            reqwest::Client::new(),
+            cloud_http_client().unwrap(),
             "https://example.invalid",
             ApiKey::new("AIza-SECRET"),
             "m",

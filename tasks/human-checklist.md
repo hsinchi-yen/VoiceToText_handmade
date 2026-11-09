@@ -51,6 +51,12 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] 檢查點 0 核准
 
 ## Phase 1
+- [ ] T1.1 桌面 App 第一次實機說話（需要先完成 Breeze 轉檔）
+  1. 把 `ggml-breeze-asr-25-q5_0.bin` 放到 `%LOCALAPPDATA%\v2c\models\`（或設 `V2C_MODEL_DIR`）
+  2. 設好 CUDA 環境變數（見上方「建議的系統設定」），在 `apps\desktop` 執行 `npm install`，再執行 `npm run tauri dev -- --release --features cuda`（不加 cuda 是 CPU 版，很慢，只能確認流程）
+  3. 主視窗顯示「speech recognition ready」後，開記事本，按住右 Ctrl 說話、放開；中文、英文、中英夾雜各 3 句
+  4. 延遲：主視窗顯示「放開到出字 X ms」，或看 `%APPDATA%\v2c\logs\v2c.log.<日期>` 的 `latency_ms`（目標 ≤ 1500）
+  5. 第一個字有沒有被吃掉；說話中拔掉／切換麥克風，看是否自動恢復（主視窗顯示「麥克風已重新連線」）
 - [ ] T1.10 SenseVoice（模型已下載到 `%LOCALAPPDATA%\v2c\models\sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17\`；同層的 `dl-sensevoice\sv.tar.bz2` 可刪）：錄好音檔後執行 `cargo run -p v2c-cli --release --features sensevoice -- bench --asr sensevoice --model "$env:LOCALAPPDATA\v2c\models\sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17" tests/fixtures/audio`
 - [ ] T1.2 剪貼簿貼上＋還原（指令：`cargo run -p v2c-cli -- inject-test --paste "測試\n第二行"`，3 秒內切到目標視窗）
   1. `cargo test -p v2c-platform -- --ignored`（兩個實機剪貼簿測試，會短暫改動剪貼簿；應全部通過）；`inject-test` 結束時應印 `clipboard: restored`

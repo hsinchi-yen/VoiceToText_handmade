@@ -22,6 +22,9 @@
 
 ## Phase 1 — Windows MVP
 - [ ] W2 T1.1 最小可用路徑（≤ 1.5 秒、預錄緩衝）
+  - [x] 程式已合併（2026-11-09）：Tauri v2＋Svelte 5 桌面 App、controller、recorder（0.5 秒預錄、裝置重開）、`Pipeline::run`、zh_tw（ferrous-opencc s2twp，保護已是繁體的文字）、CSP、日誌不含文字的測試
+  - [ ] 整合任務：改用 `run_with_fallback`＋結構化注入錯誤、SenseVoice 自動切換（`select::pick`）、GPU guard 輪詢、LLM 接上、麥克風無聲 watchdog
+  - [ ] 🧑 實機說話測試與延遲（見 human-checklist）
 - [ ] W3 T1.2 剪貼簿貼上＋還原
   - [x] 程式已合併（2026-11-09）：原生 Win32 備份／還原所有 HGLOBAL 格式、不進 Win+V 歷史、`run_with_fallback`、VM 類 App 預設走貼上
   - [ ] 🧑 實機剪貼簿測試（見 human-checklist）

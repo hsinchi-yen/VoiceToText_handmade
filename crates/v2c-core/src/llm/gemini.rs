@@ -7,13 +7,13 @@ use serde_json::json;
 
 use super::LlmProvider;
 use crate::asr::gemini::GeminiCall;
-use crate::asr::http::CallSite;
+use crate::asr::http::{CallSite, CloudHttp};
 use crate::error::Stage;
 use crate::secrets::ApiKey;
 use crate::Result;
 
 pub struct GeminiLlm {
-    http: reqwest::Client,
+    http: CloudHttp,
     base_url: String,
     api_key: ApiKey,
     model: String,
@@ -24,7 +24,7 @@ impl GeminiLlm {
     /// `model` from `CloudService::llm_model`. Errors report `Stage::Polish` unless changed
     /// with [`GeminiLlm::with_stage`].
     pub fn new(
-        http: reqwest::Client,
+        http: CloudHttp,
         base_url: impl Into<String>,
         api_key: ApiKey,
         model: impl Into<String>,
@@ -87,6 +87,7 @@ impl LlmProvider for GeminiLlm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asr::http::cloud_http_client;
     use crate::asr::test_support::*;
     use crate::error::ProviderErrorKind;
     use crate::V2cError;
@@ -96,7 +97,7 @@ mod tests {
 
     fn llm(server: &MockServer) -> GeminiLlm {
         GeminiLlm::new(
-            reqwest::Client::new(),
+            cloud_http_client().unwrap(),
             format!("{}/v1beta/", server.uri()),
             ApiKey::new("AIza-TEST"),
             "gemini-test-flash",

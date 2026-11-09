@@ -10,7 +10,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use reqwest::multipart::{Form, Part};
 
-use super::http::{join_url, CallSite};
+use super::http::{join_url, CallSite, CloudHttp};
 use super::wav::encode_wav_pcm16;
 use super::{script_lang, AsrContext, AsrProvider, Transcript};
 use crate::audio::AudioClip;
@@ -19,7 +19,7 @@ use crate::secrets::ApiKey;
 use crate::Result;
 
 pub struct OpenAiAsr {
-    http: reqwest::Client,
+    http: CloudHttp,
     base_url: String,
     api_key: Option<ApiKey>,
     model: String,
@@ -29,7 +29,7 @@ pub struct OpenAiAsr {
 impl OpenAiAsr {
     /// `model` comes from `CloudService::asr_model` (see `route::suggested_models`).
     pub fn new(
-        http: reqwest::Client,
+        http: CloudHttp,
         base_url: impl Into<String>,
         api_key: Option<ApiKey>,
         model: impl Into<String>,
@@ -86,6 +86,7 @@ impl AsrProvider for OpenAiAsr {
         }
         let mut req = self
             .http
+            .client()
             .post(join_url(&self.base_url, "audio/transcriptions"))
             .multipart(form);
         if let Some(key) = self.api_key.as_ref().filter(|k| !k.is_empty()) {
@@ -106,6 +107,7 @@ impl AsrProvider for OpenAiAsr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asr::http::cloud_http_client;
     use crate::asr::test_support::*;
     use crate::{Lang, V2cError};
     use wiremock::matchers::{header, method, path};
@@ -113,7 +115,7 @@ mod tests {
 
     fn asr(server: &MockServer, key: Option<&str>) -> OpenAiAsr {
         OpenAiAsr::new(
-            reqwest::Client::new(),
+            cloud_http_client().unwrap(),
             format!("{}/v1", server.uri()),
             key.map(ApiKey::new),
             "test-transcribe-model",
@@ -235,7 +237,7 @@ mod tests {
     #[test]
     fn debug_hides_key() {
         let a = OpenAiAsr::new(
-            reqwest::Client::new(),
+            cloud_http_client().unwrap(),
             "https://example.invalid/v1",
             Some(ApiKey::new("sk-SECRET")),
             "m",

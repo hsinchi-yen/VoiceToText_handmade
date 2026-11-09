@@ -9,6 +9,7 @@ use async_trait::async_trait;
 
 use super::openai::OpenAiAsr;
 use super::{AsrContext, AsrProvider, Transcript};
+use crate::asr::http::CloudHttp;
 use crate::audio::AudioClip;
 use crate::secrets::ApiKey;
 use crate::Result;
@@ -18,7 +19,7 @@ pub struct CompatAsr(OpenAiAsr);
 
 impl CompatAsr {
     pub fn new(
-        http: reqwest::Client,
+        http: CloudHttp,
         base_url: impl Into<String>,
         api_key: Option<ApiKey>,
         model: impl Into<String>,
@@ -46,6 +47,7 @@ impl AsrProvider for CompatAsr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asr::http::cloud_http_client;
     use crate::asr::test_support::*;
     use crate::error::{ProviderErrorKind, Stage};
     use crate::V2cError;
@@ -54,7 +56,7 @@ mod tests {
 
     fn asr(server: &MockServer, key: Option<&str>) -> CompatAsr {
         CompatAsr::new(
-            reqwest::Client::new(),
+            cloud_http_client().unwrap(),
             format!("{}/v1/", server.uri()),
             key.map(ApiKey::new),
             "whisper-large",
@@ -167,7 +169,7 @@ mod tests {
     async fn unreachable_server() {
         // Port 9 (discard) on localhost is closed on a normal dev box.
         let a = CompatAsr::new(
-            reqwest::Client::new(),
+            cloud_http_client().unwrap(),
             "http://127.0.0.1:9/v1",
             None,
             "m",

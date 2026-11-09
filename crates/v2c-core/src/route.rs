@@ -6,6 +6,7 @@
 //!   suggestions only; the chosen values are saved in `CloudService` (config), and request
 //!   code always takes the model from there.
 //! - [`test_connection`]: wizard step 5 (plan §6.2) and Android settings.
+//! - [`cloud_http_client`]: the only HTTP client cloud providers accept ([`CloudHttp`]).
 //!
 //! Building the pipeline's provider objects from a `RoutePlan` is done in the integration
 //! step (after the OpenAI-compatible LLM from T1.5 lands).
@@ -16,6 +17,7 @@ use serde_json::Value;
 
 use crate::asr::compat::CompatAsr;
 use crate::asr::gemini::GeminiAsr;
+pub use crate::asr::http::{cloud_http_client, CloudHttp};
 use crate::asr::http::{join_url, CallSite};
 use crate::asr::openai::OpenAiAsr;
 use crate::asr::wav::probe_clip;
@@ -79,6 +81,12 @@ pub enum RouteIssue {
         purpose: Purpose,
         service_id: String,
     },
+    /// No model configured for this purpose and the kind has no suggested default
+    /// (e.g. an OpenAI-compatible endpoint without `asr_model`).
+    NoModel {
+        purpose: Purpose,
+        service_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +133,18 @@ pub fn resolve(route: &RouteConfig, services: &[CloudService]) -> RoutePlan {
         };
         if purpose == Purpose::Asr && !svc.kind.supports_asr() {
             issues.push(RouteIssue::Unsupported {
+                purpose,
+                service_id: reference.to_owned(),
+            });
+            return PurposePlan::local();
+        }
+        let suggested = suggested_models(svc.kind);
+        let model = match purpose {
+            Purpose::Asr => model_for(&svc.asr_model, suggested.asr),
+            Purpose::Polish | Purpose::Translate => model_for(&svc.llm_model, suggested.llm),
+        };
+        if model.is_none() {
+            issues.push(RouteIssue::NoModel {
                 purpose,
                 service_id: reference.to_owned(),
             });
@@ -194,15 +214,39 @@ pub fn suggested_models(kind: CloudKind) -> SuggestedModels {
 }
 
 /// `CloudService::base_url`, else the kind's official endpoint.
+///
+/// Official APIs (OpenAI, Gemini, Claude) carry an API key, so an override must be
+/// `https://`; plain `http://` is accepted only for loopback (local proxies, tests).
+/// `OpenAiCompat` may use `http://` (LM Studio on another PC in the LAN).
 pub fn effective_base_url(service: &CloudService) -> Result<String> {
-    service
+    let url = service
         .base_url
         .as_deref()
         .map(str::trim)
         .filter(|u| !u.is_empty())
         .or_else(|| default_base_url(service.kind))
-        .map(str::to_owned)
-        .ok_or(V2cError::NotConfigured("cloud service base_url"))
+        .ok_or(V2cError::NotConfigured("cloud service base_url"))?;
+    let parsed = reqwest::Url::parse(url).map_err(|_| V2cError::NotConfigured("valid base_url"))?;
+    let ok = match parsed.scheme() {
+        "https" => true,
+        "http" => service.kind == CloudKind::OpenAiCompat || is_loopback(&parsed),
+        _ => false,
+    };
+    if !ok {
+        return Err(V2cError::NotConfigured("https base_url"));
+    }
+    Ok(url.to_owned())
+}
+
+fn is_loopback(url: &reqwest::Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 fn model_for(configured: &Option<String>, suggested: Option<&'static str>) -> Option<String> {
@@ -228,7 +272,7 @@ fn key_for(service: &CloudService, secrets: &dyn SecretStore) -> Result<Option<A
 pub(crate) fn build_asr(
     service: &CloudService,
     key: Option<ApiKey>,
-    http: &reqwest::Client,
+    http: &CloudHttp,
     timeout: Duration,
 ) -> Result<Option<Box<dyn AsrProvider>>> {
     let base = effective_base_url(service)?;
@@ -263,7 +307,7 @@ pub(crate) fn build_asr(
 pub(crate) fn build_native_llm(
     service: &CloudService,
     key: Option<ApiKey>,
-    http: &reqwest::Client,
+    http: &CloudHttp,
     timeout: Duration,
 ) -> Result<Option<Box<dyn LlmProvider>>> {
     let base = effective_base_url(service)?;
@@ -395,11 +439,11 @@ impl Probe {
 ///
 /// `Err` only for configuration problems (missing key for an official API, missing
 /// `base_url` for a compatible endpoint, keyring failure); network/API failures are
-/// reported inside `Probe`.
+/// reported inside `Probe`. `http` comes from [`cloud_http_client`] (no redirects).
 pub async fn test_connection(
     service: &CloudService,
     secrets: &dyn SecretStore,
-    http: &reqwest::Client,
+    http: &CloudHttp,
     opts: &ProbeOptions,
 ) -> Result<Probe> {
     test_connection_with_llm(service, secrets, http, opts, None).await
@@ -410,7 +454,7 @@ pub async fn test_connection(
 pub async fn test_connection_with_llm(
     service: &CloudService,
     secrets: &dyn SecretStore,
-    http: &reqwest::Client,
+    http: &CloudHttp,
     opts: &ProbeOptions,
     llm: Option<&dyn LlmProvider>,
 ) -> Result<Probe> {
@@ -486,7 +530,7 @@ async fn list_models(
     kind: CloudKind,
     base: &str,
     key: Option<&ApiKey>,
-    http: &reqwest::Client,
+    http: &CloudHttp,
     timeout: Duration,
 ) -> Result<Vec<String>> {
     let call = CallSite {
@@ -496,12 +540,13 @@ async fn list_models(
     };
     let url = join_url(base, "models");
     let mut req = match kind {
-        CloudKind::Gemini => http.get(url).query(&[("pageSize", "1000")]),
+        CloudKind::Gemini => http.client().get(url).query(&[("pageSize", "1000")]),
         CloudKind::Claude => http
+            .client()
             .get(url)
             .query(&[("limit", "1000")])
             .header("anthropic-version", ANTHROPIC_VERSION),
-        CloudKind::OpenAi | CloudKind::OpenAiCompat => http.get(url),
+        CloudKind::OpenAi | CloudKind::OpenAiCompat => http.client().get(url),
     };
     if let Some(k) = key {
         req = match kind {
@@ -543,6 +588,7 @@ fn parse_models(kind: CloudKind, v: &Value) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asr::http::cloud_http_client;
     use crate::secrets::MemorySecretStore;
     use serde_json::json;
     use wiremock::matchers::{header, method, path};
@@ -648,8 +694,57 @@ mod tests {
         ));
         let mut g = svc("g", CloudKind::Gemini);
         assert!(effective_base_url(&g).unwrap().starts_with("https://"));
-        g.base_url = Some("http://proxy/v1beta".into());
-        assert_eq!(effective_base_url(&g).unwrap(), "http://proxy/v1beta");
+        g.base_url = Some("https://proxy/v1beta".into());
+        assert_eq!(effective_base_url(&g).unwrap(), "https://proxy/v1beta");
+    }
+
+    #[test]
+    fn official_apis_require_https_except_loopback() {
+        for kind in [CloudKind::OpenAi, CloudKind::Gemini, CloudKind::Claude] {
+            let mut s = svc("x", kind);
+            for bad in [
+                "http://proxy/v1",
+                "http://192.168.1.5/v1",
+                "ftp://h/v1",
+                "nonsense",
+            ] {
+                s.base_url = Some(bad.into());
+                assert!(
+                    matches!(effective_base_url(&s), Err(V2cError::NotConfigured(_))),
+                    "{kind:?} {bad}"
+                );
+            }
+            for ok in [
+                "http://127.0.0.1:8080/v1",
+                "http://localhost:1234/v1",
+                "http://[::1]:9/v1",
+            ] {
+                s.base_url = Some(ok.into());
+                assert_eq!(effective_base_url(&s).unwrap(), ok);
+            }
+        }
+        let mut lan = svc("lan", CloudKind::OpenAiCompat);
+        lan.base_url = Some("http://192.168.1.5:1234/v1".into());
+        assert!(effective_base_url(&lan).is_ok());
+        lan.base_url = Some("file:///etc/passwd".into());
+        assert!(effective_base_url(&lan).is_err());
+    }
+
+    #[test]
+    fn missing_model_falls_back_to_local_with_issue() {
+        let mut lan = svc("lan", CloudKind::OpenAiCompat);
+        lan.base_url = Some("http://192.168.1.5:1234/v1".into());
+        lan.llm_model = Some("qwen".into());
+        let plan = resolve(&route("lan", "lan", "lan", true), &[lan]);
+        assert_eq!(plan.asr, PurposePlan::local());
+        assert!(matches!(plan.polish.target, Target::Cloud { .. }));
+        assert_eq!(
+            plan.issues,
+            vec![RouteIssue::NoModel {
+                purpose: Purpose::Asr,
+                service_id: "lan".into()
+            }]
+        );
     }
 
     // ---- test_connection ----
@@ -696,7 +791,7 @@ mod tests {
         let p = test_connection(
             &s,
             &secrets("my-gemini", "AIza-TEST"),
-            &reqwest::Client::new(),
+            &cloud_http_client().unwrap(),
             &opts(),
         )
         .await
@@ -733,7 +828,7 @@ mod tests {
         let p = test_connection(
             &s,
             &secrets("claude", "sk-ant-TEST"),
-            &reqwest::Client::new(),
+            &cloud_http_client().unwrap(),
             &opts(),
         )
         .await
@@ -761,7 +856,7 @@ mod tests {
         let p = test_connection(
             &s,
             &secrets("oa", "sk-BAD"),
-            &reqwest::Client::new(),
+            &cloud_http_client().unwrap(),
             &opts(),
         )
         .await
@@ -785,7 +880,7 @@ mod tests {
         let p = test_connection(
             &s,
             &MemorySecretStore::new(),
-            &reqwest::Client::new(),
+            &cloud_http_client().unwrap(),
             &opts(),
         )
         .await
@@ -810,9 +905,14 @@ mod tests {
             .await;
         let mut s = svc("g", CloudKind::Gemini);
         s.base_url = Some(server.uri());
-        let p = test_connection(&s, &secrets("g", "k"), &reqwest::Client::new(), &opts())
-            .await
-            .unwrap();
+        let p = test_connection(
+            &s,
+            &secrets("g", "k"),
+            &cloud_http_client().unwrap(),
+            &opts(),
+        )
+        .await
+        .unwrap();
         assert_eq!(p.asr, Check::Failed(ProviderErrorKind::RateLimited));
         assert_eq!(p.llm, Check::Failed(ProviderErrorKind::RateLimited));
 
@@ -830,9 +930,14 @@ mod tests {
             .mount(&slow)
             .await;
         s.base_url = Some(slow.uri());
-        let p = test_connection(&s, &secrets("g", "k"), &reqwest::Client::new(), &opts())
-            .await
-            .unwrap();
+        let p = test_connection(
+            &s,
+            &secrets("g", "k"),
+            &cloud_http_client().unwrap(),
+            &opts(),
+        )
+        .await
+        .unwrap();
         assert_eq!(p.models_check, Check::TimedOut);
         assert_eq!(p.asr, Check::TimedOut);
         assert!(!p.ok);
@@ -844,7 +949,7 @@ mod tests {
         let err = test_connection(
             &s,
             &MemorySecretStore::new(),
-            &reqwest::Client::new(),
+            &cloud_http_client().unwrap(),
             &opts(),
         )
         .await
@@ -878,7 +983,7 @@ mod tests {
         let p = test_connection_with_llm(
             &s,
             &secrets("oa", "k"),
-            &reqwest::Client::new(),
+            &cloud_http_client().unwrap(),
             &o,
             Some(&Echo),
         )

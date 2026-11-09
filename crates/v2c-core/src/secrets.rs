@@ -15,8 +15,8 @@ use std::sync::Mutex;
 use crate::{error::V2cError, Result};
 
 /// An API key. `Debug` is redacted and there is no `Display`; use [`ApiKey::expose`] only to
-/// build the request header.
-#[derive(Clone, PartialEq, Eq)]
+/// build the request header. No `PartialEq`: comparing keys is never needed at runtime.
+#[derive(Clone)]
 pub struct ApiKey(String);
 
 impl ApiKey {
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn memory_store_roundtrip_and_debug() {
         let s = MemorySecretStore::new();
-        assert_eq!(s.get("openai").unwrap(), None);
+        assert!(s.get("openai").unwrap().is_none());
         s.set("openai", &ApiKey::new(KEY)).unwrap();
         assert_eq!(s.get("openai").unwrap().unwrap().expose(), KEY);
         let dbg = format!("{s:?}");
@@ -216,7 +216,7 @@ mod tests {
         assert!(dbg.contains("entries: 1"));
         s.delete("openai").unwrap();
         s.delete("openai").unwrap();
-        assert_eq!(s.get("openai").unwrap(), None);
+        assert!(s.get("openai").unwrap().is_none());
     }
 
     #[cfg(feature = "keyring")]
@@ -224,12 +224,12 @@ mod tests {
     fn keyring_store_roundtrip_with_sample_store() {
         keyring_core::set_default_store(keyring_core::sample::Store::new().unwrap());
         let s = KeyringSecretStore::with_service("v2c-test");
-        assert_eq!(s.get("gemini").unwrap(), None);
+        assert!(s.get("gemini").unwrap().is_none());
         s.set("gemini", &ApiKey::new(KEY)).unwrap();
         assert_eq!(s.get("gemini").unwrap().unwrap().expose(), KEY);
         s.delete("gemini").unwrap();
         s.delete("gemini").unwrap();
-        assert_eq!(s.get("gemini").unwrap(), None);
+        assert!(s.get("gemini").unwrap().is_none());
         assert!(!format!("{s:?}").contains("SECRET"));
     }
 }

@@ -11,6 +11,11 @@ async-trait.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+# Polish timeout (`tokio::time::timeout`); also listed in tasks/plan.md section 2.
+tokio.workspace = true
+tracing.workspace = true
+# Pure-Rust OpenCC (Simplified -> Taiwan Traditional with Taiwan phrasing); see postprocess/zh_tw.rs.
+ferrous-opencc = { version = "0.4", default-features = false, features = ["s2t-conversion", "t2s-conversion"] }
 # Cloud providers (T1.7). rustls instead of OpenSSL so the crate also builds for Android.
 reqwest.workspace = true
 serde_json.workspace = true

@@ -94,7 +94,7 @@ impl Pipeline {
 - 翻譯：中文（可能夾雜英文）→ 自然流暢的英文；專有名詞與詞庫保留；只輸出譯文。
 - ASR initial prompt：`以下是台灣繁體中文與 English 夾雜的口語句子。` + 詞庫詞彙（截斷到模型上限）。
 
-**依賴（暫定，【實作前確認】）**：`tokio`、`reqwest`（`rustls-tls`，避免 Android 上的 OpenSSL）、`serde`/`toml`、`rusqlite`（`bundled`）、`zhconv`（純 Rust 的簡繁轉換；不行再改 OpenCC 綁定）、`hound`（WAV）、`rubato`（重取樣）、`async-trait`、`thiserror`、測試用 `wiremock`。
+**依賴（暫定，【實作前確認】）**：`tokio`、`reqwest`（`rustls-tls`，避免 Android 上的 OpenSSL）、`serde`/`toml`、`rusqlite`（`bundled`）、`ferrous-opencc`（純 Rust 實作的 OpenCC，設定 `s2twp`，含台灣用語：软件→軟體、视频→影片、内存→記憶體；T1.1 已確認。`zhconv` 0.4 的 zh-TW 不轉 视频／内存／信息／服务器 等常用詞，故不採用；「台」保留原字不轉「臺」）、`hound`（WAV）、`rubato`（重取樣）、`async-trait`、`thiserror`、測試用 `wiremock`。
 
 ---
 
@@ -207,13 +207,14 @@ breeze_quant = "q5_0"         # q5_0 | q8_0（q8 較準、多約 0.6 GB）
 | Provider | ASR | LLM | 備註 |
 |----------|-----|-----|------|
 | OpenAI 相容（LM Studio / 自架） | `/audio/transcriptions`（若端點支援） | `/chat/completions` | base_url + 選填金鑰；LM Studio 預設 `http://localhost:1234/v1` |
-| OpenAI | `gpt-4o-transcribe`（multipart，帶 `prompt`） | `/chat/completions` | |
+| OpenAI | `gpt-transcribe`（multipart，帶 `prompt`；`gpt-4o-transcribe` 已標示停用，2027-02-26 關閉，T1.7 查證） | `/chat/completions` | |
 | Gemini | `generateContent` 內嵌 WAV（base64） | 同左 | |
 | Claude | — | Messages API | 不收音訊；預設 `claude-haiku-5-5`（速度優先），可改 |
 
 - 模型名稱全部放設定檔，不寫死。
 - 逾時：ASR 5 秒、LLM 3 秒；失敗時浮動標籤顯示錯誤，紀錄中保留 ASR 原文以便重送。
-- 金鑰：`keyring` crate（Windows 認證管理員）；設定檔只存 provider 名稱。
+- 金鑰：`v2c-core` 定義 `SecretStore` trait，`keyring` feature 只依賴與 OS 無關的 `keyring-core`；桌面 App 啟動時以 `windows-native-keyring-store` 安裝 Windows 認證管理員作為預設 store（T1.7 查證：`keyring` 4.x 建議應用程式改用 `keyring-core`）；Android 另接 Keystore。設定檔只存 provider 名稱。
+- 雲端 HTTP client 一律不跟隨轉址（避免 `x-api-key` 等自訂金鑰標頭被帶到其他主機）；官方服務的 base_url 必須是 https（loopback 除外）。
 
 ### 6.1 預設模型（地端優先）
 

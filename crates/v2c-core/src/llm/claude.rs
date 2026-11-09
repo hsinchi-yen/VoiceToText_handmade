@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use super::LlmProvider;
-use crate::asr::http::{join_url, CallSite};
+use crate::asr::http::{join_url, CallSite, CloudHttp};
 use crate::error::{ProviderErrorKind, Stage};
 use crate::secrets::ApiKey;
 use crate::Result;
@@ -22,7 +22,7 @@ pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 4096;
 
 pub struct ClaudeLlm {
-    http: reqwest::Client,
+    http: CloudHttp,
     base_url: String,
     api_key: ApiKey,
     model: String,
@@ -35,7 +35,7 @@ impl ClaudeLlm {
     /// `base_url` e.g. `https://api.anthropic.com/v1` (see `route::default_base_url`);
     /// `model` from `CloudService::llm_model` (suggested `claude-haiku-5-5`).
     pub fn new(
-        http: reqwest::Client,
+        http: CloudHttp,
         base_url: impl Into<String>,
         api_key: ApiKey,
         model: impl Into<String>,
@@ -109,6 +109,7 @@ impl LlmProvider for ClaudeLlm {
         }
         let req = self
             .http
+            .client()
             .post(join_url(&self.base_url, "messages"))
             .header("x-api-key", self.api_key.expose())
             .header("anthropic-version", ANTHROPIC_VERSION)
@@ -119,7 +120,15 @@ impl LlmProvider for ClaudeLlm {
 }
 
 /// Joined `text` blocks of a Messages API response; `None` if `content` is missing.
+/// A truncated (`max_tokens`) or refused (`refusal`) answer is `None` too, so the caller
+/// falls back to local instead of typing a partial result.
 fn message_text(v: &Value) -> Option<String> {
+    if matches!(
+        v.get("stop_reason").and_then(Value::as_str),
+        Some("max_tokens" | "refusal")
+    ) {
+        return None;
+    }
     let blocks = v.get("content")?.as_array()?;
     let text: String = blocks
         .iter()
@@ -132,6 +141,7 @@ fn message_text(v: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asr::http::cloud_http_client;
     use crate::asr::test_support::*;
     use crate::V2cError;
     use wiremock::matchers::{header, method, path};
@@ -139,7 +149,7 @@ mod tests {
 
     fn llm(server: &MockServer) -> ClaudeLlm {
         ClaudeLlm::new(
-            reqwest::Client::new(),
+            cloud_http_client().unwrap(),
             format!("{}/v1", server.uri()),
             ApiKey::new("sk-ant-TEST"),
             "claude-test-model",
@@ -243,6 +253,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn truncated_or_refused_is_bad_response() {
+        for reason in ["max_tokens", "refusal"] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "content": [{"type": "text", "text": "partial"}], "stop_reason": reason
+                })))
+                .mount(&server)
+                .await;
+            let err = llm(&server).complete("S", "U").await.unwrap_err();
+            assert_provider_err(&err, Stage::Polish, ProviderErrorKind::BadResponse);
+        }
+    }
+
+    #[tokio::test]
+    async fn redirect_to_other_host_does_not_forward_key() {
+        let attacker = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(ok_body()))
+            .mount(&attacker)
+            .await;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(307).insert_header(
+                "location",
+                format!("{}/v1/messages", attacker.uri()).as_str(),
+            ))
+            .mount(&server)
+            .await;
+        let err = llm(&server).complete("S", "U").await.unwrap_err();
+        assert_provider_err(&err, Stage::Polish, ProviderErrorKind::BadResponse);
+        assert!(attacker.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn missing_content_is_bad_response() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -256,7 +301,7 @@ mod tests {
     #[test]
     fn debug_hides_key() {
         let l = ClaudeLlm::new(
-            reqwest::Client::new(),
+            cloud_http_client().unwrap(),
             "https://example.invalid/v1",
             ApiKey::new("sk-ant-SECRET"),
             "m",
