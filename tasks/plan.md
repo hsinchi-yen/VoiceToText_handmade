@@ -176,11 +176,13 @@ impl Pipeline {
 enabled = true
 profile = "balanced"          # balanced | low_vram | cpu_only
 vram_reserve_mb = 2048        # 保留給畫面輸出與其他程式
-breeze_quant = "q5_0"         # q5_0 | q8_0（q8 較準、多約 0.6 GB）
 keep_loaded = "auto"          # always | auto（閒置卸載＋低顯存讓路）| on_demand
 idle_unload_minutes = 15
 yield_on_fullscreen = true
 heavy_apps = ["blender.exe", "Adobe Premiere Pro.exe"]
+
+[local]
+breeze_quant = "q5_0"         # q5_0 | q8_0（q8 較準、多約 0.6 GB）
 ```
 
 設定視窗顯示即時 VRAM 使用條（v2c、其他程式、可用量），以及三種方案的預估用量。
