@@ -37,6 +37,19 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
 cpal = "0.18"
 rubato = "5"
+# Settings / onboarding (T1.11).
+toml.workspace = true
+serde_json.workspace = true
+# Model downloads: own client (redirects to https only, no credentials), see commands/models.rs.
+reqwest.workspace = true
+sha2.workspace = true
+bzip2.workspace = true
+tar.workspace = true
+# Start with Windows (HKCU Run key) and the Breeze import file picker; both used from Rust only.
+tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
+# One running instance: a second launch focuses the first one (no second keyboard hook).
+tauri-plugin-single-instance = "2"
 
 # Windows Credential Manager as the keyring-core default store.
 [target.'cfg(windows)'.dependencies.windows-native-keyring-store]
@@ -58,4 +71,3 @@ features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"]
 [dev-dependencies]
 wiremock.workspace = true
 hound.workspace = true
-serde_json = "1"

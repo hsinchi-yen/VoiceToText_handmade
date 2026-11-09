@@ -12,6 +12,7 @@
 
 mod app_state;
 mod commands;
+mod config_edit;
 mod controller;
 mod engine;
 mod gpu_task;
@@ -67,7 +68,25 @@ fn main() {
     };
 
     let app = tauri::Builder::default()
+        // Must be the first plugin: a second launch (e.g. from the Start menu while the autostart
+        // instance runs hidden) only shows the running instance's window and exits, so there is
+        // never a second keyboard hook typing everything twice.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            info!("second launch: showing the running instance");
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .manage(state)
+        // Start with Windows (HKCU Run key); the entry passes AUTOSTART_ARG to start hidden.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![commands::settings::AUTOSTART_ARG]),
+        ))
+        // Native file picker for the Breeze import (used from Rust only).
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::status::app_info,
             commands::status::last_status,
@@ -85,6 +104,21 @@ fn main() {
             commands::cloud::cloud_open_key_page,
             commands::vocab::vocab_get,
             commands::vocab::vocab_set,
+            commands::settings::settings_get,
+            commands::settings::settings_apply,
+            commands::settings::settings_set_autostart,
+            commands::settings::settings_input_devices,
+            commands::settings::settings_test_lm,
+            commands::gpu::gpu_usage,
+            commands::models::models_status,
+            commands::models::models_download,
+            commands::models::models_cancel,
+            commands::models::models_import_breeze,
+            commands::onboarding::onboarding_status,
+            commands::onboarding::onboarding_restart,
+            commands::onboarding::open_doc,
+            commands::onboarding::mic_test_start,
+            commands::onboarding::mic_test_stop,
         ])
         .on_window_event(|window, event| {
             // A background tool: closing the main window hides it; quit from the tray.
@@ -106,6 +140,7 @@ fn main() {
                 error!(error = %e, "tray icon could not be created");
             }
             start_background(handle, config_error);
+            show_main_unless_autostart(handle);
             #[cfg(debug_assertions)]
             overlay::start_demo_if_requested(&handle.state::<AppState>().status);
             Ok(())
@@ -132,6 +167,22 @@ fn main() {
     });
 }
 
+/// The main window is created hidden (`tauri.conf.json`); it is shown unless v2c was started by
+/// the 開機自動啟動 entry, which runs it in the background (tray only). It is shown anyway
+/// after the onboarding restart and while no local speech model is installed (onboarding).
+fn show_main_unless_autostart(app: &tauri::AppHandle) {
+    let autostart = std::env::args().any(|a| a == commands::settings::AUTOSTART_ARG);
+    let paths = &app.state::<AppState>().paths;
+    let resumed = commands::onboarding::take_show_flag(paths);
+    let has_model = commands::models::any_asr_model(paths);
+    let show = commands::onboarding::show_main_at_start(autostart, resumed, has_model);
+    info!(autostart, resumed, has_model, show, "main window");
+    if show {
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.show();
+        }
+    }
+}
 /// Windows Credential Manager as the keyring-core default store, for cloud API keys.
 fn install_keyring() -> Arc<dyn SecretStore> {
     #[cfg(windows)]

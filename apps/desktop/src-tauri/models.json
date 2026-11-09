@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "_comment": "Local model sources for first-run download (T1.11). Override with %LOCALAPPDATA%\\v2c\\models.json. Entries with \"placeholder\": true are not downloadable yet: the Breeze GGML files are not hosted anywhere until the maintainer uploads the tools/convert-breeze output to their own Hugging Face repo; then set url, sha256, size and remove placeholder.",
+  "models": [
+    {
+      "id": "sensevoice",
+      "kind": "sensevoice_archive",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2",
+      "sha256": "7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e",
+      "size": 163002883
+    },
+    {
+      "id": "breeze-q5_0",
+      "kind": "breeze_ggml",
+      "quant": "q5_0",
+      "url": "https://huggingface.co/PLACEHOLDER-HF-USER/Breeze-ASR-25-GGML/resolve/main/ggml-breeze-asr-25-q5_0.bin",
+      "sha256": null,
+      "size": null,
+      "placeholder": true
+    },
+    {
+      "id": "breeze-q8_0",
+      "kind": "breeze_ggml",
+      "quant": "q8_0",
+      "url": "https://huggingface.co/PLACEHOLDER-HF-USER/Breeze-ASR-25-GGML/resolve/main/ggml-breeze-asr-25-q8_0.bin",
+      "sha256": null,
+      "size": null,
+      "placeholder": true
+    }
+  ]
+}
