@@ -2,6 +2,7 @@
 
 pub mod clipboard; // T1.2
 pub mod foreground; // T0.3
+pub mod fullscreen; // T1.10b
 pub mod hotkey; // T0.2
 pub mod inject; // T0.3, T1.2
 
