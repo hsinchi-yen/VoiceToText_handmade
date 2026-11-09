@@ -35,8 +35,12 @@ impl Default for GpuMonitor {
 }
 
 impl GpuMonitor {
-    /// Initialises NVML for device 0 (the first NVIDIA GPU, which is the CUDA default on
-    /// single-GPU laptops). Never fails; see [`GpuMonitor::available`].
+    /// Initialises NVML for device 0. Never fails; see [`GpuMonitor::available`].
+    ///
+    /// NVML numbers devices in PCI bus order, while CUDA (and so whisper.cpp) by default puts
+    /// the fastest device first (`CUDA_DEVICE_ORDER=FASTEST_FIRST`). On a single-NVIDIA-GPU
+    /// machine both are 0; with several NVIDIA GPUs the indices may differ, so match by PCI bus
+    /// id or UUID and use [`GpuMonitor::with_device`].
     pub fn new() -> Self {
         Self::with_device(0)
     }
@@ -64,13 +68,33 @@ impl GpuMonitor {
         nvml.device_by_index(self.device_index).ok()?.name().ok()
     }
 
-    /// Current VRAM state, or `None` without NVML / on a read error.
+    /// Current free / total VRAM, or `None` without NVML / on a read error. One NVML call;
+    /// this is what the guard polls. `used_by_us_mb` is always `None` here.
     pub fn snapshot(&self) -> Option<GpuSnapshot> {
         let nvml = self.nvml.as_ref()?;
         let device = nvml.device_by_index(self.device_index).ok()?;
         let mem = device.memory_info().ok()?;
-        // Per-process usage: WDDM (Windows) reports `Unavailable`; Linux / TCC report bytes.
-        let used_by_us_mb = [
+        Some(GpuSnapshot {
+            free_mb: mem.free / MIB,
+            total_mb: mem.total / MIB,
+            used_by_us_mb: None,
+        })
+    }
+
+    /// Like [`GpuMonitor::snapshot`] plus this process's own usage, for the settings page only
+    /// (it enumerates every GPU process, so do not call it on every guard poll).
+    pub fn detailed_snapshot(&self) -> Option<GpuSnapshot> {
+        let mut snap = self.snapshot()?;
+        snap.used_by_us_mb = self.our_usage_mb();
+        Some(snap)
+    }
+
+    /// VRAM used by this process, MiB. WDDM (Windows) reports `Unavailable` -> `None`;
+    /// Linux / TCC report bytes.
+    fn our_usage_mb(&self) -> Option<u64> {
+        let nvml = self.nvml.as_ref()?;
+        let device = nvml.device_by_index(self.device_index).ok()?;
+        [
             device.running_compute_processes(),
             device.running_graphics_processes(),
         ]
@@ -82,12 +106,7 @@ impl GpuMonitor {
             UsedGpuMemory::Used(bytes) => Some(bytes / MIB),
             UsedGpuMemory::Unavailable => None,
         })
-        .max();
-        Some(GpuSnapshot {
-            free_mb: mem.free / MIB,
-            total_mb: mem.total / MIB,
-            used_by_us_mb,
-        })
+        .max()
     }
 }
 
@@ -120,7 +139,7 @@ mod tests {
     fn nvml_smoke_read() {
         let m = GpuMonitor::new();
         assert!(m.available(), "NVML not available");
-        let s = m.snapshot().expect("snapshot");
+        let s = m.detailed_snapshot().expect("snapshot");
         println!(
             "device={:?} free={} MiB total={} MiB used={} MiB used_by_us={:?}",
             m.device_name(),

@@ -48,10 +48,12 @@ impl NotificationState {
     }
 
     /// A fullscreen game / app or a presentation is in front: v2c should leave the GPU.
+    /// `App` (a Store / UWP app running fullscreen, e.g. Xbox app games) counts too: those
+    /// render through the GPU like any other fullscreen game.
     pub fn is_fullscreen(self) -> bool {
         matches!(
             self,
-            Self::Busy | Self::D3dFullscreen | Self::PresentationMode
+            Self::Busy | Self::D3dFullscreen | Self::PresentationMode | Self::App
         )
     }
 }
@@ -90,7 +92,8 @@ mod tests {
         assert!(NotificationState::PresentationMode.is_fullscreen());
         assert!(!NotificationState::AcceptsNotifications.is_fullscreen());
         assert!(!NotificationState::NotPresent.is_fullscreen());
-        assert!(!NotificationState::App.is_fullscreen());
+        assert!(NotificationState::App.is_fullscreen());
+        assert!(!NotificationState::QuietTime.is_fullscreen());
     }
 
     #[test]
