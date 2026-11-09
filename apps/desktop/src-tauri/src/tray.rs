@@ -16,7 +16,8 @@ use tauri::{AppHandle, Emitter, Manager, Wry};
 use tracing::{info, warn};
 use v2c_core::config::{Config, LOCAL};
 
-use crate::app_state::{self, AppState};
+use crate::app_state::AppState;
+use crate::config_edit;
 use crate::controller::StatusEvent;
 
 /// Webview event sent after the tray changed `config.toml` (no payload).
@@ -65,94 +66,23 @@ pub fn apply(cfg: &mut Config, action: ConfigAction) -> bool {
 }
 
 /// Reads `config.toml` (defaults if it does not exist), applies `action`, and writes it back.
-/// Only the keys the action changes are rewritten (`toml_edit`), so the user's comments,
-/// formatting, and keys this version does not know survive. An invalid file is left untouched
-/// (`config_invalid_not_saved`). Returns the new config or an error code.
+/// Only the keys the action changes are rewritten (see [`config_edit`]), so the user's
+/// comments, formatting, and keys this version does not know survive. An invalid file is left
+/// untouched (`config_invalid_not_saved`). Returns the new config or an error code.
 pub fn update_config_file(path: &Path, action: ConfigAction) -> Result<Config, &'static str> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let mut cfg = Config::with_defaults();
-            if apply(&mut cfg, action) {
-                app_state::save_config(path, &cfg).map_err(save_failed)?;
-            }
-            return Ok(cfg);
-        }
-        Err(_) => return Err("config_unreadable"),
-    };
-    let mut cfg = Config::from_toml_str(&text).map_err(|_| "config_invalid_not_saved")?;
-    if !apply(&mut cfg, action) {
-        return Ok(cfg);
-    }
-    let new_text = edit_config_text(&text, action).ok_or("config_invalid_not_saved")?;
-    // The edited file must mean exactly the config we computed; otherwise write nothing.
-    match Config::from_toml_str(&new_text) {
-        Ok(on_disk) if on_disk == cfg => {}
-        _ => {
-            warn!("tray config edit did not round-trip; config.toml left unchanged");
-            return Err("config_save_failed");
-        }
-    }
-    app_state::save_config_text(path, &new_text).map_err(save_failed)?;
-    Ok(cfg)
-}
-
-fn save_failed(e: std::io::Error) -> &'static str {
-    warn!(error = %e, "could not save config.toml");
-    "config_save_failed"
+    config_edit::update_config_file(path, |cfg| Ok(apply(cfg, action)))
 }
 
 /// Applies `action` to the TOML text, changing only the keys involved and keeping each
-/// value's surrounding comments. `None` if the text is not TOML or a section is not a table.
+/// value's surrounding comments. `None` if the text is not a valid config or a section is not
+/// a table.
+#[cfg(test)]
 pub fn edit_config_text(text: &str, action: ConfigAction) -> Option<String> {
-    let mut doc: toml_edit::DocumentMut = text.parse().ok()?;
-    match action {
-        ConfigAction::SetPolish(on) => set_key(&mut doc, "polish", "enabled", on.into())?,
-        ConfigAction::AllLocal => {
-            for key in ["asr", "polish", "translate"] {
-                set_key(&mut doc, "route", key, LOCAL.into())?;
-            }
-        }
-    }
-    Some(doc.to_string())
+    let old = Config::from_toml_str(text).ok()?;
+    let mut new = old.clone();
+    apply(&mut new, action);
+    config_edit::edit_text(text, &old, &new)
 }
-
-/// Sets `[table].key = value`, creating the table or key if missing. An existing value that
-/// already equals `value` is left as written; a replaced value keeps its decor (comments).
-fn set_key(
-    doc: &mut toml_edit::DocumentMut,
-    table: &str,
-    key: &str,
-    value: toml_edit::Value,
-) -> Option<()> {
-    let t = doc
-        .entry(table)
-        .or_insert_with(toml_edit::table)
-        .as_table_like_mut()?;
-    match t.get_mut(key).and_then(|item| item.as_value_mut()) {
-        Some(old) => {
-            let same = match (&*old, &value) {
-                (toml_edit::Value::Boolean(a), toml_edit::Value::Boolean(b)) => {
-                    a.value() == b.value()
-                }
-                (toml_edit::Value::String(a), toml_edit::Value::String(b)) => {
-                    a.value() == b.value()
-                }
-                _ => false,
-            };
-            if !same {
-                let decor = old.decor().clone();
-                *old = value;
-                *old.decor_mut() = decor;
-            }
-        }
-        None => {
-            t.insert(key, toml_edit::value(value));
-        }
-    }
-    Some(())
-}
-
 /// Builds the tray icon and its menu.
 pub fn start(app: &AppHandle) -> tauri::Result<()> {
     let polish_on = app.state::<AppState>().config.polish.enabled;

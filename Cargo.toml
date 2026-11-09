@@ -40,4 +40,8 @@ tracing = "0.1"
 base64 = "0.22"
 keyring-core = "1"
 wiremock = "0.6"
+# Model downloads (T1.11): SHA-256 checks and the SenseVoice .tar.bz2 (pure-Rust bzip2 backend).
+sha2 = "0.10"
+bzip2 = "0.6"
+tar = "0.4"
 zeroize = "1"

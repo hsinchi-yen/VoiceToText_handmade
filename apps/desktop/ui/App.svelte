@@ -1,4 +1,5 @@
 <script>
+  import { invoke } from "@tauri-apps/api/core";
   import Home from "./routes/Home.svelte";
   import Settings from "./routes/Settings.svelte";
   import Vocab from "./routes/Vocab.svelte";
@@ -6,6 +7,7 @@
   import CloudSetup from "./routes/CloudSetup.svelte";
   import Overlay from "./routes/Overlay.svelte";
   import Onboarding from "./routes/Onboarding.svelte";
+  import { resumeStep } from "./onboarding/api.js";
 
   // Hash routes: #/settings, #/vocab, ... The overlay window (T1.3) loads #/overlay.
   const routes = {
@@ -20,6 +22,8 @@
 
   const current = () => location.hash.replace(/^#\/?/, "");
   let route = $state(current());
+  // Until a local speech model is installed, cloud options are not shown (plan §6.1).
+  let needsModels = $state(false);
 
   $effect(() => {
     const onHash = () => (route = current());
@@ -27,13 +31,26 @@
     return () => window.removeEventListener("hashchange", onHash);
   });
 
+  // First run: open onboarding when no local model exists (or to resume it after the
+  // restart that loads newly installed models).
+  $effect(() => {
+    if (current() === "overlay") return;
+    invoke("onboarding_status")
+      .then((s) => {
+        needsModels = s.needed;
+        if ((s.needed || resumeStep()) && current() === "") location.hash = "#/onboarding";
+      })
+      .catch(() => {});
+  });
+
   const Page = $derived((routes[route] ?? routes[""]).page);
+  const hidden = (path) => path === "overlay" || (needsModels && path === "cloud-setup");
 </script>
 
-{#if route !== "overlay"}
+{#if route !== "overlay" && route !== "onboarding"}
   <nav>
     {#each Object.entries(routes) as [path, r] (path)}
-      {#if path !== "overlay"}
+      {#if !hidden(path)}
         <a href={"#/" + path} class:active={route === path}>{r.label}</a>
       {/if}
     {/each}

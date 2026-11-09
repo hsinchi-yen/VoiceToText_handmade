@@ -13,11 +13,13 @@
     "windows": [
       {
         "label": "main",
-        "title": "v2c",
-        "width": 520,
-        "height": 420,
+        "title": "v2c 語音輸入",
+        "width": 720,
+        "height": 640,
+        "minWidth": 480,
+        "minHeight": 400,
         "resizable": true,
-        "visible": true
+        "visible": false
       }
     ],
     "security": {
@@ -28,11 +30,27 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "publisher": "v2c",
+    "copyright": "v2c contributors (MIT)",
+    "category": "Utility",
+    "shortDescription": "v2c 語音輸入：按住右 Ctrl 說話，文字輸入到游標處",
+    "longDescription": "Typeless-style voice input for Windows. Hold Right Ctrl, speak Traditional Chinese (Taiwan) or English, and the polished text is typed at the cursor. Local models by default.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["TradChinese", "English"],
+        "displayLanguageSelector": false,
+        "startMenuFolder": "v2c",
+        "compression": "lzma",
+        "installerIcon": "icons/icon.ico"
+      }
+    }
   }
 }

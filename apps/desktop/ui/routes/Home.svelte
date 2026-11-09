@@ -4,10 +4,10 @@
 
   // Status codes from src-tauri/src/controller.rs (StatusEvent). Never contains user text.
   const errorText = {
-    model_missing: "找不到語音模型檔（請放到 %LOCALAPPDATA%\\v2c\\models\\）",
+    model_missing: "還沒有語音模型：請到「初次設定」下載",
     model_load_failed: "語音模型載入失敗",
     asr_loading: "語音模型載入中，請稍候",
-    sensevoice_not_available: "SenseVoice 尚未支援",
+    sensevoice_not_available: "SenseVoice 模型無法載入（請到「初次設定」重新下載）",
     not_configured: "未設定翻譯模型",
     inject_elevated: "目前視窗以系統管理員身分執行，無法輸入",
     inject_paste_unsupported: "此 App 需要貼上模式（尚未支援）",
@@ -60,6 +60,9 @@
 
 <h1>v2c 語音輸入</h1>
 <p class="status">{describe(status)}</p>
+{#if status?.kind === "error" && (status.code === "model_missing" || status.code === "sensevoice_not_available")}
+  <p><a href="#/onboarding">前往初次設定</a></p>
+{/if}
 <div class="meter"><div style:width={`${level * 100}%`}></div></div>
 
 <ul>
