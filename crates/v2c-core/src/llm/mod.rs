@@ -5,6 +5,10 @@ use async_trait::async_trait;
 
 use crate::Result;
 
+mod openai_compat;
+
+pub use openai_compat::OpenAiCompatLlm;
+
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
     /// Short stable name for logs and settings, e.g. `lmstudio`, `claude`.

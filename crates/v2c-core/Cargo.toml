@@ -16,6 +16,10 @@ tokio.workspace = true
 tracing.workspace = true
 # Pure-Rust OpenCC (Simplified -> Taiwan Traditional with Taiwan phrasing); see postprocess/zh_tw.rs.
 ferrous-opencc = { version = "0.4", default-features = false, features = ["s2t-conversion", "t2s-conversion"] }
+# OpenAI-compatible LLM (LM Studio) and cloud providers; rustls only, see the root Cargo.toml.
+reqwest.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
+wiremock.workspace = true
