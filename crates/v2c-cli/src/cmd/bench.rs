@@ -5,14 +5,34 @@
 //! When `<name>.raw.txt` exists it is the verbatim script and is used for CER instead of
 //! `<name>.txt` (which holds the polished target). Missing WAVs are skipped, not errors.
 //!
+//! With `--llm lmstudio` every transcript is also polished through LM Studio's OpenAI-compatible
+//! API (the same prompt the app uses), compared with `<name>.txt`, and timed against the
+//! "ASR + polish <= 2.5 s per 10 s of audio" budget. Fixtures without a recording but with a
+//! `<name>.raw.txt` get a text-only polish check of the raw script. If LM Studio is not
+//! reachable, polish is skipped with a message and the ASR bench still runs.
+//!
 //! Printing text to stdout is intentional (developer's own recordings); nothing is logged.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
 
 use anyhow::Context;
-use v2c_core::{asr::AsrContext, audio::AudioClip};
+use v2c_core::{
+    asr::AsrContext,
+    audio::AudioClip,
+    config::LocalConfig,
+    llm::{LlmProvider, OpenAiCompatLlm},
+    postprocess::{fillers::strip_fillers, zh_tw::to_zh_tw},
+    prompts,
+};
 
 use super::transcribe::{load_engine, load_wav, BreezeArgs, EngineOutput};
+
+/// Request timeout for bench polish. Generous on purpose so slow answers are still shown and
+/// judged against the budget; the app itself gives up after `polish.timeout_ms` (1000 ms).
+const BENCH_LLM_TIMEOUT_MS: u64 = 10_000;
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -21,9 +41,18 @@ pub struct Args {
     /// ASR provider: breeze | sensevoice | <cloud id>.
     #[arg(long, default_value = "breeze")]
     pub asr: String,
-    /// Optional LLM for polish: lmstudio | <cloud id>.
+    /// Optional LLM for polish: lmstudio.
     #[arg(long)]
     pub llm: Option<String>,
+    /// OpenAI-compatible base URL for `--llm lmstudio` (default: `[local] llm_base_url`).
+    #[arg(long, default_value_t = LocalConfig::default().llm_base_url)]
+    pub llm_url: String,
+    /// Model id as shown by LM Studio; omitted = whatever model is loaded.
+    #[arg(long)]
+    pub llm_model: Option<String>,
+    /// Per-request polish timeout in ms.
+    #[arg(long, default_value_t = BENCH_LLM_TIMEOUT_MS)]
+    pub llm_timeout_ms: u64,
     /// Model file for local providers.
     #[arg(long)]
     pub model: Option<PathBuf>,
@@ -119,23 +148,168 @@ struct Row {
     cer: f64,
     speed_ok: bool,
     simplified: bool,
+    polish: Option<PolishRow>,
+}
+
+/// Polish result for one fixture.
+struct PolishRow {
+    llm_ms: u64,
+    /// CER of the polished text against `<name>.txt`; `None` when polish failed.
+    cer: Option<f64>,
+    /// Polish succeeded and ASR + polish fit the budget (always true for text-only checks
+    /// that succeeded, which have no audio to scale against).
+    ok: bool,
+}
+
+/// LM Studio (or another OpenAI-compatible server) used to polish bench transcripts.
+struct Polisher {
+    llm: OpenAiCompatLlm,
+    rt: tokio::runtime::Runtime,
+    system: String,
+}
+
+impl Polisher {
+    /// `Ok(None)` when no `--llm` was given or the server is not reachable (with a message).
+    fn connect(args: &Args) -> anyhow::Result<Option<Self>> {
+        let Some(kind) = args.llm.as_deref() else {
+            return Ok(None);
+        };
+        if kind != "lmstudio" {
+            anyhow::bail!(
+                "--llm {kind}: bench supports only `lmstudio` (cloud providers come with T1.7)"
+            );
+        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("starting the async runtime")?;
+        let client = reqwest::Client::builder()
+            .build()
+            .context("building the HTTP client")?;
+        let llm = OpenAiCompatLlm::new(
+            client,
+            args.llm_url.clone(),
+            None,
+            args.llm_model.clone(),
+            Duration::from_millis(args.llm_timeout_ms),
+        );
+        if let Err(e) = rt.block_on(llm.check()) {
+            println!(
+                "SKIP polish: LM Studio is not reachable at {} ({e}). Start it: LM Studio -> \
+                 Developer -> load a model -> Start Server (port 1234), or pass --llm-url.",
+                llm.base_url()
+            );
+            return Ok(None);
+        }
+        // TODO(T1.8): pass the user's vocabulary.
+        let system = prompts::polish(&[]);
+        let polisher = Self { llm, rt, system };
+        // The first request may load the model (LM Studio JIT loading); keep it out of timings.
+        let (warm, ms) = polisher.polish("嗯，這是一個測試。");
+        match warm {
+            Ok(_) => eprintln!("polish warm-up: {ms} ms"),
+            Err(e) => eprintln!("polish warm-up failed after {ms} ms: {e}"),
+        }
+        Ok(Some(polisher))
+    }
+
+    /// Polishes `text` the way the pipeline does (zh_tw on the way in and out). Returns the
+    /// result and the LLM time in ms.
+    fn polish(&self, text: &str) -> (v2c_core::Result<String>, u64) {
+        let input = to_zh_tw(text.trim());
+        let t = Instant::now();
+        let out = self.rt.block_on(self.llm.complete(&self.system, &input));
+        let ms = t.elapsed().as_millis() as u64;
+        (out.map(|s| to_zh_tw(s.trim())), ms)
+    }
+}
+
+/// `<name>.txt`: the polished target, next to the recording.
+fn polished_target(f: &Fixture) -> anyhow::Result<String> {
+    let path = f.wav.with_extension("txt");
+    let s =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    Ok(s.trim().to_string())
+}
+
+/// Prints the polish result for one input. `budget` is `Some((asr_ms, audio_ms))` for real
+/// recordings, `None` for text-only checks.
+fn report_polish(
+    polisher: &Polisher,
+    f: &Fixture,
+    input: &str,
+    budget: Option<(u64, u64)>,
+) -> anyhow::Result<PolishRow> {
+    let target = polished_target(f)?;
+    let (out, llm_ms) = polisher.polish(input);
+    let row = match out {
+        Ok(polished) => {
+            let c = cer(&target, &polished);
+            println!("  polished: {polished}");
+            println!("  target:   {target}");
+            print!("  polish CER {:.1}% | llm {llm_ms} ms", c * 100.0);
+            if has_simplified(&polished) {
+                print!(" | WARN: simplified characters after zh_tw");
+            }
+            println!();
+            PolishRow {
+                llm_ms,
+                cer: Some(c),
+                ok: true,
+            }
+        }
+        Err(e) => {
+            println!("  polish FAILED after {llm_ms} ms: {e}");
+            println!("  rule-based fallback: {}", strip_fillers(&to_zh_tw(input)));
+            println!("  target:   {target}");
+            PolishRow {
+                llm_ms,
+                cer: None,
+                ok: false,
+            }
+        }
+    };
+    let ok = match budget {
+        Some((asr_ms, audio_ms)) => {
+            let total = asr_ms + llm_ms;
+            let ok = row.ok && within_polish_target(total, audio_ms);
+            println!(
+                "  {} asr+polish ({} ms per 10 s of audio, target <= {TARGET_WITH_POLISH_MS_PER_10S})",
+                if ok { "PASS" } else { "FAIL" },
+                per_10s(total, audio_ms)
+            );
+            ok
+        }
+        None => row.ok,
+    };
+    Ok(PolishRow { ok, ..row })
 }
 
 pub fn run(args: Args) -> anyhow::Result<()> {
-    if let Some(llm) = &args.llm {
-        anyhow::bail!("--llm {llm}: polish in bench is not implemented yet (task T1.5)");
-    }
     let fixtures = find_fixtures(&args.dir)?;
     if fixtures.is_empty() {
         anyhow::bail!("no <name>.txt fixtures found in {}", args.dir.display());
     }
+    let polisher = Polisher::connect(&args)?;
     let (present, missing): (Vec<_>, Vec<_>) = fixtures.into_iter().partition(|f| f.wav.is_file());
+    let mut text_rows = Vec::new();
     for f in &missing {
         println!(
             "SKIP {}: {} not found (record it, see tests/fixtures/audio/README.md)",
             f.name,
             f.wav.display()
         );
+        // Without a recording we can still check polish on the verbatim script.
+        if let Some(p) = &polisher {
+            if f.expected_file.to_string_lossy().ends_with(".raw.txt") {
+                let raw = std::fs::read_to_string(&f.expected_file)
+                    .with_context(|| format!("reading {}", f.expected_file.display()))?;
+                println!("== {} (text-only polish of {}.raw.txt)", f.name, f.name);
+                println!("  input:    {}", raw.trim());
+                let row = report_polish(p, f, raw.trim(), None)?;
+                text_rows.push((f.name.clone(), row));
+            }
+        }
     }
     if present.is_empty() {
         println!(
@@ -143,6 +317,7 @@ pub fn run(args: Args) -> anyhow::Result<()> {
             args.dir.display(),
             missing.len()
         );
+        print_text_summary(&text_rows);
         return Ok(());
     }
 
@@ -206,6 +381,15 @@ pub fn run(args: Args) -> anyhow::Result<()> {
                     ""
                 }
             );
+            let polish = match &polisher {
+                Some(p) => Some(report_polish(
+                    p,
+                    f,
+                    &out.transcript.text,
+                    Some((out.total_ms, clip.duration_ms())),
+                )?),
+                None => None,
+            };
             rows.push(Row {
                 name: f.name.clone(),
                 audio_ms: clip.duration_ms(),
@@ -213,27 +397,58 @@ pub fn run(args: Args) -> anyhow::Result<()> {
                 cer: c,
                 speed_ok,
                 simplified,
+                polish,
             });
         }
     }
 
     print_summary(&rows, missing.len());
+    print_text_summary(&text_rows);
     Ok(())
+}
+
+fn print_text_summary(rows: &[(String, PolishRow)]) {
+    if rows.is_empty() {
+        return;
+    }
+    println!("\n== Text-only polish (no recording)");
+    for (name, r) in rows {
+        match r.cer {
+            Some(c) => println!("{name:<12} llm {:>6} ms  CER {:>5.1}%", r.llm_ms, c * 100.0),
+            None => println!("{name:<12} llm {:>6} ms  FAILED", r.llm_ms),
+        }
+    }
+    let failed = rows.iter().filter(|(_, r)| !r.ok).count();
+    println!(
+        "text-only polish: {} ok, {failed} failed (check by eye that the meaning is unchanged)",
+        rows.len() - failed
+    );
 }
 
 fn print_summary(rows: &[Row], skipped: usize) {
     println!("\n== Summary");
     println!(
-        "{:<12} {:>9} {:>8} {:>7}",
-        "fixture", "audio ms", "asr ms", "CER"
+        "{:<12} {:>9} {:>8} {:>7} {:>8} {:>11}",
+        "fixture", "audio ms", "asr ms", "CER", "llm ms", "polish CER"
     );
     for r in rows {
+        let (llm, pcer) = match &r.polish {
+            Some(p) => (
+                p.llm_ms.to_string(),
+                p.cer
+                    .map(|c| format!("{:.1}%", c * 100.0))
+                    .unwrap_or_else(|| "FAILED".into()),
+            ),
+            None => ("-".into(), "-".into()),
+        };
         println!(
-            "{:<12} {:>9} {:>8} {:>6.1}%",
+            "{:<12} {:>9} {:>8} {:>6.1}% {:>8} {:>11}",
             r.name,
             r.audio_ms,
             r.asr_ms,
-            r.cer * 100.0
+            r.cer * 100.0,
+            llm,
+            pcer
         );
     }
     if rows.is_empty() {
@@ -273,10 +488,31 @@ fn print_summary(rows: &[Row], skipped: usize) {
             "FAIL"
         }
     );
+    let polished: Vec<&PolishRow> = rows.iter().filter_map(|r| r.polish.as_ref()).collect();
+    if !polished.is_empty() {
+        let failed = polished.iter().filter(|p| !p.ok).count();
+        let mean_llm =
+            polished.iter().map(|p| p.llm_ms as f64).sum::<f64>() / polished.len() as f64;
+        println!(
+            "polish: mean llm {mean_llm:.0} ms; target: ASR + polish <= \
+             {TARGET_WITH_POLISH_MS_PER_10S} ms per 10 s of audio"
+        );
+        println!(
+            "polish verdict: {} ({failed} of {} over budget or failed)",
+            if failed == 0 { "PASS" } else { "FAIL" },
+            polished.len()
+        );
+    }
 }
 
 /// Acceptance target from the T0.1 card: 10 s of audio in at most 1.2 s of ASR.
 const TARGET_MS_PER_10S: u64 = 1200;
+/// T1.5 / plan section 2 budget: ASR + polish for 10 s of audio in at most 2.5 s.
+const TARGET_WITH_POLISH_MS_PER_10S: u64 = 2500;
+
+fn within_polish_target(total_ms: u64, audio_ms: u64) -> bool {
+    per_10s(total_ms, audio_ms) <= TARGET_WITH_POLISH_MS_PER_10S
+}
 
 /// ASR time scaled to 10 s of audio. Short clips scale up their fixed overhead, so this
 /// errs on the strict side.
@@ -388,10 +624,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("en-01.txt"), "Hello.").unwrap();
-        let args = Args {
-            dir: dir.clone(),
+        run(args_for(&dir, None, LocalConfig::default().llm_base_url)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn args_for(dir: &Path, llm: Option<&str>, llm_url: String) -> Args {
+        Args {
+            dir: dir.to_path_buf(),
             asr: "breeze".into(),
-            llm: None,
+            llm: llm.map(Into::into),
+            llm_url,
+            llm_model: None,
+            llm_timeout_ms: 2000,
             model: None,
             repeat: 1,
             breeze: BreezeArgs {
@@ -401,8 +645,100 @@ mod tests {
                 audio_ctx: None,
                 threads: None,
             },
-        };
+        }
+    }
+
+    #[test]
+    fn polish_budget_scales_to_ten_seconds() {
+        assert!(within_polish_target(2500, 10_000));
+        assert!(!within_polish_target(2501, 10_000));
+        assert!(within_polish_target(1250, 5_000));
+    }
+
+    #[test]
+    fn unknown_llm_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("v2c-bench-llm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("en-01.txt"), "Hello.").unwrap();
+        let err = run(args_for(&dir, Some("gpt"), "http://127.0.0.1:9/v1".into()))
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("lmstudio"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unreachable_lmstudio_skips_polish() {
+        let dir = std::env::temp_dir().join(format!("v2c-bench-down-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("filler-01.txt"), "後天見").unwrap();
+        std::fs::write(dir.join("filler-01.raw.txt"), "嗯後天見").unwrap();
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let args = args_for(
+            &dir,
+            Some("lmstudio"),
+            format!("http://127.0.0.1:{port}/v1"),
+        );
+        assert!(Polisher::connect(&args).unwrap().is_none());
         run(args).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn text_only_polish_against_mock_server() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/models"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("{\"data\":[]}"))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/v1/chat/completions"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "choices": [{ "message": { "role": "assistant",
+                                               "content": "我们后天见。" },
+                                  "finish_reason": "stop" }]
+                })))
+                .mount(&server)
+                .await;
+            server
+        });
+        let dir = std::env::temp_dir().join(format!("v2c-bench-mock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("filler-01.txt"), "我們後天見。").unwrap();
+        std::fs::write(dir.join("filler-01.raw.txt"), "嗯，我們後天見。").unwrap();
+        let args = args_for(&dir, Some("lmstudio"), format!("{}/v1", server.uri()));
+
+        let p = Polisher::connect(&args)
+            .unwrap()
+            .expect("mock server is reachable");
+        let fx = find_fixtures(&dir).unwrap();
+        let row = report_polish(&p, &fx[0], "嗯，我們後天見。", None).unwrap();
+        assert!(row.ok);
+        // The simplified model output was converted by zh_tw, so it matches the target.
+        assert_eq!(row.cer, Some(0.0));
+        let slow = report_polish(&p, &fx[0], "嗯，我們後天見。", Some((3000, 10_000))).unwrap();
+        assert!(!slow.ok, "3 s of ASR alone is over the 2.5 s budget");
+        drop(p);
+        run(args).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        drop(server);
     }
 }
