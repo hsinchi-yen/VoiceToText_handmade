@@ -207,7 +207,7 @@ breeze_quant = "q5_0"         # q5_0 | q8_0（q8 較準、多約 0.6 GB）
 | Provider | ASR | LLM | 備註 |
 |----------|-----|-----|------|
 | OpenAI 相容（LM Studio / 自架） | `/audio/transcriptions`（若端點支援） | `/chat/completions` | base_url + 選填金鑰；LM Studio 預設 `http://localhost:1234/v1` |
-| OpenAI | `gpt-4o-transcribe`（multipart，帶 `prompt`） | `/chat/completions` | |
+| OpenAI | `gpt-transcribe`（multipart，帶 `prompt`；`gpt-4o-transcribe` 已標示停用，2027-02-26 關閉，T1.7 查證） | `/chat/completions` | |
 | Gemini | `generateContent` 內嵌 WAV（base64） | 同左 | |
 | Claude | — | Messages API | 不收音訊；預設 `claude-haiku-5-5`（速度優先），可改 |
 
