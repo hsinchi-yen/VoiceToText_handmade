@@ -75,7 +75,11 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
   5. 閒置 15 分鐘 → 卸載；再按熱鍵第一句稍慢
   6. profile 切到 `cpu_only` 再切回 → 立即卸載、切回後重新載入
   7. 依 `docs/local-setup.md` 設定 NVIDIA 控制面板、Windows 圖形設定、LM Studio
-- [ ] 在 LM Studio 載入 3B 模型並啟動伺服器（T1.5 前）
+- [ ] 在 LM Studio 載入 3B 模型並啟動伺服器（T1.5 前）；模型的 Context Length 設 **8192**（預設 4096 時，長篇免持口述會超出而退回規則式去贅字）
+- [ ] T1.5 潤飾實測：`cargo run -p v2c-cli --release --features cuda -- bench --asr breeze --model <breeze.bin> --llm lmstudio tests/fixtures/audio`（還沒錄音時 `filler-01` 會直接拿 `.raw.txt` 做純文字潤飾）
+  - polished 那行沒有改變語意、沒有多出或少掉內容、問句沒被回答、「幫我寫一封信…」這類請求沒被執行
+  - filler-01 應得到「我們後天早上十點見面。」；沒有簡體字
+  - 每段的 `PASS/FAIL asr+polish (… per 10 s, target <= 2500)` 與摘要的 `polish verdict`
 - [ ] 各卡的實機驗收（見各卡「🧑 需人工」）
 - [ ] 檢查點 1：日常使用一週，問題記在 `tasks/dogfood-windows.md`
 
