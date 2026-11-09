@@ -30,9 +30,11 @@ pub struct SinkRegistry {
 }
 
 impl SinkRegistry {
-    /// The registry used by the app. Empty for now; T1.9 registers the history here.
+    /// The registry used by the app: the input history (T1.9) when it is available.
     pub fn with_defaults() -> Self {
-        Self::default()
+        let mut reg = Self::default();
+        reg.sinks.extend(crate::history_sink::installed()); // T1.9
+        reg
     }
 
     #[cfg_attr(not(test), allow(dead_code))] // first production caller: T1.9

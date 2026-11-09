@@ -9,6 +9,7 @@
 mod app_state;
 mod commands;
 mod controller;
+mod history_sink;
 mod logging;
 mod paths;
 mod recorder;
@@ -53,8 +54,14 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::status::app_info,
             commands::status::last_status,
+            commands::history::history_list,
+            commands::history::history_copy,
+            commands::history::history_reoutput,
+            commands::history::history_delete,
+            commands::history::history_clear,
         ])
         .setup(move |app| {
+            commands::history::init(app.handle()); // before the controller reads the sinks
             start_background(app.handle(), config_error);
             Ok(())
         })

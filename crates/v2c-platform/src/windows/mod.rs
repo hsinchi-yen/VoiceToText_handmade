@@ -1,6 +1,7 @@
 //! Windows implementations. Each file is owned by one task card.
 
 pub mod clipboard; // T1.2
+pub mod dpapi; // T1.9
 pub mod foreground; // T0.3
 pub mod fullscreen; // T1.10b
 pub mod hotkey; // T0.2
