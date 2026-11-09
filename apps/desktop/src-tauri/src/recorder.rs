@@ -48,6 +48,14 @@ pub enum RecorderNotice {
 pub type NoticeFn = Arc<dyn Fn(RecorderNotice) + Send + Sync>;
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(2);
+/// While recording, no audio callback for this long means the device stopped delivering
+/// (e.g. a USB/Bluetooth headset went away without an error): report `mic_lost` and reopen.
+const STALL_TIMEOUT: Duration = Duration::from_secs(1);
+/// A freshly opened stream gets this long for its first audio callback (Bluetooth headsets
+/// can take seconds to switch profile) before it counts as stalled.
+const FIRST_DATA_GRACE: Duration = Duration::from_secs(4);
+/// How often the manager wakes up to check for a stall while a stream is open.
+const STALL_POLL: Duration = Duration::from_millis(250);
 const FINISH_TIMEOUT: Duration = Duration::from_millis(200);
 /// Input frames per resampler call (about 21 ms at 48 kHz).
 const RESAMPLE_CHUNK: usize = 1024;
@@ -84,7 +92,7 @@ pub struct Recorder {
     shared: Arc<Shared>,
     tx: mpsc::Sender<Msg>,
     mic_mode: MicMode,
-    thread: Option<JoinHandle<()>>,
+    thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Recorder {
@@ -114,7 +122,16 @@ impl Recorder {
             shared,
             tx,
             mic_mode: cfg.mic_mode,
-            thread,
+            thread: Mutex::new(thread),
+        }
+    }
+
+    /// Closes the stream and stops the manager thread (at app exit; idempotent).
+    pub fn shutdown(&self) {
+        let _ = self.tx.send(Msg::Shutdown);
+        let handle = self.thread.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(t) = handle {
+            let _ = t.join();
         }
     }
 
@@ -162,10 +179,7 @@ impl AudioSource for Recorder {
 
 impl Drop for Recorder {
     fn drop(&mut self) {
-        let _ = self.tx.send(Msg::Shutdown);
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
+        self.shutdown();
     }
 }
 
@@ -174,6 +188,22 @@ struct Active {
     _stream: cpal::Stream,
     generation: u64,
     resampler: To16k,
+    /// Last audio callback (or the open time).
+    last_data: Instant,
+    /// At least one audio callback arrived.
+    got_data: bool,
+}
+
+/// The stream is open and a clip is being recorded, but no audio arrived for
+/// [`STALL_TIMEOUT`] since the last callback, or for [`FIRST_DATA_GRACE`] since opening when
+/// no callback came yet.
+fn stalled(recording: bool, got_data: bool, last_data: Instant, now: Instant) -> bool {
+    let limit = if got_data {
+        STALL_TIMEOUT
+    } else {
+        FIRST_DATA_GRACE
+    };
+    recording && now.saturating_duration_since(last_data) > limit
 }
 
 struct Manager {
@@ -212,8 +242,23 @@ impl Manager {
                 }
             }
 
+            if let Some(a) = active.as_ref() {
+                let recording = self.lock().is_recording();
+                if stalled(recording, a.got_data, a.last_data, Instant::now()) {
+                    warn!("no audio from the microphone while recording; reopening");
+                    active = None;
+                    self.shared.set_level(0.0);
+                    (self.notify)(RecorderNotice::Unavailable { code: "mic_lost" });
+                    failure_reported = true;
+                    next_attempt = Instant::now();
+                    continue;
+                }
+            }
+
             let wait = if want_open && active.is_none() {
                 RETRY_INTERVAL
+            } else if active.is_some() {
+                STALL_POLL
             } else {
                 Duration::from_secs(60)
             };
@@ -223,6 +268,8 @@ impl Manager {
                     samples,
                 }) => {
                     if let Some(a) = active.as_mut().filter(|a| a.generation == g) {
+                        a.last_data = Instant::now();
+                        a.got_data = true;
                         let out = a.resampler.push(&samples);
                         if !out.is_empty() {
                             self.shared.set_level(rms(&out));
@@ -322,6 +369,8 @@ impl Manager {
             _stream: stream,
             generation,
             resampler,
+            last_data: Instant::now(),
+            got_data: false,
         })
     }
 }
@@ -587,11 +636,45 @@ impl Capture {
     fn clear_preroll(&mut self) {
         self.preroll.clear();
     }
+
+    fn is_recording(&self) -> bool {
+        self.recording.is_some()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stall_only_counts_while_recording() {
+        let t0 = Instant::now();
+        let later = t0 + STALL_TIMEOUT + Duration::from_millis(1);
+        assert!(stalled(true, true, t0, later));
+        assert!(
+            !stalled(false, true, t0, later),
+            "idle always-on stream is not watched"
+        );
+        assert!(!stalled(true, true, t0, t0 + STALL_TIMEOUT));
+        assert!(!stalled(true, true, later, t0), "clock order is tolerated");
+    }
+
+    #[test]
+    fn first_callback_gets_a_longer_grace() {
+        let t0 = Instant::now();
+        let after_1s = t0 + STALL_TIMEOUT + Duration::from_millis(1);
+        assert!(
+            !stalled(true, false, t0, after_1s),
+            "slow device still starting"
+        );
+        assert!(!stalled(true, false, t0, t0 + FIRST_DATA_GRACE));
+        assert!(stalled(
+            true,
+            false,
+            t0,
+            t0 + FIRST_DATA_GRACE + Duration::from_millis(1)
+        ));
+    }
 
     #[test]
     fn downmix_averages_and_converts() {

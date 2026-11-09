@@ -96,6 +96,12 @@ pub fn run(args: Args) -> anyhow::Result<()> {
                 "foreground window is elevated (administrator); {what}, paste it with Ctrl+V"
             )
         }
+        Err(FallbackError {
+            error: InjectError::ModifiersHeld,
+            ..
+        }) => anyhow::bail!(
+            "Ctrl/Shift/Alt/Win was still held after 500 ms; nothing was typed (release the keys)"
+        ),
         Err(e) => anyhow::bail!("injection failed: {e}"),
     }
     println!("done in {} ms", started.elapsed().as_millis());

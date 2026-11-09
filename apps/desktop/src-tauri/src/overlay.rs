@@ -91,7 +91,9 @@ pub fn react(ev: &StatusEvent) -> Reaction {
     match ev {
         // `..`: the controller is gaining a hands-free flag on this event; pass it to
         // `recording_view` once it exists.
-        StatusEvent::Recording { rms, .. } => Reaction::Show(recording_view(*rms, false)),
+        StatusEvent::Recording { rms, hands_free } => {
+            Reaction::Show(recording_view(*rms, *hands_free))
+        }
         StatusEvent::Transcribing => Reaction::Show(OverlayView::Transcribing),
         StatusEvent::Polishing => Reaction::Show(OverlayView::Polishing),
         StatusEvent::Done { chars: 0, .. } => Reaction::ShowFor(
@@ -177,7 +179,9 @@ pub fn error_message(code: &str) -> &'static str {
             "無法開啟麥克風"
         }
         "hotkey_failed" => "熱鍵安裝失敗",
-        "hands_free_limit" => "已達 5 分鐘上限，已自動結束",
+        "hands_free_limit" => "已達免持上限，已自動結束",
+        "cloud_not_configured" => "雲端服務未設定完成，請到雲端服務頁檢查",
+        "polish_timed_out" => "潤飾逾時，已改用基本整理",
         "gpu_yield_heavy_app" => "偵測到重度程式，暫時改用 CPU",
         "gpu_low_vram" => "顯示卡記憶體不足，暫時改用 CPU",
         "config_invalid" => "設定檔格式錯誤，已使用預設值",
@@ -502,7 +506,10 @@ pub fn start_demo_if_requested(status: &broadcast::Sender<StatusEvent>) {
         pause(3_000).await;
         for i in 0..60u32 {
             let rms = 0.002 + 0.15 * ((i as f32) * 0.35).sin().abs();
-            let _ = status.send(StatusEvent::Recording { rms });
+            let _ = status.send(StatusEvent::Recording {
+                rms,
+                hands_free: false,
+            });
             pause(50).await;
         }
         let _ = status.send(StatusEvent::Transcribing);
@@ -646,7 +653,10 @@ mod tests {
             )
         );
         assert_eq!(
-            react(&StatusEvent::Recording { rms: 0.0 }),
+            react(&StatusEvent::Recording {
+                rms: 0.0,
+                hands_free: false
+            }),
             Reaction::Show(OverlayView::Recording {
                 level: 0.0,
                 hands_free: false
@@ -684,7 +694,15 @@ mod tests {
         assert_eq!(error_message("something_new"), "發生錯誤");
         assert_eq!(
             error_message("hands_free_limit"),
-            "已達 5 分鐘上限，已自動結束"
+            "已達免持上限，已自動結束"
+        );
+        assert_eq!(
+            error_message("cloud_not_configured"),
+            "雲端服務未設定完成，請到雲端服務頁檢查"
+        );
+        assert_eq!(
+            error_message("polish_timed_out"),
+            "潤飾逾時，已改用基本整理"
         );
         assert_eq!(
             error_message("translate_unavailable"),
@@ -715,6 +733,8 @@ mod tests {
             "mic_start_failed",
             "mic_open_failed",
             "hands_free_limit",
+            "cloud_not_configured",
+            "polish_timed_out",
             "translate_unavailable",
             "gpu_yield_heavy_app",
             "gpu_low_vram",
@@ -809,7 +829,10 @@ mod tests {
     }
 
     fn rec(rms: f32) -> StatusEvent {
-        StatusEvent::Recording { rms }
+        StatusEvent::Recording {
+            rms,
+            hands_free: false,
+        }
     }
 
     fn done() -> StatusEvent {

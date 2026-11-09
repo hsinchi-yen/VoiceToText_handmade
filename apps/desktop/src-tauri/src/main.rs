@@ -1,8 +1,11 @@
 //! v2c desktop app: hold Right Ctrl, speak, and the text is typed at the cursor.
 //!
-//! Startup: logging -> config -> Tauri. In `setup`: overlay window, tray icon, status forwarder,
-//! background model load, recorder, hotkey hook, and the controller task. OS-specific calls go
-//! through `v2c-platform` (the overlay's window styles are isolated in `overlay::win`).
+//! Startup: logging -> config -> keyring store -> engine -> Tauri. In `setup`: overlay window,
+//! tray icon, status forwarder, local ASR selection + VRAM guard (background thread), LM Studio
+//! check, recorder, hotkey hook, the controller task, and the config-reload listener. OS-specific
+//! calls go through `v2c-platform` (the overlay's window styles are isolated in `overlay::win`).
+//! At exit (`RunEvent::Exit`) the hook, microphone, and background loops are stopped and the
+//! log is flushed.
 
 // No console window in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -10,10 +13,14 @@
 mod app_state;
 mod commands;
 mod controller;
+mod engine;
+mod gpu_task;
 mod history_sink;
+mod local_asr;
 mod logging;
 mod overlay;
 mod paths;
+mod providers;
 mod recorder;
 mod sinks;
 #[cfg(test)]
@@ -22,12 +29,14 @@ mod tray;
 
 use std::sync::{Arc, Mutex};
 
-use tauri::{Emitter, Manager};
-use tokio::sync::{broadcast, watch};
-use tracing::{error, info};
+use tauri::{Emitter, Listener, Manager};
+use tokio::sync::broadcast;
+use tracing::{error, info, warn};
+use v2c_core::secrets::SecretStore;
 
 use crate::app_state::AppState;
-use crate::controller::{AsrState, StatusEvent};
+use crate::controller::StatusEvent;
+use crate::engine::{Engine, EngineHandle};
 use crate::recorder::{Recorder, RecorderNotice};
 
 /// Webview event carrying [`StatusEvent`]s (overlay and UI pages listen to it).
@@ -35,24 +44,29 @@ const STATUS_EVENT: &str = "v2c:status";
 
 fn main() {
     let paths = paths::Paths::resolve();
-    let _log_guard = logging::init(&paths.logs_dir());
+    let log_guard = logging::init(&paths.logs_dir());
     info!(
         version = env!("CARGO_PKG_VERSION"),
         cuda_feature = v2c_asr_local::breeze::cuda_enabled(),
+        sensevoice_feature = v2c_asr_local::sensevoice::sensevoice_enabled(),
         "v2c starting"
     );
 
     let (config, config_error) = app_state::load_or_create_config(&paths.config_file());
+    let secrets = install_keyring();
     let (status, _) = broadcast::channel::<StatusEvent>(256);
+    let engine = Engine::new(paths.clone(), config.clone(), status.clone(), secrets);
     let state = AppState {
         paths,
         config: Arc::new(config),
         status,
         last_status: Arc::new(Mutex::new(None)),
+        engine,
         keep_alive: Mutex::new(Vec::new()),
+        on_exit: Mutex::new(Vec::new()),
     };
 
-    let result = tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::status::app_info,
@@ -89,11 +103,55 @@ fn main() {
             overlay::start_demo_if_requested(&handle.state::<AppState>().status);
             Ok(())
         })
-        .run(tauri::generate_context!());
-    if let Err(e) = result {
-        error!(error = %e, "tauri exited with an error");
+        .build(tauri::generate_context!());
+    let app = match app {
+        Ok(app) => app,
+        Err(e) => {
+            error!(error = %e, "tauri failed to start");
+            drop(log_guard);
+            return;
+        }
+    };
+
+    // The event loop does not return normally, so clean up in the Exit event.
+    let mut log_guard = Some(log_guard);
+    app.run(move |handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            shutdown(handle);
+            info!("v2c stopped");
+            // Flushes the non-blocking log writer.
+            drop(log_guard.take());
+        }
+    });
+}
+
+/// Windows Credential Manager as the keyring-core default store, for cloud API keys.
+fn install_keyring() -> Arc<dyn SecretStore> {
+    #[cfg(windows)]
+    match windows_native_keyring_store::Store::new() {
+        Ok(store) => {
+            keyring_core::set_default_store(store);
+            info!("keyring: Windows Credential Manager");
+        }
+        // Cloud services then report a key error; local use is unaffected.
+        Err(e) => warn!(error = %e, "keyring store unavailable"),
     }
-    info!("v2c stopped");
+    Arc::new(v2c_core::secrets::KeyringSecretStore::new())
+}
+
+fn shutdown(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    state.engine.shutdown();
+    let hooks = std::mem::take(&mut *state.on_exit.lock().unwrap_or_else(|p| p.into_inner()));
+    for hook in hooks {
+        hook();
+    }
+    // Uninstalls the keyboard hook.
+    state
+        .keep_alive
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clear();
 }
 
 fn start_background(app: &tauri::AppHandle, config_error: Option<&'static str>) {
@@ -124,28 +182,41 @@ fn start_background(app: &tauri::AppHandle, config_error: Option<&'static str>) 
         let _ = state.status.send(StatusEvent::Error { code });
     }
 
-    // Load the model in the background so the app starts immediately.
-    let (asr_tx, asr_rx) = watch::channel(AsrState::Loading);
+    // Local ASR selection and loading, then the VRAM guard, off the async workers.
     {
-        let config = Arc::clone(&state.config);
-        let paths = state.paths.clone();
-        let status = state.status.clone();
+        let engine = Arc::clone(&state.engine);
         let spawned = std::thread::Builder::new()
-            .name("v2c-asr-load".into())
+            .name("v2c-asr".into())
             .spawn(move || {
-                let result = app_state::load_pipeline(&config, &paths);
-                match &result {
-                    Ok(_) => info!("speech recognition ready"),
-                    Err(code) => {
-                        error!(code, "speech recognition unavailable");
-                        let _ = status.send(StatusEvent::Error { code });
-                    }
-                }
-                let _ = asr_tx.send(app_state::asr_state(result));
+                engine.startup_blocking();
+                engine.guard_loop();
             });
         if spawned.is_err() {
-            error!("could not spawn the model loader thread");
+            error!("could not spawn the ASR thread");
         }
+    }
+    tauri::async_runtime::spawn(Arc::clone(&state.engine).lm_check_loop());
+
+    // Config reload after the tray (or, later, the settings page) saved config.toml.
+    {
+        let handle = app.clone();
+        app.listen_any(tray::CONFIG_CHANGED_EVENT, move |_| {
+            let state = handle.state::<AppState>();
+            match app_state::read_config(&state.paths.config_file()) {
+                Ok(cfg) => state.engine.reload(cfg),
+                Err(code) => {
+                    warn!(code, "config reload failed; keeping the running config");
+                    let _ = state.status.send(StatusEvent::Error {
+                        code: "config_invalid_not_saved",
+                    });
+                }
+            }
+        });
+        // Vocabulary saved on the vocabulary page.
+        let handle = app.clone();
+        app.listen_any(commands::vocab::VOCAB_CHANGED_EVENT, move |_| {
+            handle.state::<AppState>().engine.reload_vocab();
+        });
     }
 
     let notify_status = state.status.clone();
@@ -169,16 +240,21 @@ fn start_background(app: &tauri::AppHandle, config_error: Option<&'static str>) 
             }
         }),
     ));
+    {
+        let r = Arc::clone(&recorder);
+        if let Ok(mut hooks) = state.on_exit.lock() {
+            hooks.push(Box::new(move || r.shutdown()));
+        }
+    }
 
-    start_controller(&state, recorder, asr_rx);
+    start_controller(&state, recorder);
 }
 
 #[cfg(windows)]
-fn start_controller(state: &AppState, recorder: Arc<Recorder>, asr: watch::Receiver<AsrState>) {
+fn start_controller(state: &AppState, recorder: Arc<Recorder>) {
     use std::time::Duration;
 
-    use tracing::warn;
-    use v2c_core::trigger::{Event, TriggerConfig};
+    use v2c_core::trigger::Event;
     use v2c_platform::windows::foreground::WinForeground;
     use v2c_platform::windows::hotkey::{monotonic_ms, WindowsHotkey};
     use v2c_platform::windows::inject::SendInputInjector;
@@ -225,18 +301,17 @@ fn start_controller(state: &AppState, recorder: Arc<Recorder>, asr: watch::Recei
         foreground: Arc::new(WinForeground),
         sinks: sinks::SinkRegistry::with_defaults(),
         status: state.status.clone(),
-        asr,
-        apps: state.config.apps.clone(),
-        trigger: TriggerConfig::from(&state.config.hotkey),
+        backend: Arc::new(EngineHandle(Arc::clone(&state.engine))),
+        config: state.engine.config_watch(),
     };
     tauri::async_runtime::spawn(controller::run(deps, events_rx));
     info!("controller started");
 }
 
 #[cfg(not(windows))]
-fn start_controller(state: &AppState, recorder: Arc<Recorder>, asr: watch::Receiver<AsrState>) {
+fn start_controller(state: &AppState, recorder: Arc<Recorder>) {
     // Linux hotkey and injection arrive in Phase 3.
-    let _ = (recorder, asr);
+    let _ = (recorder, EngineHandle);
     tracing::warn!("hotkey and text injection are not implemented on this platform yet");
     let _ = state.status.send(StatusEvent::Error {
         code: "platform_unsupported",

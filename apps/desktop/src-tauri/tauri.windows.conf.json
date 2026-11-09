@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "sherpa-dlls/sherpa-onnx-c-api.dll": "sherpa-onnx-c-api.dll",
+      "sherpa-dlls/sherpa-onnx-cxx-api.dll": "sherpa-onnx-cxx-api.dll",
+      "sherpa-dlls/onnxruntime.dll": "onnxruntime.dll",
+      "sherpa-dlls/onnxruntime_providers_shared.dll": "onnxruntime_providers_shared.dll"
+    }
+  }
+}
