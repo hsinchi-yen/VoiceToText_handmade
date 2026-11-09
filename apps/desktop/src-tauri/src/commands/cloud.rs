@@ -19,11 +19,11 @@
 //! or logs. Results expose the last 4 characters at most. Errors are short codes.
 //!
 //! `config.toml` is edited with `toml_edit` so the user's comments and unknown keys survive.
-//! TODO(dedupe): tray.rs gets a similar toml_edit helper concurrently; merge the two into one
-//! shared config-update module.
+//! TODO(dedupe): tray.rs has a similar toml_edit helper; merge the two into one shared
+//! config-update module.
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -39,11 +39,10 @@ use v2c_core::V2cError;
 use zeroize::Zeroize;
 
 use crate::app_state::AppState;
+use crate::tray::CONFIG_CHANGED_EVENT;
 
 /// The only webview allowed to use the cloud commands.
 const MAIN_WINDOW: &str = "main";
-/// Webview event sent after `config.toml` changed (same name the tray uses; no payload).
-pub const CONFIG_CHANGED_EVENT: &str = "v2c:config-changed";
 
 /// Official API-key pages (verified 2026-11, see docs/cloud-setup.md).
 const KEY_PAGE_GEMINI: &str = "https://aistudio.google.com/apikey";
@@ -279,27 +278,53 @@ impl CloudDraft {
         Ok(svc)
     }
 
-    /// The pasted key, else the stored one (editing), else none.
-    fn key(&self, stored: &dyn SecretStore) -> Result<Option<ApiKey>, &'static str> {
-        if let Some(k) = self
+    /// The pasted key, validated; `None` when nothing was pasted.
+    fn pasted_key(&self) -> Result<Option<ApiKey>, &'static str> {
+        match self
             .api_key
             .as_deref()
             .map(str::trim)
             .filter(|k| !k.is_empty())
         {
-            if k.chars().any(char::is_control) {
-                return Err("invalid_key");
-            }
-            return Ok(Some(ApiKey::new(k)));
+            Some(k) if k.chars().any(char::is_control) => Err("invalid_key"),
+            Some(k) => Ok(Some(ApiKey::new(k))),
+            None => Ok(None),
         }
-        match &self.id {
-            Some(id) => stored
-                .get(id)
+    }
+
+    /// The pasted key, else the stored one, else none. The stored key is reused only when
+    /// `svc` (this draft) has the same kind and endpoint as the `saved` service, so editing
+    /// the URL never sends the old key to a new host.
+    fn key(
+        &self,
+        stored: &dyn SecretStore,
+        saved: Option<&CloudService>,
+        svc: &CloudService,
+    ) -> Result<Option<ApiKey>, &'static str> {
+        if let Some(k) = self.pasted_key()? {
+            return Ok(Some(k));
+        }
+        match saved.filter(|prev| same_endpoint(prev, svc)) {
+            Some(prev) => stored
+                .get(&prev.id)
                 .map(|k| k.filter(|k| !k.is_empty()))
                 .map_err(|_| "keyring_failed"),
             None => Ok(None),
         }
     }
+}
+
+fn normalized_endpoint(svc: &CloudService) -> Option<String> {
+    route::effective_base_url(svc)
+        .ok()
+        .map(|u| u.trim().trim_end_matches('/').to_ascii_lowercase())
+}
+
+/// Same kind and same (normalised) effective endpoint.
+fn same_endpoint(a: &CloudService, b: &CloudService) -> bool {
+    a.kind == b.kind
+        && normalized_endpoint(a).is_some()
+        && normalized_endpoint(a) == normalized_endpoint(b)
 }
 
 fn config_error_code(e: &V2cError) -> &'static str {
@@ -410,10 +435,12 @@ fn openai_llm(
     )
 }
 
-/// Runs the wizard's connection test for `draft` (key from the draft, else from `stored`).
+/// Runs the wizard's connection test for `draft`. The key comes from the draft, else from
+/// `stored` when the draft edits one of the `saved` services without changing its endpoint.
 pub async fn test_draft(
     draft: &CloudDraft,
     stored: &dyn SecretStore,
+    saved: &[CloudService],
     http: &CloudHttp,
     timeouts: &TimeoutConfig,
     asr: bool,
@@ -424,7 +451,11 @@ pub async fn test_draft(
         .clone()
         .unwrap_or_else(|| id_base(draft.kind).into());
     let svc = draft.to_service(&id)?;
-    let key = draft.key(stored)?;
+    let prev = draft
+        .id
+        .as_deref()
+        .and_then(|id| saved.iter().find(|s| s.id == id));
+    let key = draft.key(stored, prev, &svc)?;
     let mem = MemorySecretStore::new();
     if let Some(k) = &key {
         mem.set(&id, k).map_err(|_| "keyring_failed")?;
@@ -516,31 +547,26 @@ pub fn load_config(path: &Path) -> Result<Config, &'static str> {
 
 /// Reads `config.toml` (defaults if missing), lets `edit` change the document, checks the
 /// result still parses, and writes it atomically. An invalid file is left untouched.
+/// Callers hold [`CONFIG_LOCK`] for the whole read-modify-write.
 fn update_config(
     path: &Path,
     edit: impl FnOnce(&mut DocumentMut, &Config) -> Result<(), &'static str>,
 ) -> Result<Config, &'static str> {
-    let _guard = CONFIG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let text = read_config_text(path)?;
     let current = Config::from_toml_str(&text).map_err(|_| "config_invalid")?;
     let mut doc: DocumentMut = text.parse().map_err(|_| "config_invalid")?;
     edit(&mut doc, &current)?;
     let out = doc.to_string();
     let updated = Config::from_toml_str(&out).map_err(|_| "config_invalid")?;
-    write_atomic(path, &out).map_err(|e| {
+    crate::app_state::save_config_text(path, &out).map_err(|e| {
         warn!(error = %e, "could not save config.toml");
         "config_save_failed"
     })?;
     Ok(updated)
 }
 
-fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path)
+fn config_lock() -> std::sync::MutexGuard<'static, ()> {
+    CONFIG_LOCK.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 /// Sets `key = "val"` keeping the old value's comments/whitespace.
@@ -659,6 +685,7 @@ pub fn save_service(
     draft: &CloudDraft,
     purposes: Purposes,
 ) -> Result<ServiceView, &'static str> {
+    let _guard = config_lock();
     let cfg = load_config(config_path)?;
     let (id, is_new) = match &draft.id {
         Some(id) if cfg.cloud_service(id).is_some() => (id.clone(), false),
@@ -677,23 +704,33 @@ pub fn save_service(
     {
         return Err("model_required");
     }
-    let pasted = draft
-        .api_key
-        .as_deref()
-        .is_some_and(|k| !k.trim().is_empty());
-    let key = draft.key(stored)?;
+    let prev = cfg.cloud_service(&id);
+    let pasted = draft.pasted_key()?;
+    let reusable = prev.is_some_and(|p| same_endpoint(p, &svc));
+    let key = draft.key(stored, prev, &svc)?;
     if key.is_none() && svc.kind != CloudKind::OpenAiCompat {
         return Err("key_missing");
     }
-    if pasted {
-        if let Some(k) = &key {
+    drop(key);
+    // The keyring entry may change: a pasted key replaces it; an endpoint change without a new
+    // key clears it (a compatible endpoint's old key must not go to the new host). The old
+    // entry is kept so a failed config write can put it back.
+    let old_key = stored.get(&id).map_err(|_| "keyring_failed")?;
+    let key_changed = match &pasted {
+        Some(k) => {
             stored.set(&id, k).map_err(|e| {
                 warn!(service = %id, error = %e, "cloud: could not store key");
                 "keyring_failed"
             })?;
+            true
         }
-    }
-    drop(key);
+        None if !reusable && old_key.is_some() => {
+            stored.delete(&id).map_err(|_| "keyring_failed")?;
+            true
+        }
+        None => false,
+    };
+    drop(pasted);
     let purposes = Purposes {
         asr: purposes.asr && svc.kind.supports_asr(),
         ..purposes
@@ -705,12 +742,19 @@ pub fn save_service(
     let cfg = match saved {
         Ok(cfg) => cfg,
         Err(code) => {
-            if is_new && pasted {
-                let _ = stored.delete(&id);
+            if key_changed {
+                let restored = match &old_key {
+                    Some(k) => stored.set(&id, k),
+                    None => stored.delete(&id),
+                };
+                if let Err(e) = restored {
+                    warn!(service = %id, error = %e, "cloud: could not restore key");
+                }
             }
             return Err(code);
         }
     };
+    drop(old_key);
     info!(
         service = %id,
         kind = kind_toml(svc.kind),
@@ -724,12 +768,21 @@ pub fn save_service(
     Ok(view(saved, &cfg, stored))
 }
 
+/// `cloud_remove` result.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct RemoveResult {
+    /// `false` when the service was removed but its keyring entry could not be deleted
+    /// (the UI says so; the key is no longer used by anything).
+    pub key_deleted: bool,
+}
+
 /// Removes the service and its key; routes that used it go back to local.
 pub fn remove_service(
     config_path: &Path,
     stored: &dyn SecretStore,
     id: &str,
-) -> Result<(), &'static str> {
+) -> Result<RemoveResult, &'static str> {
+    let _guard = config_lock();
     let cfg = load_config(config_path)?;
     if cfg.cloud_service(id).is_none() {
         return Err("not_found");
@@ -738,12 +791,15 @@ pub fn remove_service(
         set_routes(doc, current, id, None)?;
         remove_service_table(doc, id)
     })?;
-    if let Err(e) = stored.delete(id) {
-        warn!(service = %id, error = %e, "cloud: could not delete key");
-        return Err("keyring_failed");
-    }
-    info!(service = %id, "cloud service removed");
-    Ok(())
+    let key_deleted = match stored.delete(id) {
+        Ok(()) => true,
+        Err(e) => {
+            warn!(service = %id, error = %e, "cloud: service removed but key not deleted");
+            false
+        }
+    };
+    info!(service = %id, key_deleted, "cloud service removed");
+    Ok(RemoveResult { key_deleted })
 }
 
 /// Only the main window may use the cloud commands.
@@ -761,7 +817,8 @@ fn check_caller(label: &str) -> Result<(), &'static str> {
 // ---------------------------------------------------------------------------------------
 
 /// The OS keyring. Installs the Windows Credential Manager store on first use if the app
-/// has not installed a default store yet (the integration step does it at startup).
+/// has not installed a default store yet. main.rs installs it at startup, so this is only a
+/// fallback (e.g. if that failed transiently).
 fn secret_store() -> Result<v2c_core::secrets::KeyringSecretStore, &'static str> {
     if keyring_core::get_default_store().is_none() {
         install_default_store()?;
@@ -807,11 +864,9 @@ async fn blocking<T: Send + 'static>(
         .map_err(|_| "internal_error")?
 }
 
-fn timeouts(app: &tauri::AppHandle) -> TimeoutConfig {
-    let path = config_path(app);
-    load_config(&path)
-        .map(|c| c.timeouts)
-        .unwrap_or_else(|_| app.state::<AppState>().config.timeouts.clone())
+/// The running config (reloaded on `v2c:config-changed`), for timeouts and saved services.
+fn live_config(app: &tauri::AppHandle) -> Arc<Config> {
+    app.state::<AppState>().engine.config()
 }
 
 // ---------------------------------------------------------------------------------------
@@ -843,8 +898,8 @@ pub async fn cloud_test_connection(
     check_caller(window.label())?;
     let store = blocking(secret_store).await?;
     let http = route::cloud_http_client().map_err(|_| "test_failed")?;
-    let t = timeouts(&app);
-    test_draft(&draft, &store, &http, &t, true, true)
+    let cfg = live_config(&app);
+    test_draft(&draft, &store, &cfg.cloud, &http, &cfg.timeouts, true, true)
         .await
         .map(|(r, _)| r)
 }
@@ -858,8 +913,17 @@ pub async fn cloud_models(
     check_caller(window.label())?;
     let store = blocking(secret_store).await?;
     let http = route::cloud_http_client().map_err(|_| "test_failed")?;
-    let t = timeouts(&app);
-    let (r, _) = test_draft(&draft, &store, &http, &t, false, false).await?;
+    let cfg = live_config(&app);
+    let (r, _) = test_draft(
+        &draft,
+        &store,
+        &cfg.cloud,
+        &http,
+        &cfg.timeouts,
+        false,
+        false,
+    )
+    .await?;
     let reason = r
         .checks
         .iter()
@@ -890,12 +954,12 @@ pub async fn cloud_remove(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     id: String,
-) -> Result<(), &'static str> {
+) -> Result<RemoveResult, &'static str> {
     check_caller(window.label())?;
     let path = config_path(&app);
-    blocking(move || remove_service(&path, &secret_store()?, &id)).await?;
+    let result = blocking(move || remove_service(&path, &secret_store()?, &id)).await?;
     let _ = app.emit(CONFIG_CHANGED_EVENT, ());
-    Ok(())
+    Ok(result)
 }
 
 #[tauri::command]
@@ -938,11 +1002,37 @@ mod tests {
         route::cloud_http_client().unwrap()
     }
 
-    fn temp_config(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("v2c-cloud-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d.join("config.toml")
+    /// `config.toml` in a fresh temp folder that is deleted when the test ends.
+    struct TempConfig {
+        dir: std::path::PathBuf,
+        path: std::path::PathBuf,
+    }
+
+    impl std::ops::Deref for TempConfig {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl AsRef<Path> for TempConfig {
+        fn as_ref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempConfig {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn temp_config(tag: &str) -> TempConfig {
+        let dir = std::env::temp_dir().join(format!("v2c-cloud-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        TempConfig { dir, path }
     }
 
     fn assert_no_key<T: Serialize + std::fmt::Debug>(v: &T) {
@@ -955,6 +1045,7 @@ mod tests {
         let (r, _) = test_draft(
             d,
             &MemorySecretStore::new(),
+            &[],
             &http(),
             &timeouts(),
             true,
@@ -1144,9 +1235,17 @@ mod tests {
             Some("http://127.0.0.1:9/v1".into()),
             Some(KEY),
         );
-        let (r, _) = test_draft(&d, &MemorySecretStore::new(), &http(), &slow, true, true)
-            .await
-            .unwrap();
+        let (r, _) = test_draft(
+            &d,
+            &MemorySecretStore::new(),
+            &[],
+            &http(),
+            &slow,
+            true,
+            true,
+        )
+        .await
+        .unwrap();
         assert!(r.summary.starts_with("網路不通"), "{r:?}");
     }
 
@@ -1156,21 +1255,21 @@ mod tests {
         let t = timeouts();
         let missing_key = draft(CloudKind::OpenAi, None, None);
         assert_eq!(
-            test_draft(&missing_key, &s, &http(), &t, true, true)
+            test_draft(&missing_key, &s, &[], &http(), &t, true, true)
                 .await
                 .unwrap_err(),
             "key_missing"
         );
         let no_url = draft(CloudKind::OpenAiCompat, None, None);
         assert_eq!(
-            test_draft(&no_url, &s, &http(), &t, true, true)
+            test_draft(&no_url, &s, &[], &http(), &t, true, true)
                 .await
                 .unwrap_err(),
             "base_url_required"
         );
         let plain_http = draft(CloudKind::Claude, Some("http://proxy/v1".into()), Some(KEY));
         assert_eq!(
-            test_draft(&plain_http, &s, &http(), &t, true, true)
+            test_draft(&plain_http, &s, &[], &http(), &t, true, true)
                 .await
                 .unwrap_err(),
             "invalid_base_url"
@@ -1187,13 +1286,53 @@ mod tests {
             .await;
         let stored = MemorySecretStore::new();
         stored.set("claude", &ApiKey::new(KEY)).unwrap();
-        let mut d = draft(CloudKind::Claude, Some(server.uri()), None);
+        let saved = [CloudService {
+            id: "claude".into(),
+            kind: CloudKind::Claude,
+            base_url: Some(server.uri()),
+            asr_model: None,
+            llm_model: None,
+        }];
+        let mut d = draft(CloudKind::Claude, Some(format!("{}/", server.uri())), None);
         d.id = Some("claude".into());
-        let (r, _) = test_draft(&d, &stored, &http(), &timeouts(), false, false)
+        let (r, _) = test_draft(&d, &stored, &saved, &http(), &timeouts(), false, false)
             .await
             .unwrap();
         assert!(r.ok, "{r:?}");
         assert_eq!(r.models, Some(vec![]));
+
+        // A different endpoint (or kind) never gets the stored key.
+        let other = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": []})))
+            .expect(0)
+            .mount(&other)
+            .await;
+        d.base_url = Some(other.uri());
+        let err = test_draft(&d, &stored, &saved, &http(), &timeouts(), false, false)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "key_missing");
+        let mut wrong_kind = draft(CloudKind::OpenAi, Some(server.uri()), None);
+        wrong_kind.id = Some("claude".into());
+        let err = test_draft(
+            &wrong_kind,
+            &stored,
+            &saved,
+            &http(),
+            &timeouts(),
+            false,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, "key_missing");
+        // Unknown id: no stored key either.
+        d.base_url = Some(server.uri());
+        let err = test_draft(&d, &stored, &[], &http(), &timeouts(), false, false)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "key_missing");
     }
 
     // ---- save / list / remove ----
@@ -1393,7 +1532,10 @@ future_option = 42  # unknown key
             },
         )
         .unwrap();
-        remove_service(&path, &store, "claude").unwrap();
+        assert_eq!(
+            remove_service(&path, &store, "claude"),
+            Ok(RemoveResult { key_deleted: true })
+        );
         let cfg = load_config(&path).unwrap();
         assert_eq!(cfg.route.polish, LOCAL);
         assert_eq!(cfg.route.translate, LOCAL);
@@ -1404,6 +1546,131 @@ future_option = 42  # unknown key
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("# keep this comment"));
         assert_eq!(remove_service(&path, &store, "claude"), Err("not_found"));
+    }
+
+    const NEW_KEY: &str = "sk-TESTSECRET-NEWKEY-0000";
+
+    #[test]
+    fn failed_config_write_restores_the_keyring() {
+        let path = temp_config("rollback");
+        let store = MemorySecretStore::new();
+        save_service(
+            &path,
+            &store,
+            &draft(CloudKind::Gemini, None, Some(KEY)),
+            Purposes::default(),
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        // A folder where the temporary file goes makes the config write fail.
+        std::fs::create_dir_all(path.with_extension("toml.tmp")).unwrap();
+
+        let mut edit = draft(CloudKind::Gemini, None, Some(NEW_KEY));
+        edit.id = Some("gemini".into());
+        assert_eq!(
+            save_service(&path, &store, &edit, Purposes::default()),
+            Err("config_save_failed")
+        );
+        assert_eq!(store.get("gemini").unwrap().unwrap().expose(), KEY);
+
+        let fresh = draft(CloudKind::OpenAi, None, Some(NEW_KEY));
+        assert_eq!(
+            save_service(&path, &store, &fresh, Purposes::default()),
+            Err("config_save_failed")
+        );
+        assert!(store.get("openai").unwrap().is_none());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn endpoint_change_needs_a_new_key() {
+        let path = temp_config("endpoint");
+        let store = MemorySecretStore::new();
+        // Official service: moving to another endpoint without a key is refused.
+        save_service(
+            &path,
+            &store,
+            &draft(CloudKind::OpenAi, None, Some(KEY)),
+            Purposes::default(),
+        )
+        .unwrap();
+        let mut moved = draft(
+            CloudKind::OpenAi,
+            Some("https://proxy.example/v1".into()),
+            None,
+        );
+        moved.id = Some("openai".into());
+        assert_eq!(
+            save_service(&path, &store, &moved, Purposes::default()),
+            Err("key_missing")
+        );
+        assert_eq!(store.get("openai").unwrap().unwrap().expose(), KEY);
+        // Same endpoint written differently keeps the key.
+        let mut same = draft(
+            CloudKind::OpenAi,
+            Some("HTTPS://api.openai.com/v1/".into()),
+            None,
+        );
+        same.id = Some("openai".into());
+        assert!(
+            save_service(&path, &store, &same, Purposes::default())
+                .unwrap()
+                .has_key
+        );
+
+        // Compatible endpoint: the old key is dropped, not sent to the new host.
+        let mut lan = draft(
+            CloudKind::OpenAiCompat,
+            Some("http://192.168.1.5:1234/v1".into()),
+            Some(KEY),
+        );
+        lan.llm_model = Some("qwen".into());
+        save_service(&path, &store, &lan, Purposes::default()).unwrap();
+        lan.id = Some("custom".into());
+        lan.api_key = None;
+        lan.base_url = Some("http://192.168.1.99:1234/v1".into());
+        let row = save_service(&path, &store, &lan, Purposes::default()).unwrap();
+        assert!(!row.has_key);
+        assert!(store.get("custom").unwrap().is_none());
+    }
+
+    /// A store whose deletes fail (locked keyring).
+    struct NoDelete(MemorySecretStore);
+
+    impl SecretStore for NoDelete {
+        fn get(&self, id: &str) -> v2c_core::Result<Option<ApiKey>> {
+            self.0.get(id)
+        }
+        fn set(&self, id: &str, key: &ApiKey) -> v2c_core::Result<()> {
+            self.0.set(id, key)
+        }
+        fn delete(&self, _id: &str) -> v2c_core::Result<()> {
+            Err(V2cError::Storage("locked".into()))
+        }
+    }
+
+    #[test]
+    fn remove_succeeds_when_only_the_key_delete_fails() {
+        let path = temp_config("nodelete");
+        let store = NoDelete(MemorySecretStore::new());
+        save_service(
+            &path,
+            &store,
+            &draft(CloudKind::Claude, None, Some(KEY)),
+            Purposes {
+                asr: false,
+                polish: true,
+                translate: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            remove_service(&path, &store, "claude"),
+            Ok(RemoveResult { key_deleted: false })
+        );
+        let cfg = load_config(&path).unwrap();
+        assert!(cfg.cloud_service("claude").is_none());
+        assert_eq!(cfg.route.polish, LOCAL);
     }
 
     #[test]

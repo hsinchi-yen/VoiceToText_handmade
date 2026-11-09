@@ -65,20 +65,92 @@ pub fn apply(cfg: &mut Config, action: ConfigAction) -> bool {
 }
 
 /// Reads `config.toml` (defaults if it does not exist), applies `action`, and writes it back.
-/// An invalid file is left untouched. Returns the new config or an error code.
+/// Only the keys the action changes are rewritten (`toml_edit`), so the user's comments,
+/// formatting, and keys this version does not know survive. An invalid file is left untouched
+/// (`config_invalid_not_saved`). Returns the new config or an error code.
 pub fn update_config_file(path: &Path, action: ConfigAction) -> Result<Config, &'static str> {
-    let mut cfg = match std::fs::read_to_string(path) {
-        Ok(s) => Config::from_toml_str(&s).map_err(|_| "config_invalid")?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Config::with_defaults(),
+    let text = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let mut cfg = Config::with_defaults();
+            if apply(&mut cfg, action) {
+                app_state::save_config(path, &cfg).map_err(save_failed)?;
+            }
+            return Ok(cfg);
+        }
         Err(_) => return Err("config_unreadable"),
     };
-    if apply(&mut cfg, action) {
-        app_state::save_config(path, &cfg).map_err(|e| {
-            warn!(error = %e, "could not save config.toml");
-            "config_save_failed"
-        })?;
+    let mut cfg = Config::from_toml_str(&text).map_err(|_| "config_invalid_not_saved")?;
+    if !apply(&mut cfg, action) {
+        return Ok(cfg);
     }
+    let new_text = edit_config_text(&text, action).ok_or("config_invalid_not_saved")?;
+    // The edited file must mean exactly the config we computed; otherwise write nothing.
+    match Config::from_toml_str(&new_text) {
+        Ok(on_disk) if on_disk == cfg => {}
+        _ => {
+            warn!("tray config edit did not round-trip; config.toml left unchanged");
+            return Err("config_save_failed");
+        }
+    }
+    app_state::save_config_text(path, &new_text).map_err(save_failed)?;
     Ok(cfg)
+}
+
+fn save_failed(e: std::io::Error) -> &'static str {
+    warn!(error = %e, "could not save config.toml");
+    "config_save_failed"
+}
+
+/// Applies `action` to the TOML text, changing only the keys involved and keeping each
+/// value's surrounding comments. `None` if the text is not TOML or a section is not a table.
+pub fn edit_config_text(text: &str, action: ConfigAction) -> Option<String> {
+    let mut doc: toml_edit::DocumentMut = text.parse().ok()?;
+    match action {
+        ConfigAction::SetPolish(on) => set_key(&mut doc, "polish", "enabled", on.into())?,
+        ConfigAction::AllLocal => {
+            for key in ["asr", "polish", "translate"] {
+                set_key(&mut doc, "route", key, LOCAL.into())?;
+            }
+        }
+    }
+    Some(doc.to_string())
+}
+
+/// Sets `[table].key = value`, creating the table or key if missing. An existing value that
+/// already equals `value` is left as written; a replaced value keeps its decor (comments).
+fn set_key(
+    doc: &mut toml_edit::DocumentMut,
+    table: &str,
+    key: &str,
+    value: toml_edit::Value,
+) -> Option<()> {
+    let t = doc
+        .entry(table)
+        .or_insert_with(toml_edit::table)
+        .as_table_like_mut()?;
+    match t.get_mut(key).and_then(|item| item.as_value_mut()) {
+        Some(old) => {
+            let same = match (&*old, &value) {
+                (toml_edit::Value::Boolean(a), toml_edit::Value::Boolean(b)) => {
+                    a.value() == b.value()
+                }
+                (toml_edit::Value::String(a), toml_edit::Value::String(b)) => {
+                    a.value() == b.value()
+                }
+                _ => false,
+            };
+            if !same {
+                let decor = old.decor().clone();
+                *old = value;
+                *old.decor_mut() = decor;
+            }
+        }
+        None => {
+            t.insert(key, toml_edit::value(value));
+        }
+    }
+    Some(())
 }
 
 /// Builds the tray icon and its menu.
@@ -258,9 +330,110 @@ mod tests {
         std::fs::write(&path, "route = 5").unwrap();
         assert_eq!(
             update_config_file(&path, ConfigAction::AllLocal),
-            Err("config_invalid")
+            Err("config_invalid_not_saved")
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "route = 5");
+        std::fs::write(&path, "[polish\nenabled = ").unwrap();
+        assert_eq!(
+            update_config_file(&path, ConfigAction::SetPolish(false)),
+            Err("config_invalid_not_saved")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[polish\nenabled = "
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    const COMMENTED: &str = "\
+# My v2c settings
+[route]
+asr = \"gemini\" # cloud ASR
+polish = \"local\"
+translate = 'openai'
+my_future_flag = true
+
+[polish]
+# keep polish on at work
+enabled = true # toggle
+timeout_ms = 900
+
+[experimental]
+unknown = \"kept\"
+";
+
+    #[test]
+    fn tray_edit_keeps_comments_and_unknown_keys() {
+        let path = temp_file("preserve");
+        std::fs::write(&path, COMMENTED).unwrap();
+
+        let cfg = update_config_file(&path, ConfigAction::SetPolish(false)).unwrap();
+        assert!(!cfg.polish.enabled);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            COMMENTED.replace("enabled = true # toggle", "enabled = false # toggle")
+        );
+
+        let cfg = update_config_file(&path, ConfigAction::AllLocal).unwrap();
+        assert_eq!((&*cfg.route.asr, &*cfg.route.translate), (LOCAL, LOCAL));
+        let text = std::fs::read_to_string(&path).unwrap();
+        for kept in [
+            "# My v2c settings",
+            "# cloud ASR",
+            "my_future_flag = true",
+            "# keep polish on at work",
+            "enabled = false # toggle",
+            "timeout_ms = 900",
+            "[experimental]\nunknown = \"kept\"",
+            // Already local: left exactly as written.
+            "polish = \"local\"",
+        ] {
+            assert!(text.contains(kept), "lost {kept:?} in:\n{text}");
+        }
+        assert!(text.contains("asr = \"local\" # cloud ASR"), "{text}");
+        assert!(
+            !text.contains("gemini") && !text.contains("openai"),
+            "{text}"
+        );
+        let on_disk = Config::from_toml_str(&text).unwrap();
+        assert_eq!(on_disk, cfg);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn tray_edit_adds_missing_sections_and_keys() {
+        let text = edit_config_text("# only a comment\n", ConfigAction::SetPolish(false)).unwrap();
+        // A comment-only file keeps its comment (toml_edit holds it as the document trailer).
+        assert!(text.contains("# only a comment\n"), "{text}");
+        let cfg = Config::from_toml_str(&text).unwrap();
+        assert!(!cfg.polish.enabled);
+
+        let text =
+            edit_config_text("[polish]\ntimeout_ms = 5\n", ConfigAction::SetPolish(false)).unwrap();
+        let cfg = Config::from_toml_str(&text).unwrap();
+        assert!(!cfg.polish.enabled);
+        assert_eq!(cfg.polish.timeout_ms, 5);
+
+        // Inline tables are tables too.
+        let text =
+            edit_config_text("route = { asr = \"gemini\" }\n", ConfigAction::AllLocal).unwrap();
+        let cfg = Config::from_toml_str(&text).unwrap();
+        assert_eq!(cfg.route.asr, LOCAL);
+
+        assert_eq!(
+            edit_config_text("polish = 5", ConfigAction::SetPolish(true)),
+            None
+        );
+        assert_eq!(edit_config_text("[x", ConfigAction::SetPolish(true)), None);
+    }
+
+    #[test]
+    fn unchanged_action_does_not_rewrite_the_file() {
+        let path = temp_file("unchanged");
+        std::fs::write(&path, COMMENTED).unwrap();
+        update_config_file(&path, ConfigAction::SetPolish(true)).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), COMMENTED);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }

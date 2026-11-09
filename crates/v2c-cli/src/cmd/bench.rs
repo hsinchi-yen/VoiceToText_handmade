@@ -20,7 +20,6 @@ use std::{
 
 use anyhow::Context;
 use v2c_core::{
-    asr::AsrContext,
     audio::AudioClip,
     config::LocalConfig,
     llm::{LlmProvider, OpenAiCompatLlm},
@@ -28,7 +27,7 @@ use v2c_core::{
     prompts,
 };
 
-use super::transcribe::{load_engine, load_wav, BreezeArgs, EngineOutput};
+use super::transcribe::{asr_context, load_engine, load_wav, BreezeArgs, EngineOutput};
 
 /// Request timeout for bench polish. Generous on purpose so slow answers are still shown and
 /// judged against the budget; the app itself gives up after `polish.timeout_ms` (1000 ms).
@@ -60,6 +59,10 @@ pub struct Args {
     /// VRAM with nvidia-smi and checking for display stutter).
     #[arg(long, default_value_t = 1)]
     pub repeat: u32,
+    /// Vocabulary file (one entry per line) for the ASR initial prompt; compare CER with and
+    /// without it.
+    #[arg(long)]
+    pub vocab: Option<PathBuf>,
     #[command(flatten)]
     pub breeze: BreezeArgs,
 }
@@ -201,8 +204,8 @@ impl Polisher {
             );
             return Ok(None);
         }
-        // TODO(T1.8): pass the user's vocabulary.
-        let system = prompts::polish(&[]);
+        // Same vocabulary as the ASR context (`--vocab`), as in the app.
+        let system = prompts::polish(&asr_context(args.vocab.as_deref())?.vocabulary);
         let polisher = Self { llm, rt, system };
         // The first request may load the model (LM Studio JIT loading); keep it out of timings.
         let (warm, ms) = polisher.polish("嗯，這是一個測試。");
@@ -323,13 +326,7 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     }
 
     let engine = load_engine(&args.asr, args.model.as_deref(), &args.breeze)?;
-    let ctx = AsrContext::default();
-    if engine.is_sensevoice() {
-        println!(
-            "note: SenseVoice outputs Simplified Chinese; the app converts it with zh_tw, this \
-             bench does not, so the simplified-output check is expected to fail for zh fixtures."
-        );
-    }
+    let ctx = asr_context(args.vocab.as_deref())?;
 
     // Warm-up so CUDA kernel loading and buffer allocation are not counted in the first fixture.
     let warm = engine.run(&AudioClip::new(vec![0.0; 16_000]), &ctx);
@@ -585,6 +582,26 @@ mod tests {
     }
 
     #[test]
+    fn simplified_asr_output_is_scored_after_zh_tw() {
+        // SenseVoice-style Simplified output: the bench scores it the way the app shows it.
+        let out = EngineOutput {
+            transcript: v2c_core::asr::Transcript {
+                text: "这个 meeting 我们 delay 一下".into(),
+                lang: v2c_core::Lang::Mixed,
+            },
+            total_ms: 10,
+            summary: "asr 10 ms".into(),
+        }
+        .with_zh_tw();
+        assert!(!has_simplified(&out.transcript.text));
+        assert_eq!(
+            cer("這個 meeting 我們 delay 一下", &out.transcript.text),
+            0.0
+        );
+        assert!(out.summary.ends_with("zh_tw applied"));
+    }
+
+    #[test]
     fn cer_empty_cases() {
         assert_eq!(cer("", ""), 0.0);
         assert_eq!(cer("。", ""), 0.0);
@@ -639,6 +656,7 @@ mod tests {
             llm_timeout_ms: 2000,
             model: None,
             repeat: 1,
+            vocab: None,
             breeze: BreezeArgs {
                 lang: "detect".into(),
                 cpu: true,

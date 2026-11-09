@@ -274,7 +274,7 @@ pub async fn history_reoutput(
     app_state: State<'_, AppState>,
 ) -> Result<(), &'static str> {
     let text = with_store(&window, &state, move |s| entry_text(s, id)).await?;
-    let rules = app_state.config.apps.clone();
+    let rules = app_state.engine.config().apps.clone();
     target::reoutput(&window, text, rules).await?;
     info!(id, "history re-output");
     Ok(())

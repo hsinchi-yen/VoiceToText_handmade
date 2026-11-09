@@ -39,9 +39,12 @@
     message = "";
     busyId = s.id;
     try {
-      await api.remove(s.id);
+      const r = await api.remove(s.id);
       confirmId = null;
       message = `已移除「${s.label}」，原本交給它的用途已改回地端。`;
+      if (!r.key_deleted) {
+        message += "（金鑰沒能從 Windows 認證管理員刪除，v2c 已不會再使用它；可以自行到認證管理員刪除。）";
+      }
       onChanged();
     } catch (code) {
       message = api.describe(code);

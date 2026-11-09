@@ -12,7 +12,9 @@ use v2c_asr_local::{
     sensevoice, BreezeAsr, BreezeOptions, BreezeOutput, DecodeLang, LanguageMode, SenseVoiceAsr,
     SenseVoiceLanguage, SenseVoiceOptions, Transcript,
 };
-use v2c_core::{asr::AsrContext, audio::AudioClip, audio::SAMPLE_RATE};
+use v2c_core::{
+    asr::AsrContext, audio::AudioClip, audio::SAMPLE_RATE, postprocess::zh_tw::to_zh_tw,
+};
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -24,6 +26,9 @@ pub struct Args {
     /// Model for local providers: the GGML file for breeze, the model directory for sensevoice.
     #[arg(long)]
     pub model: Option<PathBuf>,
+    /// Vocabulary file (one entry per line) for the ASR initial prompt.
+    #[arg(long)]
+    pub vocab: Option<PathBuf>,
     #[command(flatten)]
     pub breeze: BreezeArgs,
 }
@@ -88,14 +93,31 @@ pub enum Engine {
 }
 
 /// Result of one recognition with a timing/language summary (the summary holds no text).
+/// [`Engine::run`] returns `transcript.text` already converted with `zh_tw`.
 pub struct EngineOutput {
     pub transcript: Transcript,
     pub total_ms: u64,
     pub summary: String,
 }
 
+impl EngineOutput {
+    /// Converts the text to Traditional Chinese (Taiwan) with `zh_tw`, as the app pipeline does
+    /// after ASR (SenseVoice outputs Simplified), and notes it in the summary.
+    pub fn with_zh_tw(mut self) -> Self {
+        self.transcript.text = to_zh_tw(&self.transcript.text);
+        self.summary.push_str(", zh_tw applied");
+        self
+    }
+}
+
 impl Engine {
+    /// Recognises `clip`; the text comes back converted with `zh_tw` (see
+    /// [`EngineOutput::with_zh_tw`]), so CER and the simplified check match the app.
     pub fn run(&self, clip: &AudioClip, ctx: &AsrContext) -> v2c_core::Result<EngineOutput> {
+        self.run_raw(clip, ctx).map(EngineOutput::with_zh_tw)
+    }
+
+    fn run_raw(&self, clip: &AudioClip, ctx: &AsrContext) -> v2c_core::Result<EngineOutput> {
         match self {
             Engine::Breeze(b) => b.transcribe_blocking(clip, ctx).map(|o| EngineOutput {
                 summary: describe(&o),
@@ -111,10 +133,6 @@ impl Engine {
                 transcript: o.transcript,
             }),
         }
-    }
-
-    pub fn is_sensevoice(&self) -> bool {
-        matches!(self, Engine::SenseVoice(_))
     }
 }
 
@@ -268,16 +286,35 @@ pub fn describe(out: &BreezeOutput) -> String {
     )
 }
 
+/// ASR context for `--vocab <file>`: the vocabulary and `prompts::asr_initial_prompt` built
+/// from it (Whisper limit). Without a file: the default context (providers use the base prompt).
+/// Only the entry count is printed, never the entries.
+pub fn asr_context(vocab: Option<&Path>) -> anyhow::Result<AsrContext> {
+    let Some(path) = vocab else {
+        return Ok(AsrContext::default());
+    };
+    let words = v2c_core::vocab::Vocab::load(path)
+        .with_context(|| format!("reading vocabulary {}", path.display()))?
+        .words;
+    eprintln!(
+        "vocabulary: {} entries from {}",
+        words.len(),
+        path.display()
+    );
+    let prompt =
+        v2c_core::prompts::asr_initial_prompt(&words, v2c_core::prompts::WHISPER_PROMPT_MAX_CHARS);
+    Ok(AsrContext {
+        vocabulary: words,
+        prompt,
+    })
+}
+
 pub fn run(args: Args) -> anyhow::Result<()> {
     let clip = load_wav(&args.wav)?;
     let engine = load_engine(&args.asr, args.model.as_deref(), &args.breeze)?;
-    let out = engine
-        .run(&clip, &AsrContext::default())
-        .context("transcribing")?;
+    let ctx = asr_context(args.vocab.as_deref())?;
+    let out = engine.run(&clip, &ctx).context("transcribing")?;
     eprintln!("audio {} ms, {}", clip.duration_ms(), out.summary);
-    if engine.is_sensevoice() {
-        eprintln!("note: SenseVoice output is Simplified; the app converts it with zh_tw.");
-    }
     println!("{}", out.transcript.text);
     Ok(())
 }
@@ -285,6 +322,33 @@ pub fn run(args: Args) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asr_context_from_vocab_file() {
+        assert!(asr_context(None).unwrap().prompt.is_empty());
+        let path = std::env::temp_dir().join(format!("v2c-cli-vocab-{}.txt", std::process::id()));
+        std::fs::write(&path, "台積電\n# comment\nLM Studio\n").unwrap();
+        let ctx = asr_context(Some(&path)).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(ctx.vocabulary, ["台積電", "LM Studio"]);
+        assert!(ctx.prompt.starts_with("詞彙：台積電、LM Studio。"));
+    }
+
+    #[test]
+    fn output_is_converted_with_zh_tw() {
+        let out = EngineOutput {
+            transcript: Transcript {
+                text: "软件开发 OK".into(),
+                lang: v2c_core::Lang::Mixed,
+            },
+            total_ms: 5,
+            summary: "asr 5 ms (sensevoice, cpu)".into(),
+        }
+        .with_zh_tw();
+        assert_eq!(out.transcript.text, "軟體開發 OK");
+        assert_eq!(out.summary, "asr 5 ms (sensevoice, cpu), zh_tw applied");
+        assert_eq!(out.total_ms, 5);
+    }
 
     #[test]
     fn downmix_averages_channels() {

@@ -1,7 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "overlay",
-  "description": "Overlay window: only listens to events",
+  "description": "Overlay window: listens to its events and emits only `v2c:overlay-ready` (no payload). Event names cannot be scoped in Tauri v2, so `allow-emit` is limited by this capability to the overlay window and local content; `emit-to` stays denied.",
   "windows": ["overlay"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+  "local": true,
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "core:event:allow-emit"]
 }

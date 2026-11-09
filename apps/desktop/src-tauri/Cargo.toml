@@ -19,32 +19,43 @@ cuda = ["v2c-asr-local/cuda"]
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
+# `keyring`: API keys from Windows Credential Manager (store installed at startup, main.rs).
 v2c-core = { workspace = true, features = ["keyring"] }
-v2c-asr-local.workspace = true
+# `sensevoice`: CPU fallback ASR (sherpa-onnx; its DLLs ship next to v2c.exe, see build.rs).
+v2c-asr-local = { workspace = true, features = ["sensevoice"] }
 v2c-platform.workspace = true
+async-trait.workspace = true
+keyring-core.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+toml_edit.workspace = true
+# Cloud wizard (T1.7b): wipe pasted API keys from memory.
+zeroize.workspace = true
 tauri = { version = "2.12", features = ["tray-icon"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
 cpal = "0.18"
 rubato = "5"
-# Cloud wizard (T1.7b): keyring default store, comment-preserving config edits, key hygiene.
-keyring-core.workspace = true
-toml_edit.workspace = true
-zeroize.workspace = true
+
+# Windows Credential Manager as the keyring-core default store.
+[target.'cfg(windows)'.dependencies.windows-native-keyring-store]
+version = "1.1"
+
+# Not used from Rust: a direct dependency on the `links = "sherpa-onnx"` package makes Cargo run
+# its build script (which downloads the DLLs and copies them to target/<profile>/) before ours,
+# so build.rs can stage them for the installer. Same version and features as v2c-asr-local's.
+[target.'cfg(windows)'.dependencies.sherpa-onnx-sys]
+version = "=2.0.1"
+default-features = false
+features = ["shared"]
 
 # Overlay window styles (no activation, click-through); see src/overlay.rs.
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.61"
 features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"]
 
-[target.'cfg(windows)'.dependencies.windows-native-keyring-store]
-workspace = true
-
 [dev-dependencies]
 wiremock.workspace = true
-async-trait.workspace = true
 hound.workspace = true
 serde_json = "1"

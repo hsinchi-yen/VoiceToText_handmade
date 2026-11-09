@@ -303,8 +303,6 @@ impl Inner {
 }
 
 /// `ctx.prompt` if set, otherwise the base prompt. NUL bytes are removed (whisper-rs panics on them).
-///
-/// TODO(T1.8): callers will build `ctx.prompt` with `prompts::asr_initial_prompt` (vocabulary).
 fn initial_prompt(ctx: &AsrContext) -> String {
     let p = if ctx.prompt.trim().is_empty() {
         ASR_BASE_PROMPT

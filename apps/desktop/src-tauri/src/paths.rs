@@ -48,6 +48,11 @@ impl Paths {
         self.data_dir.join("config.toml")
     }
 
+    /// Personal vocabulary, one entry per line (T1.8).
+    pub fn vocab_file(&self) -> PathBuf {
+        self.data_dir.join("vocab.txt")
+    }
+
     pub fn logs_dir(&self) -> PathBuf {
         self.data_dir.join("logs")
     }
@@ -91,6 +96,17 @@ pub fn breeze_model_file(quant: BreezeQuant) -> &'static str {
     }
 }
 
+/// Directory name of the SenseVoice-Small model (sherpa-onnx int8 release), inside a models
+/// directory.
+pub const SENSEVOICE_DIR: &str = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17";
+
+/// First `dir/SENSEVOICE_DIR` that is a directory.
+pub fn find_sensevoice_dir(dirs: &[PathBuf]) -> Option<PathBuf> {
+    dirs.iter()
+        .map(|d| d.join(SENSEVOICE_DIR))
+        .find(|p| p.is_dir())
+}
+
 /// First `dir/file_name` that exists.
 pub fn find_model(file_name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     dirs.iter().map(|d| d.join(file_name)).find(|p| p.is_file())
@@ -126,7 +142,11 @@ mod tests {
         let dirs = vec![a.clone(), b.clone(), c.clone()];
         assert_eq!(find_model(name, &dirs), Some(b.join(name)));
         assert_eq!(find_model("missing.bin", &dirs), None);
-        assert_eq!(find_model(name, &[a]), None);
+        assert_eq!(find_model(name, std::slice::from_ref(&a)), None);
+
+        std::fs::create_dir_all(c.join(SENSEVOICE_DIR)).unwrap();
+        assert_eq!(find_sensevoice_dir(&dirs), Some(c.join(SENSEVOICE_DIR)));
+        assert_eq!(find_sensevoice_dir(&[a]), None);
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -139,6 +159,7 @@ mod tests {
         };
         assert_eq!(p.config_file(), PathBuf::from("X").join("config.toml"));
         assert_eq!(p.logs_dir(), PathBuf::from("X").join("logs"));
+        assert_eq!(p.vocab_file(), PathBuf::from("X").join("vocab.txt"));
         assert_eq!(p.models_dir(), PathBuf::from("L").join("models"));
         assert!(p
             .model_search_dirs()

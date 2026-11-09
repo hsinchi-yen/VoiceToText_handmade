@@ -22,4 +22,4 @@ export const guides = {
   ],
 };
 
-export const billingWarning = "雲端服務會依用量向你收費，錄音會上傳到該服務。";
+export const billingWarning = "雲端服務會依用量向你收費，錄音或文字會上傳到該服務。";

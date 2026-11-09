@@ -284,9 +284,7 @@ fn wait_for_modifiers_released() -> Result<(), InjectError> {
         }
         if Instant::now() >= deadline {
             // Typing now would turn characters into shortcuts (Ctrl+W, Alt+F4, ...).
-            return Err(InjectError::Os(
-                "modifier keys still held after 500 ms".into(),
-            ));
+            return Err(InjectError::ModifiersHeld);
         }
         std::thread::sleep(MODIFIER_POLL);
     }

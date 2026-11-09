@@ -1,6 +1,8 @@
 <script>
   // 「新增雲端服務」 wizard, 7 steps (tasks/plan.md §6.2). `editing` is a row from
-  // cloud_list to change an existing service (starts at step 3, key optional).
+  // cloud_list to change an existing service: a custom endpoint starts at step 2 (base_url
+  // editable), an official service at step 3. The stored key is reused only if the kind and
+  // endpoint stay the same (checked by the backend).
   import * as api from "./api.js";
   import { guides, billingWarning } from "./guides.js";
 
@@ -10,7 +12,8 @@
 
   // svelte-ignore state_referenced_locally
   const start = editing;
-  let step = $state(start ? 3 : 1);
+  const firstStep = start ? (start.kind === "open_ai_compat" ? 2 : 3) : 1;
+  let step = $state(firstStep);
   let draft = $state(
     start
       ? {
@@ -80,7 +83,7 @@
 
   function back() {
     message = "";
-    if (step === (editing ? 3 : 1)) onCancel();
+    if (step === firstStep) onCancel();
     else step -= 1;
   }
 
@@ -169,13 +172,13 @@
       </label>
     {/if}
     <p class="warn">{billingWarning}</p>
-    <p class="hint">詳細圖文說明：docs/cloud-setup.md</p>
+    <p class="hint">詳見安裝資料夾中的 docs\cloud-setup.md</p>
   {:else if step === 3}
     <h2>貼上金鑰{isCompat ? "（選填）" : ""}</h2>
     {#if editing}
       <p>
         {#if editing.has_key}
-          已儲存的金鑰{editing.key_last4 ? `末 4 碼：${editing.key_last4}` : ""}。留空就沿用，貼上新的會取代。
+          已儲存的金鑰{editing.key_last4 ? `末 4 碼：${editing.key_last4}` : ""}。留空就沿用，貼上新的會取代。改了端點網址就必須重新貼上金鑰。
         {:else}
           目前沒有儲存金鑰。
         {/if}

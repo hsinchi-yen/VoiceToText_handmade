@@ -72,6 +72,15 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
   2. 各狀態外觀與時間：錄音音量條、辨識中、完成約 0.8 秒消失、錯誤停留 3 秒；不同縮放比例下也看一下
   3. 系統列：設定／輸入紀錄打開對應頁面；潤飾勾選會改 config.toml 的 `polish.enabled`；「全部改用地端」讓 `[route]` 三項變 `"local"`；「切換服務」是灰色；「結束」真的關閉
   4. 主視窗按 ✕ 只是隱藏、背景繼續執行，可從系統列再打開
+  5. 冷啟動時故意讓模型缺少（或 config.toml 格式錯誤）→ 標籤顯示錯誤約 3 秒，不是空白
+  6. 上一句還在處理時就開始錄下一句 → 錄音標籤不會閃到「辨識中／完成」；放開後約 0.2 秒內出現「辨識中」
+  7. 若標籤完全看不見：設 `$env:V2C_OVERLAY_LAYERED_ALPHA="1"` 再啟動，確認看得見且仍可點穿、不搶焦點，並回報給 agent
+  8. 在含註解的 config.toml 上用系統列切「潤飾」與「全部改用地端」→ 註解仍在；故意弄壞格式 → 顯示「設定檔格式錯誤，未變更」
+  9. 免持模式下標籤顯示「免持」徽章與「按右 Ctrl 結束」，沒有被截斷
+- [ ] T1.8 個人詞庫
+  1. `npm run tauri dev` →「詞庫」頁輸入 5 個常用人名或產品名 → 儲存，確認 `%APPDATA%\v2c\vocab.txt` 有內容
+  2. 錄一段含這些詞的音檔（可另存為 `tests/fixtures/audio/vocab-02.wav` 並寫期望文字），比較 CER：
+     `cargo run -p v2c-cli --release --features cuda -- bench --asr breeze --model <breeze.bin> tests/fixtures/audio` 與加上 `--vocab "$env:APPDATA\v2c\vocab.txt"` 的結果
 - [ ] T1.9 輸入紀錄
   1. 說幾句話後，用 DB Browser for SQLite 開 `%APPDATA%\v2c\history.db`：`text_sealed` 是亂碼，搜尋句子找不到
   2. 在 KeePassXC／Bitwarden 的欄位說話 → 紀錄頁沒有新增
