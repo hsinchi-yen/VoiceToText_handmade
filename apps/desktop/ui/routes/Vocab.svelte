@@ -1,12 +1,15 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
+  import { onMount } from "svelte";
   import { checkVocab } from "../vocab/check.js";
 
   // Defaults until `vocab_get` answers; the backend values win.
   let limits = $state({ maxEntries: 500, maxEntryChars: 40 });
   let text = $state("");
   let saved = $state("");
+  // True until the file was read; stays true when reading failed (`loadFailed`).
   let loading = $state(true);
+  let loadFailed = $state(false);
   let saving = $state(false);
   let message = $state("");
   let error = $state("");
@@ -28,18 +31,24 @@
     }
   }
 
-  $effect(() => {
+  // One-time load. If it fails, editing stays disabled so saving cannot overwrite the file
+  // with an empty list.
+  onMount(() => {
     invoke("vocab_get")
       .then((v) => {
         limits = { maxEntries: v.max_entries, maxEntryChars: v.max_entry_chars };
         text = v.text;
         saved = v.text;
+        loading = false;
       })
-      .catch((e) => (error = describeError(e)))
-      .finally(() => (loading = false));
+      .catch((e) => {
+        loadFailed = true;
+        error = `${describeError(e)}，為避免覆蓋原有詞庫，目前無法編輯。`;
+      });
   });
 
   async function save() {
+    if (loading || loadFailed) return;
     saving = true;
     message = "";
     error = "";

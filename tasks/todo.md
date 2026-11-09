@@ -46,7 +46,7 @@
   - [ ] 待 T1.1 合併後：bench 對 SenseVoice 輸出先過 `zh_tw` 再算 CER
   - [ ] 🧑 真人錄音 bench
 - [ ] W5 T1.6 中翻英
-- [ ] W5 T1.9 輸入紀錄（DPAPI 加密、7 天、不記錄的 App、日誌不含文字）
+- [x] W5 T1.9 輸入紀錄（DPAPI 加密、7 天、不記錄的 App、日誌不含文字）— 2026-11-09 合併：SQLite＋DPAPI、200 筆、每小時清除、只有主視窗能呼叫、重新輸出只打進先前的視窗
 - [ ] W5 T1.10b VRAM 管理
   - [x] 後端已合併（2026-11-09）：`GpuGuard`（遲滯、實測用量、退避）、NVML `GpuMonitor`、全螢幕偵測、`docs/local-setup.md`
   - [ ] 接上 controller 與設定頁使用條（整合任務）

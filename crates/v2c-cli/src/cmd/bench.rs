@@ -204,8 +204,8 @@ impl Polisher {
             );
             return Ok(None);
         }
-        // TODO(T1.8): pass the user's vocabulary.
-        let system = prompts::polish(&[]);
+        // Same vocabulary as the ASR context (`--vocab`), as in the app.
+        let system = prompts::polish(&asr_context(args.vocab.as_deref())?.vocabulary);
         let polisher = Self { llm, rt, system };
         // The first request may load the model (LM Studio JIT loading); keep it out of timings.
         let (warm, ms) = polisher.polish("嗯，這是一個測試。");
@@ -327,12 +327,6 @@ pub fn run(args: Args) -> anyhow::Result<()> {
 
     let engine = load_engine(&args.asr, args.model.as_deref(), &args.breeze)?;
     let ctx = asr_context(args.vocab.as_deref())?;
-    if engine.is_sensevoice() {
-        println!(
-            "note: SenseVoice outputs Simplified Chinese; the app converts it with zh_tw, this \
-             bench does not, so the simplified-output check is expected to fail for zh fixtures."
-        );
-    }
 
     // Warm-up so CUDA kernel loading and buffer allocation are not counted in the first fixture.
     let warm = engine.run(&AudioClip::new(vec![0.0; 16_000]), &ctx);
@@ -585,6 +579,26 @@ mod tests {
             "這個 meeting 我們 delay 一下，改到下禮拜。"
         ));
         assert!(!has_simplified("Hello world"));
+    }
+
+    #[test]
+    fn simplified_asr_output_is_scored_after_zh_tw() {
+        // SenseVoice-style Simplified output: the bench scores it the way the app shows it.
+        let out = EngineOutput {
+            transcript: v2c_core::asr::Transcript {
+                text: "这个 meeting 我们 delay 一下".into(),
+                lang: v2c_core::Lang::Mixed,
+            },
+            total_ms: 10,
+            summary: "asr 10 ms".into(),
+        }
+        .with_zh_tw();
+        assert!(!has_simplified(&out.transcript.text));
+        assert_eq!(
+            cer("這個 meeting 我們 delay 一下", &out.transcript.text),
+            0.0
+        );
+        assert!(out.summary.ends_with("zh_tw applied"));
     }
 
     #[test]

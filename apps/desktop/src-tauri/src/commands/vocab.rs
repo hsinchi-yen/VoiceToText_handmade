@@ -83,23 +83,39 @@ fn validate(text: &str) -> Result<Vocab, VocabError> {
     }
 }
 
+/// Runs file I/O off the async runtime's worker threads.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> v2c_core::Result<T> + Send + 'static,
+    what: &'static str,
+) -> Result<T, VocabError> {
+    match tauri::async_runtime::spawn_blocking(f).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => {
+            warn!(error = %e, "vocabulary could not be {what}");
+            Err(VocabError::code("storage"))
+        }
+        Err(_) => {
+            warn!("vocabulary {what} task failed");
+            Err(VocabError::code("storage"))
+        }
+    }
+}
+
 /// The saved vocabulary (normalised: one entry per line, comments and duplicates removed).
 #[tauri::command]
-pub fn vocab_get(
+pub async fn vocab_get(
     window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<VocabView, VocabError> {
     check_window(&window)?;
-    let v = Vocab::load(&state.paths.vocab_file()).map_err(|e| {
-        warn!(error = %e, "vocabulary could not be read");
-        VocabError::code("storage")
-    })?;
+    let path = state.paths.vocab_file();
+    let v = blocking(move || Vocab::load(&path), "read").await?;
     Ok(view(&v))
 }
 
 /// Validates and saves editor text, then emits [`VOCAB_CHANGED_EVENT`].
 #[tauri::command]
-pub fn vocab_set(
+pub async fn vocab_set(
     app: AppHandle,
     window: WebviewWindow,
     state: State<'_, AppState>,
@@ -107,10 +123,9 @@ pub fn vocab_set(
 ) -> Result<VocabSaved, VocabError> {
     check_window(&window)?;
     let v = validate(&text)?;
-    v.save(&state.paths.vocab_file()).map_err(|e| {
-        warn!(error = %e, "vocabulary could not be saved");
-        VocabError::code("storage")
-    })?;
+    let path = state.paths.vocab_file();
+    let to_save = v.clone();
+    blocking(move || to_save.save(&path), "saved").await?;
     info!(count = v.len(), "vocabulary saved");
     let _ = app.emit(VOCAB_CHANGED_EVENT, v.len());
     Ok(VocabSaved { count: v.len() })

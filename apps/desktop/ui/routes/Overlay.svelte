@@ -1,8 +1,10 @@
 <script>
-  import { listen } from "@tauri-apps/api/event";
+  import { emit, listen } from "@tauri-apps/api/event";
 
   // Floating status pill (T1.3). Payloads come from src-tauri/src/overlay.rs (`v2c:overlay`):
   // states, a volume level, and fixed UI strings. Never any recognised text.
+  // Once the listener is registered we emit `v2c:overlay-ready`; Rust then re-sends whatever
+  // was emitted before we were listening (e.g. a startup error).
   const FADE_MS = 300;
 
   let view = $state({ kind: "hidden" });
@@ -17,6 +19,7 @@
     document.body.style.background = "transparent";
 
     let unlisten;
+    let disposed = false;
     listen("v2c:overlay", (e) => {
       clearTimeout(fadeTimer);
       fading = false;
@@ -25,9 +28,17 @@
       if (hideAfter != null) {
         fadeTimer = setTimeout(() => (fading = true), Math.max(0, hideAfter - FADE_MS));
       }
-    }).then((u) => (unlisten = u));
+    }).then((u) => {
+      if (disposed) {
+        u();
+        return;
+      }
+      unlisten = u;
+      emit("v2c:overlay-ready").catch(() => {});
+    });
 
     return () => {
+      disposed = true;
       unlisten?.();
       clearTimeout(fadeTimer);
       [root.style.background, document.body.style.background] = prev;
@@ -51,7 +62,13 @@
       {#if view.kind === "recording"}
         <span class="dot"></span>
         <span class="label">{label}</span>
+        {#if view.hands_free}
+          <span class="badge">免持</span>
+        {/if}
         <span class="meter"><span style:width={`${(view.level ?? 0) * 100}%`}></span></span>
+        {#if view.hands_free}
+          <span class="hint">按右 Ctrl 結束</span>
+        {/if}
       {:else}
         {#if view.kind === "transcribing" || view.kind === "polishing"}
           <span class="spinner"></span>
@@ -124,6 +141,20 @@
     height: 100%;
     background: #3fb950;
     transition: width 50ms linear;
+  }
+  .badge {
+    flex: none;
+    padding: 1px 6px;
+    border-radius: 6px;
+    background: #1f6feb;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .hint {
+    flex: none;
+    color: rgba(240, 243, 246, 0.7);
+    font-size: 12px;
   }
   .spinner {
     flex: none;
