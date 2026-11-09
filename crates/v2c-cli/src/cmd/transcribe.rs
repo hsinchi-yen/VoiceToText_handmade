@@ -26,6 +26,9 @@ pub struct Args {
     /// Model for local providers: the GGML file for breeze, the model directory for sensevoice.
     #[arg(long)]
     pub model: Option<PathBuf>,
+    /// Vocabulary file (one entry per line) for the ASR initial prompt.
+    #[arg(long)]
+    pub vocab: Option<PathBuf>,
     #[command(flatten)]
     pub breeze: BreezeArgs,
 }
@@ -283,12 +286,34 @@ pub fn describe(out: &BreezeOutput) -> String {
     )
 }
 
+/// ASR context for `--vocab <file>`: the vocabulary and `prompts::asr_initial_prompt` built
+/// from it (Whisper limit). Without a file: the default context (providers use the base prompt).
+/// Only the entry count is printed, never the entries.
+pub fn asr_context(vocab: Option<&Path>) -> anyhow::Result<AsrContext> {
+    let Some(path) = vocab else {
+        return Ok(AsrContext::default());
+    };
+    let words = v2c_core::vocab::Vocab::load(path)
+        .with_context(|| format!("reading vocabulary {}", path.display()))?
+        .words;
+    eprintln!(
+        "vocabulary: {} entries from {}",
+        words.len(),
+        path.display()
+    );
+    let prompt =
+        v2c_core::prompts::asr_initial_prompt(&words, v2c_core::prompts::WHISPER_PROMPT_MAX_CHARS);
+    Ok(AsrContext {
+        vocabulary: words,
+        prompt,
+    })
+}
+
 pub fn run(args: Args) -> anyhow::Result<()> {
     let clip = load_wav(&args.wav)?;
     let engine = load_engine(&args.asr, args.model.as_deref(), &args.breeze)?;
-    let out = engine
-        .run(&clip, &AsrContext::default())
-        .context("transcribing")?;
+    let ctx = asr_context(args.vocab.as_deref())?;
+    let out = engine.run(&clip, &ctx).context("transcribing")?;
     eprintln!("audio {} ms, {}", clip.duration_ms(), out.summary);
     println!("{}", out.transcript.text);
     Ok(())
@@ -297,6 +322,17 @@ pub fn run(args: Args) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asr_context_from_vocab_file() {
+        assert!(asr_context(None).unwrap().prompt.is_empty());
+        let path = std::env::temp_dir().join(format!("v2c-cli-vocab-{}.txt", std::process::id()));
+        std::fs::write(&path, "台積電\n# comment\nLM Studio\n").unwrap();
+        let ctx = asr_context(Some(&path)).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(ctx.vocabulary, ["台積電", "LM Studio"]);
+        assert!(ctx.prompt.starts_with("詞彙：台積電、LM Studio。"));
+    }
 
     #[test]
     fn output_is_converted_with_zh_tw() {

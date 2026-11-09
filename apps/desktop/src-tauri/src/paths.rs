@@ -48,6 +48,11 @@ impl Paths {
         self.data_dir.join("config.toml")
     }
 
+    /// Personal vocabulary, one entry per line (T1.8).
+    pub fn vocab_file(&self) -> PathBuf {
+        self.data_dir.join("vocab.txt")
+    }
+
     pub fn logs_dir(&self) -> PathBuf {
         self.data_dir.join("logs")
     }
@@ -154,6 +159,7 @@ mod tests {
         };
         assert_eq!(p.config_file(), PathBuf::from("X").join("config.toml"));
         assert_eq!(p.logs_dir(), PathBuf::from("X").join("logs"));
+        assert_eq!(p.vocab_file(), PathBuf::from("X").join("vocab.txt"));
         assert_eq!(p.models_dir(), PathBuf::from("L").join("models"));
         assert!(p
             .model_search_dirs()

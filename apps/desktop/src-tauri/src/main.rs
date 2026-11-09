@@ -76,6 +76,8 @@ fn main() {
             commands::history::history_reoutput,
             commands::history::history_delete,
             commands::history::history_clear,
+            commands::vocab::vocab_get,
+            commands::vocab::vocab_set,
         ])
         .on_window_event(|window, event| {
             // A background tool: closing the main window hides it; quit from the tray.
