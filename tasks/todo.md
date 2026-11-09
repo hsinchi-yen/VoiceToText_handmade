@@ -57,6 +57,8 @@
   - [ ] 設定頁即時使用條（T1.11）
   - [ ] 🧑 實機讓路測試（見 human-checklist）
 - [ ] W6 T1.7b 「新增雲端服務」精靈＋`docs/cloud-setup.md`
+  - [x] 程式已合併（2026-11-09）：七步精靈、服務列表（測試／修改／移除）、金鑰只顯示末 4 碼、換主機不沿用舊金鑰、寫檔失敗還原金鑰、`docs/cloud-setup.md`
+  - [ ] 🧑 用真實金鑰照 `docs/cloud-setup.md` 走一遍（可選，見 human-checklist）
 - [ ] W6 T1.8 個人詞庫
   - [x] 程式已合併（2026-11-09）：`Vocab` 檔案、ASR initial prompt（詞彙在前、基本句在後、72 字上限）、潤飾／翻譯 1000 字上限與清理、詞庫頁、CLI `--vocab`
   - [x] pipeline 讀入詞庫、監聽 `v2c:vocab-changed`（整合，2026-11-09 合併）
