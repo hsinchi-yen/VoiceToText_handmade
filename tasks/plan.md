@@ -213,7 +213,8 @@ breeze_quant = "q5_0"         # q5_0 | q8_0（q8 較準、多約 0.6 GB）
 
 - 模型名稱全部放設定檔，不寫死。
 - 逾時：ASR 5 秒、LLM 3 秒；失敗時浮動標籤顯示錯誤，紀錄中保留 ASR 原文以便重送。
-- 金鑰：`keyring` crate（Windows 認證管理員）；設定檔只存 provider 名稱。
+- 金鑰：`v2c-core` 定義 `SecretStore` trait，`keyring` feature 只依賴與 OS 無關的 `keyring-core`；桌面 App 啟動時以 `windows-native-keyring-store` 安裝 Windows 認證管理員作為預設 store（T1.7 查證：`keyring` 4.x 建議應用程式改用 `keyring-core`）；Android 另接 Keystore。設定檔只存 provider 名稱。
+- 雲端 HTTP client 一律不跟隨轉址（避免 `x-api-key` 等自訂金鑰標頭被帶到其他主機）；官方服務的 base_url 必須是 https（loopback 除外）。
 
 ### 6.1 預設模型（地端優先）
 
