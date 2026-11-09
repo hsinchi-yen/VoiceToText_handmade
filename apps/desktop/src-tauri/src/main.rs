@@ -205,9 +205,17 @@ fn start_background(app: &tauri::AppHandle, config_error: Option<&'static str>) 
             match app_state::read_config(&state.paths.config_file()) {
                 Ok(cfg) => state.engine.reload(cfg),
                 Err(code) => {
-                    let _ = state.status.send(StatusEvent::Error { code });
+                    warn!(code, "config reload failed; keeping the running config");
+                    let _ = state.status.send(StatusEvent::Error {
+                        code: "config_invalid_not_saved",
+                    });
                 }
             }
+        });
+        // Vocabulary saved on the vocabulary page.
+        let handle = app.clone();
+        app.listen_any(commands::vocab::VOCAB_CHANGED_EVENT, move |_| {
+            handle.state::<AppState>().engine.reload_vocab();
         });
     }
 

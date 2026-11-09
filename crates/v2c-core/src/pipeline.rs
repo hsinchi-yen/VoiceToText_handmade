@@ -173,9 +173,10 @@ impl Pipeline {
         // 2. Speech recognition.
         let ctx = AsrContext {
             vocabulary: self.cfg.vocabulary.clone(),
-            // TODO(T1.8): build with `prompts::asr_initial_prompt`; providers fall back to
-            // `prompts::ASR_BASE_PROMPT` while this is empty.
-            prompt: String::new(),
+            prompt: prompts::asr_initial_prompt(
+                &self.cfg.vocabulary,
+                prompts::WHISPER_PROMPT_MAX_CHARS,
+            ),
         };
         let t = Instant::now();
         let transcript = self.asr.transcribe(&clip, &ctx).await?;
@@ -334,6 +335,7 @@ mod tests {
         text: &'static str,
         lang: Lang,
         calls: AtomicUsize,
+        last_ctx: std::sync::Mutex<Option<AsrContext>>,
     }
 
     impl FakeAsr {
@@ -342,6 +344,7 @@ mod tests {
                 text,
                 lang,
                 calls: AtomicUsize::new(0),
+                last_ctx: std::sync::Mutex::new(None),
             })
         }
     }
@@ -351,8 +354,9 @@ mod tests {
         fn name(&self) -> &str {
             "fake-asr"
         }
-        async fn transcribe(&self, _clip: &AudioClip, _ctx: &AsrContext) -> Result<Transcript> {
+        async fn transcribe(&self, _clip: &AudioClip, ctx: &AsrContext) -> Result<Transcript> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            *self.last_ctx.lock().unwrap() = Some(ctx.clone());
             Ok(Transcript {
                 text: self.text.into(),
                 lang: self.lang,
@@ -647,6 +651,22 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, V2cError::Provider { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn asr_context_carries_vocabulary_and_initial_prompt() {
+        let asr = FakeAsr::new("你好", Lang::Zh);
+        let mut c = cfg(false);
+        c.vocabulary = vec!["Tauri".into(), "聯發科".into()];
+        let p = Pipeline::new(asr.clone(), None, c.clone());
+        p.run(tone(1000, 0.3), Mode::Dictate).await.unwrap();
+        let ctx = asr.last_ctx.lock().unwrap().clone().unwrap();
+        assert_eq!(ctx.vocabulary, c.vocabulary);
+        assert_eq!(
+            ctx.prompt,
+            prompts::asr_initial_prompt(&c.vocabulary, prompts::WHISPER_PROMPT_MAX_CHARS)
+        );
+        assert!(ctx.prompt.contains("Tauri"), "{}", ctx.prompt);
     }
 
     #[test]

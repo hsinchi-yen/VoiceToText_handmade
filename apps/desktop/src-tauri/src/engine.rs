@@ -28,6 +28,7 @@ use v2c_core::llm::LlmProvider;
 use v2c_core::pipeline::Pipeline;
 use v2c_core::route::{CloudHttp, Purpose, Target};
 use v2c_core::secrets::SecretStore;
+use v2c_core::vocab::Vocab;
 use v2c_core::Mode;
 
 use crate::app_state::pipeline_config;
@@ -59,7 +60,25 @@ pub struct Engine {
     busy: Arc<AtomicUsize>,
     last_use: Mutex<Instant>,
     breeze_failed_at: Mutex<Option<Instant>>,
+    /// Personal vocabulary (`vocab.txt`), for the ASR prompt and the LLM prompts.
+    vocabulary: RwLock<Arc<Vec<String>>>,
+    sensevoice_loading: AtomicBool,
     stop: AtomicBool,
+}
+
+/// Reads `vocab.txt`; a missing file is empty, a broken one is logged and treated as empty.
+fn load_vocab(paths: &Paths) -> Vec<String> {
+    match Vocab::load(&paths.vocab_file()) {
+        Ok(v) => {
+            info!(count = v.len(), "vocabulary loaded");
+            v.words().to_vec()
+        }
+        Err(e) => {
+            // The error carries the path only, never entries.
+            warn!(error = %e, "vocabulary could not be read; using none");
+            Vec::new()
+        }
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -83,6 +102,7 @@ impl Engine {
         let providers = Providers::build(&config, secrets.as_ref(), http.as_ref());
         let config = Arc::new(config);
         let (config_tx, _) = watch::channel(Arc::clone(&config));
+        let vocabulary = load_vocab(&paths);
         Arc::new(Self {
             paths,
             config: RwLock::new(config),
@@ -100,6 +120,8 @@ impl Engine {
             busy: Arc::new(AtomicUsize::new(0)),
             last_use: Mutex::new(Instant::now()),
             breeze_failed_at: Mutex::new(None),
+            vocabulary: RwLock::new(Arc::new(vocabulary)),
+            sensevoice_loading: AtomicBool::new(false),
             stop: AtomicBool::new(false),
         })
     }
@@ -110,6 +132,16 @@ impl Engine {
 
     pub fn config_watch(&self) -> watch::Receiver<Arc<Config>> {
         self.config_tx.subscribe()
+    }
+
+    /// Re-reads `vocab.txt` (after the vocabulary page saved it, or a config reload).
+    pub fn reload_vocab(&self) {
+        let v = load_vocab(&self.paths);
+        *self.vocabulary.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(v);
+    }
+
+    fn vocabulary(&self) -> Arc<Vec<String>> {
+        Arc::clone(&self.vocabulary.read().unwrap_or_else(|p| p.into_inner()))
     }
 
     fn providers(&self) -> Arc<Providers> {
@@ -210,6 +242,14 @@ impl Engine {
         let before = self.monitor.snapshot();
         let result = local_asr::load_breeze(&cfg, &model);
         let after = self.monitor.snapshot();
+        if result.is_ok() && !quant_still_current(&cfg, &self.config()) {
+            // The config switched the model file while loading: this one is stale. The guard
+            // loads the right one on its next poll.
+            info!(why, "Breeze quantisation changed while loading; discarding");
+            drop(result);
+            self.local.end_breeze_load(None);
+            return false;
+        }
         match result {
             Ok(b) => {
                 let mut guard = lock(&self.guard);
@@ -445,11 +485,20 @@ impl Engine {
                 }
             }
         }
-        let cap_ms = match llm_plan.target {
-            Target::Cloud { .. } if llm_sel.primary.is_some() && !llm_sel.fell_back_upfront => {
-                p.cloud_llm_timeout_ms
-            }
-            _ => providers::LOCAL_LLM_TIMEOUT.as_millis() as u64,
+        // Polish budget: local -> `polish.timeout_ms` (1 s), scaled with length up to the LM
+        // Studio timeout. Cloud -> the cloud LLM timeout (`timeouts.llm_cloud_ms`): a network
+        // round trip does not fit in the local 1 s budget, and the provider's own timeout
+        // bounds it anyway.
+        let cloud_llm = matches!(llm_plan.target, Target::Cloud { .. })
+            && llm_sel.primary.is_some()
+            && !llm_sel.fell_back_upfront;
+        let mut pcfg = pipeline_config(&cfg);
+        pcfg.vocabulary = self.vocabulary().as_ref().clone();
+        let cap_ms = if cloud_llm {
+            pcfg.polish_timeout_ms = p.cloud_llm_timeout_ms;
+            p.cloud_llm_timeout_ms
+        } else {
+            providers::LOCAL_LLM_TIMEOUT.as_millis() as u64
         };
 
         // ASR.
@@ -476,8 +525,7 @@ impl Engine {
             llm = llm.as_ref().map(|l| l.name()).unwrap_or("-"),
             "providers for utterance"
         );
-        let pipeline =
-            Pipeline::new(asr, llm, pipeline_config(&cfg)).with_polish_timeout_cap_ms(cap_ms);
+        let pipeline = Pipeline::new(asr, llm, pcfg).with_polish_timeout_cap_ms(cap_ms);
         Ok(Prepared {
             pipeline,
             cloud_fell_back: fell_back,
@@ -508,23 +556,38 @@ impl Engine {
         if diff.breeze_model && self.local.unload_breeze() {
             info!("Breeze unloaded: the model file changed");
         }
+        self.reload_vocab();
         if !self.local.sensevoice_loaded() && self.local.startup() != Startup::Loading {
             if let Some(dir) = local_asr::sensevoice_model(&self.paths) {
-                let me = Arc::clone(self);
-                let _ = std::thread::Builder::new()
-                    .name("v2c-sv-load".into())
-                    .spawn(move || {
-                        if let Ok(sv) = local_asr::load_sensevoice(&dir) {
-                            me.local.set_sensevoice(sv);
-                        }
-                    });
+                if !self.sensevoice_loading.swap(true, Ordering::SeqCst) {
+                    let me = Arc::clone(self);
+                    let spawned = std::thread::Builder::new()
+                        .name("v2c-sv-load".into())
+                        .spawn(move || {
+                            if let Ok(sv) = local_asr::load_sensevoice(&dir) {
+                                me.local.set_sensevoice(sv);
+                            }
+                            me.sensevoice_loading.store(false, Ordering::SeqCst);
+                        });
+                    if spawned.is_err() {
+                        self.sensevoice_loading.store(false, Ordering::SeqCst);
+                    }
+                }
             }
         }
         if diff.audio {
-            warn!("audio settings change takes effect after restarting v2c");
+            warn!("audio settings change: restart required");
+        }
+        if diff.history {
+            warn!("history settings change: restart required");
         }
         info!(?diff, "config reloaded");
     }
+}
+
+/// The Breeze model file chosen by `started` is still the one `now` wants.
+fn quant_still_current(started: &Config, now: &Config) -> bool {
+    started.local.breeze_quant == now.local.breeze_quant
 }
 
 /// Error code after startup, or `None` when an engine is ready.
@@ -571,7 +634,10 @@ pub struct ConfigDiff {
     pub breeze_model: bool,
     /// `[audio]`: needs a restart (the recorder keeps its stream).
     pub audio: bool,
-    /// Anything else (`[polish]`, `[[apps]]`, `[history]`): read per utterance.
+    /// `[history]`: needs a restart (the history store keeps the settings it opened with).
+    pub history: bool,
+    /// `[polish]`, `[[apps]]`: read from the live config per utterance (and by history
+    /// re-output).
     pub other: bool,
 }
 
@@ -588,7 +654,8 @@ impl ConfigDiff {
             local_asr: a.local.asr != b.local.asr || a.gpu != b.gpu,
             breeze_model: a.local.breeze_quant != b.local.breeze_quant,
             audio: a.audio != b.audio,
-            other: a.polish != b.polish || a.apps != b.apps || a.history != b.history,
+            history: a.history != b.history,
+            other: a.polish != b.polish || a.apps != b.apps,
         }
     }
 
@@ -666,6 +733,21 @@ mod tests {
         let mut b = a.clone();
         b.audio.preroll_ms = 100;
         assert!(ConfigDiff::between(&a, &b).audio);
+        let mut b = a.clone();
+        b.history.retention_days = 3;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.history && !d.other);
+    }
+
+    #[test]
+    fn breeze_loaded_for_an_old_quant_is_stale() {
+        let a = Config::with_defaults();
+        let mut b = a.clone();
+        assert!(quant_still_current(&a, &b));
+        b.polish.enabled = false;
+        assert!(quant_still_current(&a, &b));
+        b.local.breeze_quant = BreezeQuant::Q8_0;
+        assert!(!quant_still_current(&a, &b));
     }
 
     #[test]
@@ -711,6 +793,33 @@ mod tests {
         );
         // Dictate: no engine.
         assert_eq!(e.prepare(Mode::Dictate).await.err(), Some("model_missing"));
+    }
+
+    #[tokio::test]
+    async fn vocabulary_reaches_the_pipeline_and_reloads() {
+        let dir = std::env::temp_dir().join(format!("v2c-engine-vocab-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            local_data_dir: dir.clone(),
+        };
+        std::fs::write(paths.vocab_file(), "Tauri\n聯發科\n").unwrap();
+        let (status, _) = broadcast::channel(16);
+        let e = Engine::new(
+            paths.clone(),
+            Config::with_defaults(),
+            status,
+            Arc::new(MemorySecretStore::new()),
+        );
+        assert_eq!(
+            *e.vocabulary(),
+            vec!["Tauri".to_string(), "聯發科".to_string()]
+        );
+        std::fs::write(paths.vocab_file(), "Breeze\n").unwrap();
+        e.reload_vocab();
+        assert_eq!(*e.vocabulary(), vec!["Breeze".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

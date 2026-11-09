@@ -924,9 +924,9 @@ mod tests {
         let mut cfg = Config::with_defaults();
         cfg.hotkey.hold_threshold_ms = 2_000;
         h.config.send(Arc::new(cfg)).unwrap();
-        // Let the controller see the change before the next press.
+        // The controller re-reads the config at the top of its loop, i.e. after handling this
+        // tick and before the next event (events are handled in order), so no sleep is needed.
         h.events.send(Event::Tick { at_ms: 10 }).unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         // A 1 s hold is now a tap: nothing is processed; the tap expires and cancels.
         push_to_talk(&h.events);
         ticks(&h.events, 2_050, 3_000);

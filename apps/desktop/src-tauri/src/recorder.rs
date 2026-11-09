@@ -51,6 +51,9 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(2);
 /// While recording, no audio callback for this long means the device stopped delivering
 /// (e.g. a USB/Bluetooth headset went away without an error): report `mic_lost` and reopen.
 const STALL_TIMEOUT: Duration = Duration::from_secs(1);
+/// A freshly opened stream gets this long for its first audio callback (Bluetooth headsets
+/// can take seconds to switch profile) before it counts as stalled.
+const FIRST_DATA_GRACE: Duration = Duration::from_secs(4);
 /// How often the manager wakes up to check for a stall while a stream is open.
 const STALL_POLL: Duration = Duration::from_millis(250);
 const FINISH_TIMEOUT: Duration = Duration::from_millis(200);
@@ -187,12 +190,20 @@ struct Active {
     resampler: To16k,
     /// Last audio callback (or the open time).
     last_data: Instant,
+    /// At least one audio callback arrived.
+    got_data: bool,
 }
 
 /// The stream is open and a clip is being recorded, but no audio arrived for
-/// [`STALL_TIMEOUT`].
-fn stalled(recording: bool, last_data: Instant, now: Instant) -> bool {
-    recording && now.saturating_duration_since(last_data) > STALL_TIMEOUT
+/// [`STALL_TIMEOUT`] since the last callback, or for [`FIRST_DATA_GRACE`] since opening when
+/// no callback came yet.
+fn stalled(recording: bool, got_data: bool, last_data: Instant, now: Instant) -> bool {
+    let limit = if got_data {
+        STALL_TIMEOUT
+    } else {
+        FIRST_DATA_GRACE
+    };
+    recording && now.saturating_duration_since(last_data) > limit
 }
 
 struct Manager {
@@ -233,7 +244,7 @@ impl Manager {
 
             if let Some(a) = active.as_ref() {
                 let recording = self.lock().is_recording();
-                if stalled(recording, a.last_data, Instant::now()) {
+                if stalled(recording, a.got_data, a.last_data, Instant::now()) {
                     warn!("no audio from the microphone while recording; reopening");
                     active = None;
                     self.shared.set_level(0.0);
@@ -258,6 +269,7 @@ impl Manager {
                 }) => {
                     if let Some(a) = active.as_mut().filter(|a| a.generation == g) {
                         a.last_data = Instant::now();
+                        a.got_data = true;
                         let out = a.resampler.push(&samples);
                         if !out.is_empty() {
                             self.shared.set_level(rms(&out));
@@ -358,6 +370,7 @@ impl Manager {
             generation,
             resampler,
             last_data: Instant::now(),
+            got_data: false,
         })
     }
 }
@@ -637,13 +650,30 @@ mod tests {
     fn stall_only_counts_while_recording() {
         let t0 = Instant::now();
         let later = t0 + STALL_TIMEOUT + Duration::from_millis(1);
-        assert!(stalled(true, t0, later));
+        assert!(stalled(true, true, t0, later));
         assert!(
-            !stalled(false, t0, later),
+            !stalled(false, true, t0, later),
             "idle always-on stream is not watched"
         );
-        assert!(!stalled(true, t0, t0 + STALL_TIMEOUT));
-        assert!(!stalled(true, later, t0), "clock order is tolerated");
+        assert!(!stalled(true, true, t0, t0 + STALL_TIMEOUT));
+        assert!(!stalled(true, true, later, t0), "clock order is tolerated");
+    }
+
+    #[test]
+    fn first_callback_gets_a_longer_grace() {
+        let t0 = Instant::now();
+        let after_1s = t0 + STALL_TIMEOUT + Duration::from_millis(1);
+        assert!(
+            !stalled(true, false, t0, after_1s),
+            "slow device still starting"
+        );
+        assert!(!stalled(true, false, t0, t0 + FIRST_DATA_GRACE));
+        assert!(stalled(
+            true,
+            false,
+            t0,
+            t0 + FIRST_DATA_GRACE + Duration::from_millis(1)
+        ));
     }
 
     #[test]

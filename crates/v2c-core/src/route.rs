@@ -269,7 +269,7 @@ fn key_for(service: &CloudService, secrets: &dyn SecretStore) -> Result<Option<A
 
 /// Builds the ASR provider for a service, or `None` if the kind has no ASR or no model is
 /// set (compat endpoints have no default model).
-pub fn build_asr(
+pub(crate) fn build_asr(
     service: &CloudService,
     key: Option<ApiKey>,
     http: &CloudHttp,
@@ -304,11 +304,12 @@ pub fn build_asr(
 
 /// Builds Gemini / Claude LLM providers. OpenAI and OpenAI-compatible LLMs use T1.5's
 /// `OpenAiCompatLlm` and are built by the integration step, so they return `None` here.
-pub fn build_native_llm(
+pub(crate) fn build_native_llm(
     service: &CloudService,
     key: Option<ApiKey>,
     http: &CloudHttp,
     timeout: Duration,
+    stage: Stage,
 ) -> Result<Option<Box<dyn LlmProvider>>> {
     let base = effective_base_url(service)?;
     let Some(model) = model_for(&service.llm_model, suggested_models(service.kind).llm) else {
@@ -317,12 +318,16 @@ pub fn build_native_llm(
     let key = key.unwrap_or_else(|| ApiKey::new(""));
     let http = http.clone();
     let p: Box<dyn LlmProvider> = match service.kind {
-        CloudKind::Gemini => {
-            Box::new(GeminiLlm::new(http, base, key, model, timeout).with_name(&service.id))
-        }
-        CloudKind::Claude => {
-            Box::new(ClaudeLlm::new(http, base, key, model, timeout).with_name(&service.id))
-        }
+        CloudKind::Gemini => Box::new(
+            GeminiLlm::new(http, base, key, model, timeout)
+                .with_name(&service.id)
+                .with_stage(stage),
+        ),
+        CloudKind::Claude => Box::new(
+            ClaudeLlm::new(http, base, key, model, timeout)
+                .with_name(&service.id)
+                .with_stage(stage),
+        ),
         CloudKind::OpenAi | CloudKind::OpenAiCompat => return Ok(None),
     };
     Ok(Some(p))
@@ -370,7 +375,9 @@ pub fn build_cloud_llm(
             .with_stage(stage);
             Ok(Some(Box::new(llm)))
         }
-        CloudKind::Gemini | CloudKind::Claude => build_native_llm(service, key, http, timeout),
+        CloudKind::Gemini | CloudKind::Claude => {
+            build_native_llm(service, key, http, timeout, stage)
+        }
     }
 }
 
@@ -545,7 +552,7 @@ pub async fn test_connection_with_llm(
     let llm_provider: Option<&dyn LlmProvider> = match llm {
         Some(p) => Some(p),
         None => {
-            built = build_native_llm(service, key.clone(), http, opts.llm_timeout)?;
+            built = build_native_llm(service, key.clone(), http, opts.llm_timeout, Stage::Polish)?;
             built.as_deref()
         }
     };
@@ -1106,5 +1113,39 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(llm.complete("sys", "你好").await.unwrap(), "Hello.");
+    }
+
+    #[tokio::test]
+    async fn native_llm_errors_carry_the_requested_stage() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let http = cloud_http_client().unwrap();
+        for kind in [CloudKind::Gemini, CloudKind::Claude] {
+            let mut s = svc("n", kind);
+            s.base_url = Some(format!("{}/v1", server.uri()));
+            let llm = build_cloud_llm(
+                &s,
+                &secrets("n", "k"),
+                &http,
+                Duration::from_secs(2),
+                Stage::Translate,
+            )
+            .unwrap()
+            .unwrap();
+            let err = llm.complete("sys", "u").await.unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    V2cError::Provider {
+                        stage: Stage::Translate,
+                        ..
+                    }
+                ),
+                "{kind:?}: {err:?}"
+            );
+        }
     }
 }

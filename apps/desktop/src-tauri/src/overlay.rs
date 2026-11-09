@@ -179,7 +179,9 @@ pub fn error_message(code: &str) -> &'static str {
             "無法開啟麥克風"
         }
         "hotkey_failed" => "熱鍵安裝失敗",
-        "hands_free_limit" => "已達 5 分鐘上限，已自動結束",
+        "hands_free_limit" => "已達免持上限，已自動結束",
+        "cloud_not_configured" => "雲端服務未設定完成，請到雲端服務頁檢查",
+        "polish_timed_out" => "潤飾逾時，已改用基本整理",
         "gpu_yield_heavy_app" => "偵測到重度程式，暫時改用 CPU",
         "gpu_low_vram" => "顯示卡記憶體不足，暫時改用 CPU",
         "config_invalid" => "設定檔格式錯誤，已使用預設值",
@@ -692,7 +694,15 @@ mod tests {
         assert_eq!(error_message("something_new"), "發生錯誤");
         assert_eq!(
             error_message("hands_free_limit"),
-            "已達 5 分鐘上限，已自動結束"
+            "已達免持上限，已自動結束"
+        );
+        assert_eq!(
+            error_message("cloud_not_configured"),
+            "雲端服務未設定完成，請到雲端服務頁檢查"
+        );
+        assert_eq!(
+            error_message("polish_timed_out"),
+            "潤飾逾時，已改用基本整理"
         );
         assert_eq!(
             error_message("translate_unavailable"),
@@ -723,6 +733,8 @@ mod tests {
             "mic_start_failed",
             "mic_open_failed",
             "hands_free_limit",
+            "cloud_not_configured",
+            "polish_timed_out",
             "translate_unavailable",
             "gpu_yield_heavy_app",
             "gpu_low_vram",

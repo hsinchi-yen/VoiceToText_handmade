@@ -335,9 +335,14 @@ impl LmHealth {
     }
 }
 
+/// Polish failed or timed out while an LLM was available (rule-based cleanup was used).
+pub const POLISH_TIMED_OUT: &str = "polish_timed_out";
+
 /// Status codes to show after a successful utterance, in order, without duplicates.
 /// `cloud_fell_back`: a cloud call failed (or could not be built) and local was used;
-/// `polish_offline`: polish ran without LM Studio (first time in this outage).
+/// `polish_offline`: polish ran without LM Studio (first time in this outage) ->
+/// `polish_fell_back`. A polish error / timeout while an LLM was available ->
+/// [`POLISH_TIMED_OUT`].
 pub fn notice_codes(
     warnings: &[Warning],
     cloud_fell_back: bool,
@@ -347,8 +352,10 @@ pub fn notice_codes(
     if cloud_fell_back || warnings.contains(&Warning::CloudFellBackToLocal) {
         out.push("cloud_fell_back");
     }
-    if polish_offline || warnings.contains(&Warning::PolishFellBack) {
+    if polish_offline {
         out.push("polish_fell_back");
+    } else if warnings.contains(&Warning::PolishFellBack) {
+        out.push(POLISH_TIMED_OUT);
     }
     out
 }
@@ -540,8 +547,9 @@ mod tests {
         assert!(notice_codes(&[], false, false).is_empty());
         assert_eq!(
             notice_codes(&[Warning::PolishFellBack], false, false),
-            vec!["polish_fell_back"]
+            vec![POLISH_TIMED_OUT]
         );
+        assert_eq!(notice_codes(&[], false, true), vec!["polish_fell_back"]);
         assert_eq!(
             notice_codes(&[Warning::PolishFellBack], true, true),
             vec!["cloud_fell_back", "polish_fell_back"]
