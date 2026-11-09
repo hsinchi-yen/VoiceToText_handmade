@@ -29,9 +29,18 @@
   - [x] 程式已合併（2026-11-09）：原生 Win32 備份／還原所有 HGLOBAL 格式、不進 Win+V 歷史、`run_with_fallback`、VM 類 App 預設走貼上
   - [ ] 🧑 實機剪貼簿測試（見 human-checklist）
 - [ ] W3 T1.3 浮動標籤＋系統列
+  - [x] 程式已合併（2026-11-09）：不搶焦點、滑鼠穿透的浮動標籤（直接以 Win32 顯示）、系統列選單、主視窗關閉改為隱藏
+  - [ ] 整合任務：overlay 載入後重送最後狀態、設定即時生效、結束時收尾
+  - [ ] 🧑 實機確認（見 human-checklist；若標籤完全看不見，回報給 agent：WS_EX_LAYERED 問題）
 - [ ] W3 T1.5 LM Studio 輕度潤飾（含潤飾 ≤ 2.5 秒）
+  - [x] 程式已合併（2026-11-09）：`OpenAiCompatLlm`、潤飾／翻譯提示詞（逐字稿包標籤防注入）、規則式去贅字；pipeline 已接上
+  - [ ] 整合任務：桌面 App 建立 LLM、LM Studio 存活快取（沒開時不等逾時）、長篇口述的逾時
+  - [ ] 🧑 LM Studio 實測（見 human-checklist）
 - [ ] W4 T1.4 雙擊免持模式
 - [ ] W4 T1.7 雲端 providers（≤ 3 秒，失敗退回地端）
+  - [x] 程式已合併（2026-11-09）：OpenAI／Gemini／相容端點 ASR、Gemini／Claude LLM、`SecretStore`（keyring-core）、`route::resolve`、`test_connection`、不轉址的 `CloudHttp`
+  - [ ] 整合任務：依 route 建立 provider、雲端失敗退回地端、安裝 Windows 金鑰庫 store
+  - [ ] 🧑 用自己的金鑰實測至少一家（可選）
 - [ ] W4 T1.10 SenseVoice-Small CPU 備援
   - [x] 程式已合併（2026-11-09）：`SenseVoiceAsr`（`sensevoice` feature，sherpa-onnx 2.0.1 shared）、`select::pick`；CPU 約 0.4 秒／10 秒音檔（TTS 測試）
   - [ ] 待 T1.1 合併後：bench 對 SenseVoice 輸出先過 `zh_tw` 再算 CER
