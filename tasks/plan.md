@@ -94,7 +94,7 @@ impl Pipeline {
 - 翻譯：中文（可能夾雜英文）→ 自然流暢的英文；專有名詞與詞庫保留；只輸出譯文。
 - ASR initial prompt：`以下是台灣繁體中文與 English 夾雜的口語句子。` + 詞庫詞彙（截斷到模型上限）。
 
-**依賴（暫定，【實作前確認】）**：`tokio`、`reqwest`（`rustls-tls`，避免 Android 上的 OpenSSL）、`serde`/`toml`、`rusqlite`（`bundled`）、`zhconv`（純 Rust 的簡繁轉換；不行再改 OpenCC 綁定）、`hound`（WAV）、`rubato`（重取樣）、`async-trait`、`thiserror`、測試用 `wiremock`。
+**依賴（暫定，【實作前確認】）**：`tokio`、`reqwest`（`rustls-tls`，避免 Android 上的 OpenSSL）、`serde`/`toml`、`rusqlite`（`bundled`）、`ferrous-opencc`（純 Rust 實作的 OpenCC，設定 `s2twp`，含台灣用語：软件→軟體、视频→影片、内存→記憶體；T1.1 已確認。`zhconv` 0.4 的 zh-TW 不轉 视频／内存／信息／服务器 等常用詞，故不採用；「台」保留原字不轉「臺」）、`hound`（WAV）、`rubato`（重取樣）、`async-trait`、`thiserror`、測試用 `wiremock`。
 
 ---
 
