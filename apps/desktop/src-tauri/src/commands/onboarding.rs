@@ -95,10 +95,34 @@ pub async fn onboarding_status(
     .map_err(|_| "internal_error")
 }
 
-/// Restarts v2c so the engine loads the models that were just installed.
+/// Marker file (data folder) that makes the next start show the main window even when it was
+/// launched with `--autostart` (`app.restart()` keeps the original arguments).
+const SHOW_FLAG_FILE: &str = "show-main-on-start";
+
+pub fn set_show_flag(paths: &crate::paths::Paths) -> std::io::Result<()> {
+    std::fs::create_dir_all(&paths.data_dir)?;
+    std::fs::write(paths.data_dir.join(SHOW_FLAG_FILE), b"1")
+}
+
+/// Whether the marker was set; removes it (one start only).
+pub fn take_show_flag(paths: &crate::paths::Paths) -> bool {
+    std::fs::remove_file(paths.data_dir.join(SHOW_FLAG_FILE)).is_ok()
+}
+
+/// Show the main window at startup: a normal launch, the restart after onboarding, or no local
+/// speech model yet (onboarding must appear even when started by the autostart entry).
+pub fn show_main_at_start(autostart: bool, resumed: bool, has_model: bool) -> bool {
+    !autostart || resumed || !has_model
+}
+
+/// Restarts v2c so the engine loads the models that were just installed; the main window
+/// comes back visible (see [`show_main_at_start`]).
 #[tauri::command]
 pub fn onboarding_restart(app: AppHandle, window: WebviewWindow) -> Result<(), &'static str> {
     check_caller(window.label())?;
+    if let Err(e) = set_show_flag(&app.state::<AppState>().paths) {
+        warn!(error = %e, "could not write the show-on-start marker");
+    }
     info!("restart after onboarding");
     app.restart()
 }
@@ -279,6 +303,32 @@ mod tests {
         assert_eq!(recommend(true, false, 6144), Recommendation::SenseVoice);
         // A 2 GB card has no room next to the display.
         assert_eq!(recommend(true, true, 2048), Recommendation::SenseVoice);
+    }
+
+    #[test]
+    fn main_window_visibility_at_start() {
+        assert!(show_main_at_start(false, false, true));
+        // Autostart with a model: stay in the tray.
+        assert!(!show_main_at_start(true, false, true));
+        // Restart after onboarding keeps `--autostart` but must show the window.
+        assert!(show_main_at_start(true, true, true));
+        // No model yet: onboarding has to appear.
+        assert!(show_main_at_start(true, false, false));
+    }
+
+    #[test]
+    fn show_flag_is_taken_once() {
+        let dir = std::env::temp_dir().join(format!("v2c-showflag-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let paths = crate::paths::Paths {
+            data_dir: dir.clone(),
+            local_data_dir: dir.clone(),
+        };
+        assert!(!take_show_flag(&paths));
+        set_show_flag(&paths).unwrap();
+        assert!(take_show_flag(&paths));
+        assert!(!take_show_flag(&paths));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

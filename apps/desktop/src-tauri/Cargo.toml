@@ -48,6 +48,8 @@ tar.workspace = true
 # Start with Windows (HKCU Run key) and the Breeze import file picker; both used from Rust only.
 tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
+# One running instance: a second launch focuses the first one (no second keyboard hook).
+tauri-plugin-single-instance = "2"
 
 # Windows Credential Manager as the keyring-core default store.
 [target.'cfg(windows)'.dependencies.windows-native-keyring-store]

@@ -107,7 +107,9 @@ impl Manifest {
                 .is_none_or(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()));
             let url_ok = reqwest::Url::parse(&e.url).is_ok_and(|u| u.scheme() == "https");
             let quant_ok = (e.kind == ModelKind::BreezeGgml) == e.quant.is_some();
-            if !id_ok || !sha_ok || !url_ok || !quant_ok || !seen.insert(e.id.clone()) {
+            // A hosted file needs its size (progress, resume, and a check before hashing).
+            let size_ok = e.placeholder || e.size.is_some_and(|s| s > 0);
+            if !id_ok || !sha_ok || !url_ok || !quant_ok || !size_ok || !seen.insert(e.id.clone()) {
                 return Err("manifest_invalid");
             }
         }
@@ -494,7 +496,9 @@ pub fn import_breeze_file(
     if same_file(src, &dest) {
         return Ok(quant);
     }
-    let part = dest.with_extension("bin.part");
+    // Not the download's <file>.bin.part: an import and a download of the same quant never
+    // write the same temporary file.
+    let part = dest.with_extension("bin.import.part");
     let result = (|| {
         let total = std::fs::metadata(src).map_err(|_| "storage")?.len();
         let mut from = std::fs::File::open(src).map_err(|_| "storage")?;
@@ -876,7 +880,11 @@ mod tests {
 
     #[test]
     fn manifest_validation() {
-        let ok = r#"{"version":1,"models":[{"id":"a","kind":"sensevoice_archive","url":"https://x.test/a","sha256":null}]}"#;
+        let ok = r#"{"version":1,"models":[{"id":"a","kind":"sensevoice_archive","url":"https://x.test/a","sha256":null,"size":5}]}"#;
+        assert!(Manifest::parse(ok).is_ok());
+        // Placeholders may omit the size.
+        let ph = r#"{"version":1,"models":[{"id":"a","kind":"sensevoice_archive","url":"https://x.test/a","placeholder":true}]}"#;
+        assert!(Manifest::parse(ph).is_ok());
         assert!(Manifest::parse(ok).is_ok());
         for bad in [
             "not json",
@@ -889,6 +897,9 @@ mod tests {
             r#"{"version":1,"models":[{"id":"a","kind":"breeze_ggml","url":"https://x.test/a"}]}"#,
             // duplicate id
             r#"{"version":1,"models":[{"id":"a","kind":"sensevoice_archive","url":"https://x.test/a"},{"id":"a","kind":"sensevoice_archive","url":"https://x.test/b"}]}"#,
+            // hosted entry without a size
+            r#"{"version":1,"models":[{"id":"a","kind":"sensevoice_archive","url":"https://x.test/a","sha256":null}]}"#,
+            r#"{"version":1,"models":[{"id":"a","kind":"sensevoice_archive","url":"https://x.test/a","size":0}]}"#,
             // id with a path separator
             r#"{"version":1,"models":[{"id":"../a","kind":"sensevoice_archive","url":"https://x.test/a"}]}"#,
         ] {
@@ -1213,13 +1224,45 @@ mod tests {
         assert_eq!(q, BreezeQuant::Q5_0);
         let dest = models.join(paths::breeze_model_file(q));
         assert_eq!(std::fs::read(&dest).unwrap(), data);
-        assert!(!dest.with_extension("bin.part").exists());
+        assert!(!dest.with_extension("bin.import.part").exists());
         // Importing the installed file again is a no-op.
         assert_eq!(import_breeze_file(&dest, &models, &noop), Ok(q));
 
         let junk = dir.join("junk.bin");
         std::fs::write(&junk, b"not a model at all, definitely not ggml data....").unwrap();
         assert_eq!(import_breeze_file(&junk, &models, &noop), Err("not_ggml"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An import and a download of the same quant use different temporary files, so a running
+    /// download's partial file survives an import.
+    #[test]
+    fn import_does_not_touch_a_download_part_file() {
+        let dir = temp_dir("import-part");
+        let models = dir.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        let entry = ModelEntry {
+            id: "breeze-q5_0".into(),
+            kind: ModelKind::BreezeGgml,
+            quant: Some(BreezeQuant::Q5_0),
+            url: "https://hf.test/q5.bin".into(),
+            sha256: None,
+            size: Some(1),
+            placeholder: false,
+        };
+        let download_part = part_path(&models, &entry);
+        std::fs::write(&download_part, b"partial download").unwrap();
+        let src = dir.join("q5.bin");
+        let mut data = ggml_header(2008);
+        data.extend([1u8; 64]);
+        std::fs::write(&src, &data).unwrap();
+        assert_eq!(
+            import_breeze_file(&src, &models, &noop),
+            Ok(BreezeQuant::Q5_0)
+        );
+        assert_eq!(std::fs::read(&download_part).unwrap(), b"partial download");
+        let dest = models.join(paths::breeze_model_file(BreezeQuant::Q5_0));
+        assert_ne!(dest.with_extension("bin.import.part"), download_part);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

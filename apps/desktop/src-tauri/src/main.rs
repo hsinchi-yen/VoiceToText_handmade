@@ -68,6 +68,17 @@ fn main() {
     };
 
     let app = tauri::Builder::default()
+        // Must be the first plugin: a second launch (e.g. from the Start menu while the autostart
+        // instance runs hidden) only shows the running instance's window and exits, so there is
+        // never a second keyboard hook typing everything twice.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            info!("second launch: showing the running instance");
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .manage(state)
         // Start with Windows (HKCU Run key); the entry passes AUTOSTART_ARG to start hidden.
         .plugin(tauri_plugin_autostart::init(
@@ -157,17 +168,21 @@ fn main() {
 }
 
 /// The main window is created hidden (`tauri.conf.json`); it is shown unless v2c was started by
-/// the 開機自動啟動 entry, which runs it in the background (tray only).
+/// the 開機自動啟動 entry, which runs it in the background (tray only). It is shown anyway
+/// after the onboarding restart and while no local speech model is installed (onboarding).
 fn show_main_unless_autostart(app: &tauri::AppHandle) {
     let autostart = std::env::args().any(|a| a == commands::settings::AUTOSTART_ARG);
-    info!(autostart, "main window");
-    if !autostart {
+    let paths = &app.state::<AppState>().paths;
+    let resumed = commands::onboarding::take_show_flag(paths);
+    let has_model = commands::models::any_asr_model(paths);
+    let show = commands::onboarding::show_main_at_start(autostart, resumed, has_model);
+    info!(autostart, resumed, has_model, show, "main window");
+    if show {
         if let Some(w) = app.get_webview_window("main") {
             let _ = w.show();
         }
     }
 }
-
 /// Windows Credential Manager as the keyring-core default store, for cloud API keys.
 fn install_keyring() -> Arc<dyn SecretStore> {
     #[cfg(windows)]
