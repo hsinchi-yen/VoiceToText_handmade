@@ -1,7 +1,8 @@
 //! Chooses the local ASR engine (Breeze on GPU or SenseVoice on CPU) from config and GPU state.
 //!
 //! Pure logic, no I/O: the caller measures the GPU and fills [`GpuInfo`] (T1.10b reads it from
-//! NVML). Rules (`tasks/plan.md` sections 5 and 5.1):
+//! NVML via [`crate::gpu_monitor`]). Runtime unload / yield decisions live in
+//! [`crate::gpu_guard`]. Rules (`tasks/plan.md` sections 5 and 5.1):
 //!
 //! 1. `[local] asr = "sense_voice"` -> SenseVoice.
 //! 2. GPU disallowed (`[gpu] enabled = false` or `profile = "cpu_only"`) -> SenseVoice, even when
@@ -39,8 +40,8 @@ pub struct GpuInfo {
     /// The Breeze GGML file for the configured `breeze_quant` exists on disk.
     pub breeze_model_present: bool,
     /// VRAM Breeze needs once loaded, in MiB (weights + compute buffers) for the configured
-    /// quantisation. The caller estimates it (e.g. from the model file size plus the overhead
-    /// measured in T0.1); it is not a config value because it depends on the model file.
+    /// quantisation. Until T0.1 measures it, use [`crate::gpu_guard::breeze_vram_estimate_mb`];
+    /// it is not a config value because it depends on the model file.
     pub breeze_vram_mb: u64,
 }
 
@@ -70,6 +71,31 @@ pub struct Pick {
     pub reason: PickReason,
 }
 
+/// Rules 1-4: whether config and environment allow Breeze at all, before looking at VRAM.
+/// `Err` carries the reason SenseVoice must be used. Shared with [`crate::gpu_guard`].
+pub fn gpu_eligibility(
+    config: &Config,
+    cuda_available: bool,
+    breeze_model_present: bool,
+) -> Result<(), PickReason> {
+    if config.local.asr == LocalAsr::SenseVoice {
+        return Err(PickReason::Configured);
+    }
+    if !config.gpu.enabled {
+        return Err(PickReason::GpuDisabled);
+    }
+    if config.gpu.profile == GpuProfile::CpuOnly {
+        return Err(PickReason::CpuOnlyProfile);
+    }
+    if !breeze_model_present {
+        return Err(PickReason::BreezeModelMissing);
+    }
+    if !cuda_available {
+        return Err(PickReason::NoCuda);
+    }
+    Ok(())
+}
+
 /// Local ASR engine for this config and GPU state. See the module docs for the rules.
 pub fn pick(config: &Config, gpu: &GpuInfo) -> LocalAsrKind {
     pick_with_reason(config, gpu).kind
@@ -83,20 +109,8 @@ pub fn pick_with_reason(config: &Config, gpu: &GpuInfo) -> Pick {
         reason,
     };
 
-    if config.local.asr == LocalAsr::SenseVoice {
-        return sv(PickReason::Configured);
-    }
-    if !config.gpu.enabled {
-        return sv(PickReason::GpuDisabled);
-    }
-    if config.gpu.profile == GpuProfile::CpuOnly {
-        return sv(PickReason::CpuOnlyProfile);
-    }
-    if !gpu.breeze_model_present {
-        return sv(PickReason::BreezeModelMissing);
-    }
-    if !gpu.cuda_available {
-        return sv(PickReason::NoCuda);
+    if let Err(reason) = gpu_eligibility(config, gpu.cuda_available, gpu.breeze_model_present) {
+        return sv(reason);
     }
     if config.local.asr == LocalAsr::Breeze {
         return Pick {
