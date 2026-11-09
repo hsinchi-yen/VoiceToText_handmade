@@ -299,9 +299,11 @@ pub struct AppRule {
     pub always_paste: bool,
 }
 
-/// Built-in rules: chat apps and browsers use Shift+Enter for line breaks.
+/// Built-in rules: chat apps and browsers use Shift+Enter for line breaks; VM consoles
+/// always paste because they forward scan codes and drop `KEYEVENTF_UNICODE` (VK_PACKET)
+/// input (pasting there needs the guest's clipboard sharing enabled).
 pub fn default_app_rules() -> Vec<AppRule> {
-    [
+    let chat = [
         "LINE.exe",
         "ms-teams.exe",
         "Teams.exe",
@@ -317,8 +319,20 @@ pub fn default_app_rules() -> Vec<AppRule> {
         exe: exe.into(),
         newline: NewlineKey::ShiftEnter,
         always_paste: false,
-    })
-    .collect()
+    });
+    let vm_consoles = [
+        "vmware.exe",       // VMware Workstation
+        "vmplayer.exe",     // VMware Workstation Player
+        "vmware-view.exe",  // VMware / Omnissa Horizon Client
+        "VirtualBoxVM.exe", // VirtualBox VM window
+    ]
+    .into_iter()
+    .map(|exe| AppRule {
+        exe: exe.into(),
+        newline: NewlineKey::Enter,
+        always_paste: true,
+    });
+    chat.chain(vm_consoles).collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -388,6 +402,29 @@ mod tests {
         assert_eq!(c.history.max_entries, 200);
         assert_eq!(c.timeouts.asr_cloud_ms, 5000);
         assert_eq!(c.timeouts.llm_cloud_ms, 3000);
+    }
+
+    #[test]
+    fn default_app_rules_paste_only_into_vm_consoles() {
+        let rules = default_app_rules();
+        let paste: Vec<&str> = rules
+            .iter()
+            .filter(|r| r.always_paste)
+            .map(|r| r.exe.as_str())
+            .collect();
+        assert_eq!(
+            paste,
+            [
+                "vmware.exe",
+                "vmplayer.exe",
+                "vmware-view.exe",
+                "VirtualBoxVM.exe"
+            ]
+        );
+        assert!(rules
+            .iter()
+            .filter(|r| r.exe == "LINE.exe" || r.exe == "chrome.exe")
+            .all(|r| !r.always_paste && r.newline == NewlineKey::ShiftEnter));
     }
 
     #[test]

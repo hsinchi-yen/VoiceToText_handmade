@@ -1,5 +1,13 @@
 //! `SendInput` + `KEYEVENTF_UNICODE` typing (T0.3) and clipboard paste with restore (T1.2).
 //! Wait for all modifier keys to be released before sending anything.
+//!
+//! - [`Action::Paste`]: save clipboard -> set text -> Ctrl+V -> wait [`PASTE_SETTLE`] ->
+//!   restore (see [`super::clipboard`] for which formats survive).
+//! - Elevated foreground window (UIPI blocks our input): the whole text is put on the
+//!   clipboard (best effort, not restored) and [`InjectError::Elevated`] is returned, so the
+//!   UI can say "copied to the clipboard, paste it yourself" (tasks/plan.md section 4.5).
+//! - Typing that the OS only partly accepts returns [`InjectError::Partial`];
+//!   [`run_with_fallback`] then pastes the part that was not typed.
 
 use std::time::{Duration, Instant};
 
@@ -8,12 +16,20 @@ use v2c_core::inject_plan::Action;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
     KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, VIRTUAL_KEY,
-    VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_RCONTROL, VK_RETURN, VK_RMENU, VK_RSHIFT,
-    VK_RWIN, VK_SHIFT,
+    VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_RCONTROL, VK_RETURN, VK_RMENU,
+    VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_V,
 };
 
+use super::clipboard::{self, WinClipboard};
 use super::foreground;
 use crate::{InjectError, Injector};
+
+/// Time the target app gets to read the clipboard after Ctrl+V before the original content
+/// is restored. `SendInput` only queues the keys; the app reads the clipboard when it
+/// handles them. 150 ms is the value fixed in tasks/plan.md section 4 (well above a normal
+/// message-loop turn, short enough that a quick Ctrl+C right after dictation is rarely hit;
+/// a copy made during the wait is detected and kept, see `clipboard::paste_with_restore`).
+pub const PASTE_SETTLE: Duration = Duration::from_millis(150);
 
 /// Longest wait for the user to let go of Ctrl/Shift/Alt/Win (tasks/plan.md section 4).
 const MODIFIER_WAIT: Duration = Duration::from_millis(500);
@@ -37,31 +53,166 @@ const MODIFIERS: [VIRTUAL_KEY; 8] = [
 pub struct SendInputInjector;
 
 impl Injector for SendInputInjector {
+    /// Runs the actions in order. `InjectError::Partial` counts typed key events only
+    /// (pastes contribute none), matching [`run_with_fallback`]'s bookkeeping.
     fn run(&self, actions: &[Action]) -> Result<(), InjectError> {
-        if actions.iter().any(|a| matches!(a, Action::Paste(_))) {
-            return Err(InjectError::Os("paste not implemented (T1.2)".into()));
+        if actions.is_empty() {
+            return Ok(());
         }
         if let Some(app) = foreground::current_app() {
             if app.elevated && !foreground::current_process_elevated() {
+                // Best effort: the caller reports Elevated either way.
+                let text = actions_text(actions);
+                if !text.is_empty() {
+                    let _ =
+                        WinClipboard::new().and_then(|mut cb| clipboard::copy_text(&mut cb, &text));
+                }
                 return Err(InjectError::Elevated);
             }
         }
         wait_for_modifiers_released()?;
 
-        let batches: Vec<Vec<INPUT>> = actions.iter().flat_map(action_batches).collect();
-        let total: usize = batches.iter().map(Vec::len).sum();
+        let total: usize = actions.iter().map(typed_events).sum();
         let mut sent = 0usize;
-        for batch in &batches {
-            let accepted = send(batch);
-            sent += accepted;
-            if accepted < batch.len() {
-                // A half-sent Shift+Enter batch could leave Shift stuck down.
-                send(&[vk_input(VK_SHIFT, true)]);
-                return Err(InjectError::Partial { sent, total });
+        for action in actions {
+            if let Action::Paste(text) = action {
+                paste(text)?;
+                continue;
+            }
+            for batch in action_batches(action) {
+                let accepted = send(&batch);
+                sent += accepted;
+                if accepted < batch.len() {
+                    // A half-sent Shift+Enter batch could leave Shift stuck down.
+                    send(&[vk_input(VK_SHIFT, true)]);
+                    return Err(InjectError::Partial { sent, total });
+                }
             }
         }
         Ok(())
     }
+}
+
+/// Runs `actions`; if the OS accepted only part of the typed input, pastes the rest
+/// (tasks/plan.md section 4.3). Other errors, including `Elevated`, are returned unchanged.
+pub fn run_with_fallback<I: Injector + ?Sized>(
+    injector: &I,
+    actions: &[Action],
+) -> Result<(), InjectError> {
+    match injector.run(actions) {
+        Err(InjectError::Partial { sent, .. }) => {
+            let rest = actions_text(&remaining_after(actions, sent));
+            if rest.is_empty() {
+                Ok(())
+            } else {
+                injector.run(&[Action::Paste(rest)])
+            }
+        }
+        other => other,
+    }
+}
+
+/// The text the actions produce, with `\n` for line breaks (for the clipboard).
+pub fn actions_text(actions: &[Action]) -> String {
+    actions
+        .iter()
+        .map(|a| match a {
+            Action::Text(t) | Action::Paste(t) => t.as_str(),
+            Action::NewLine(_) => "\n",
+        })
+        .collect()
+}
+
+/// Actions still to do after the first `sent` typed key events were accepted.
+/// A character counts as typed once its key-down went through; a line break once Enter's
+/// key-down did.
+fn remaining_after(actions: &[Action], mut sent: usize) -> Vec<Action> {
+    for (i, action) in actions.iter().enumerate() {
+        let need = typed_events(action);
+        if sent >= need {
+            sent -= need;
+            continue;
+        }
+        let mut rest = Vec::new();
+        match action {
+            Action::Text(t) => {
+                let tail = text_after_units(t, sent.div_ceil(2));
+                if !tail.is_empty() {
+                    rest.push(Action::Text(tail.to_owned()));
+                }
+            }
+            Action::NewLine(key) => {
+                // Index of Enter's key-down in `newline_events`.
+                let enter_down = match key {
+                    NewlineKey::Enter => 0,
+                    NewlineKey::ShiftEnter => 1,
+                };
+                if sent <= enter_down {
+                    rest.push(Action::NewLine(*key));
+                }
+            }
+            // Pastes have no typed events, so they never get here.
+            Action::Paste(_) => rest.push(action.clone()),
+        }
+        rest.extend_from_slice(&actions[i + 1..]);
+        return rest;
+    }
+    Vec::new()
+}
+
+/// `text` without the characters fully covered by its first `units` UTF-16 code units
+/// (a half-typed surrogate pair counts as not typed).
+fn text_after_units(text: &str, units: usize) -> &str {
+    let mut done = 0;
+    for (byte, c) in text.char_indices() {
+        if done + c.len_utf16() > units {
+            return &text[byte..];
+        }
+        done += c.len_utf16();
+    }
+    ""
+}
+
+/// Number of key events [`action_batches`] produces for `action`.
+fn typed_events(action: &Action) -> usize {
+    match action {
+        Action::Text(t) => 2 * t.encode_utf16().count(),
+        Action::NewLine(NewlineKey::Enter) => 2,
+        Action::NewLine(NewlineKey::ShiftEnter) => 4,
+        Action::Paste(_) => 0,
+    }
+}
+
+/// Clipboard paste with restore; modifiers must already be released.
+fn paste(text: &str) -> Result<(), InjectError> {
+    let mut cb = WinClipboard::new()?;
+    clipboard::paste_with_restore(&mut cb, text, send_ctrl_v, || {
+        std::thread::sleep(PASTE_SETTLE)
+    })
+    .map(|_| ())
+}
+
+fn send_ctrl_v() -> Result<(), InjectError> {
+    let events = ctrl_v_events();
+    let accepted = send(&events);
+    if accepted < events.len() {
+        // Never leave Ctrl held down.
+        send(&[vk_input(VK_V, true), vk_input(VK_CONTROL, true)]);
+        return Err(InjectError::Os(format!(
+            "Ctrl+V not accepted ({accepted} of {} events); text left on the clipboard",
+            events.len()
+        )));
+    }
+    Ok(())
+}
+
+fn ctrl_v_events() -> Vec<INPUT> {
+    vec![
+        vk_input(VK_CONTROL, false),
+        vk_input(VK_V, false),
+        vk_input(VK_V, true),
+        vk_input(VK_CONTROL, true),
+    ]
 }
 
 fn wait_for_modifiers_released() -> Result<(), InjectError> {
@@ -112,7 +263,7 @@ fn action_batches(action: &Action) -> Vec<Vec<INPUT>> {
             .map(|units| unicode_events(units))
             .collect(),
         Action::NewLine(key) => vec![newline_events(*key)],
-        // Rejected before sending in `run`.
+        // Handled by `paste` in `run`.
         Action::Paste(_) => Vec::new(),
     }
 }
@@ -282,10 +433,155 @@ mod tests {
     }
 
     #[test]
-    fn paste_is_rejected_before_sending() {
-        let err = SendInputInjector
-            .run(&[Action::Paste("x".into())])
-            .unwrap_err();
-        assert_eq!(err, InjectError::Os("paste not implemented (T1.2)".into()));
+    fn ctrl_v_is_ctrl_down_v_down_v_up_ctrl_up() {
+        let k: Vec<KEYBDINPUT> = ctrl_v_events().iter().map(ki).collect();
+        let seq: Vec<(VIRTUAL_KEY, bool)> = k
+            .iter()
+            .map(|k| (k.wVk, k.dwFlags & KEYEVENTF_KEYUP != 0))
+            .collect();
+        assert_eq!(
+            seq,
+            vec![
+                (VK_CONTROL, false),
+                (VK_V, false),
+                (VK_V, true),
+                (VK_CONTROL, true)
+            ]
+        );
+        assert!(k.iter().all(|k| k.dwFlags & KEYEVENTF_UNICODE == 0));
+    }
+
+    #[test]
+    fn every_injected_event_carries_the_marker() {
+        let actions = [
+            Action::Text("字👍".into()),
+            Action::NewLine(NewlineKey::ShiftEnter),
+            Action::NewLine(NewlineKey::Enter),
+        ];
+        let mut events: Vec<INPUT> = actions.iter().flat_map(action_batches).flatten().collect();
+        events.extend(ctrl_v_events());
+        events.push(vk_input(VK_SHIFT, true));
+        assert!(!events.is_empty());
+        assert!(events
+            .iter()
+            .all(|i| ki(i).dwExtraInfo == super::super::INJECT_MARKER));
+    }
+
+    #[test]
+    fn typed_events_match_batches() {
+        for a in [
+            Action::Text("讚👍a".into()),
+            Action::Text("字".repeat(120)),
+            Action::NewLine(NewlineKey::Enter),
+            Action::NewLine(NewlineKey::ShiftEnter),
+            Action::Paste("x".into()),
+        ] {
+            let built: usize = action_batches(&a).iter().map(Vec::len).sum();
+            assert_eq!(typed_events(&a), built, "{a:?}");
+        }
+    }
+
+    #[test]
+    fn actions_text_joins_with_newlines() {
+        let a = [
+            Action::Text("第一行".into()),
+            Action::NewLine(NewlineKey::ShiftEnter),
+            Action::Text("b".into()),
+            Action::Paste("c".into()),
+        ];
+        assert_eq!(actions_text(&a), "第一行\nbc");
+        assert_eq!(actions_text(&[]), "");
+    }
+
+    fn t(s: &str) -> Action {
+        Action::Text(s.into())
+    }
+
+    #[test]
+    fn remaining_after_partial_text() {
+        let a = [t("abc"), Action::NewLine(NewlineKey::Enter), t("de")];
+        // Nothing sent: everything remains.
+        assert_eq!(remaining_after(&a, 0), a.to_vec());
+        // "a" down+up, "b" down only: b counts as typed.
+        assert_eq!(
+            remaining_after(&a, 3),
+            vec![t("c"), Action::NewLine(NewlineKey::Enter), t("de")]
+        );
+        // All of "abc" sent, Enter not.
+        assert_eq!(
+            remaining_after(&a, 6),
+            vec![Action::NewLine(NewlineKey::Enter), t("de")]
+        );
+        // Enter key-down went through: line break done.
+        assert_eq!(remaining_after(&a, 7), vec![t("de")]);
+        assert!(remaining_after(&a, 12).is_empty());
+    }
+
+    #[test]
+    fn remaining_after_shift_enter_needs_enter_down() {
+        let a = [Action::NewLine(NewlineKey::ShiftEnter), t("x")];
+        assert_eq!(remaining_after(&a, 1), a.to_vec()); // only Shift down
+        assert_eq!(remaining_after(&a, 2), vec![t("x")]);
+    }
+
+    #[test]
+    fn remaining_after_never_splits_surrogate_pairs() {
+        let a = [t("👍b")];
+        // High surrogate down only (1 event): the emoji is not complete.
+        assert_eq!(remaining_after(&a, 1), vec![t("👍b")]);
+        // Both halves down (3 events: hi down, hi up, lo down).
+        assert_eq!(remaining_after(&a, 3), vec![t("b")]);
+    }
+
+    #[test]
+    fn remaining_after_skips_completed_pastes() {
+        let a = [Action::Paste("p".into()), t("ab")];
+        assert_eq!(remaining_after(&a, 2), vec![t("b")]);
+    }
+
+    /// Returns `first` on the first call and `Ok` afterwards.
+    struct FakeInjector {
+        first: std::cell::RefCell<Option<Result<(), InjectError>>>,
+        calls: std::cell::RefCell<Vec<Vec<Action>>>,
+    }
+
+    impl Injector for FakeInjector {
+        fn run(&self, actions: &[Action]) -> Result<(), InjectError> {
+            self.calls.borrow_mut().push(actions.to_vec());
+            self.first.borrow_mut().take().unwrap_or(Ok(()))
+        }
+    }
+
+    fn fake(first: Result<(), InjectError>) -> FakeInjector {
+        FakeInjector {
+            first: Some(first).into(),
+            calls: Default::default(),
+        }
+    }
+
+    #[test]
+    fn fallback_pastes_the_untyped_rest() {
+        let a = [t("ab"), Action::NewLine(NewlineKey::ShiftEnter), t("c")];
+        let inj = fake(Err(InjectError::Partial { sent: 2, total: 8 }));
+        assert_eq!(run_with_fallback(&inj, &a), Ok(()));
+        let calls = inj.calls.into_inner();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1], vec![Action::Paste("b\nc".into())]);
+    }
+
+    #[test]
+    fn fallback_passes_other_results_through() {
+        let a = [t("x")];
+        let inj = fake(Err(InjectError::Elevated));
+        assert_eq!(run_with_fallback(&inj, &a), Err(InjectError::Elevated));
+        assert_eq!(inj.calls.into_inner().len(), 1);
+        let inj = fake(Ok(()));
+        assert_eq!(run_with_fallback(&inj, &a), Ok(()));
+        assert_eq!(inj.calls.into_inner().len(), 1);
+    }
+
+    #[test]
+    fn empty_actions_are_a_no_op() {
+        assert_eq!(SendInputInjector.run(&[]), Ok(()));
     }
 }
