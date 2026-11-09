@@ -52,7 +52,7 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 
 ## Phase 1
 - [ ] T1.2 剪貼簿貼上＋還原（指令：`cargo run -p v2c-cli -- inject-test --paste "測試\n第二行"`，3 秒內切到目標視窗）
-  1. `cargo test -p v2c-platform -- --ignored real_clipboard_roundtrip`（會短暫改動剪貼簿）
+  1. `cargo test -p v2c-platform -- --ignored`（兩個實機剪貼簿測試，會短暫改動剪貼簿；應全部通過）；`inject-test` 結束時應印 `clipboard: restored`
   2. 小畫家框選並複製 → 對記事本執行指令，出現兩行 → 回小畫家 Ctrl+V，原圖仍在
   3. 先複製一段文字（再用 Word 帶格式文字試一次）→ 重複 → 原本內容與格式仍在
   4. 檔案總管複製一個檔案 → 執行 → 回檔案總管 Ctrl+V 能貼出檔案
