@@ -6,6 +6,7 @@ members = [
     "crates/v2c-platform",
     "crates/v2c-cli",
     "crates/v2c-ffi",
+    "apps/desktop/src-tauri",
 ]
 
 [workspace.package]
@@ -25,5 +26,6 @@ hound = "3.5"
 nvml-wrapper = "0.13"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 toml = "0.8"
+tracing = "0.1"
