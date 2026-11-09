@@ -18,7 +18,8 @@ const STRONG: &[&str] = &[
 const WEAK: &[&str] = &["就是說", "就是", "那個", "啊", "you know"];
 /// Clause-initial interjections removed even when the clause continues.
 const LEADING: &[char] = &['嗯', '呃', '欸', '誒'];
-/// English filler words removed anywhere (as whole words, case-insensitive).
+/// English filler words removed anywhere (as whole words; lowercase or titlecase only, so an
+/// all-caps acronym such as "UM" stays).
 const EN_WORDS: &[&str] = &["um", "umm", "uh", "uhh", "uhm", "erm", "hmm"];
 
 const COMMA_LIKE: &[char] = &['，', ',', '、', '；', ';', '：', ':'];
@@ -53,8 +54,7 @@ fn split_clauses(text: &str) -> Vec<Clause<'_>> {
 /// True when `s` (trimmed, non-empty) is nothing but filler tokens separated by whitespace.
 fn is_filler_clause(s: &str, delim: Option<char>) -> bool {
     let allow_weak = delim.is_some_and(|d| COMMA_LIKE.contains(&d));
-    let lower = s.trim().to_lowercase();
-    let mut rest = lower.as_str();
+    let mut rest = s.trim();
     if rest.is_empty() {
         return false;
     }
@@ -63,7 +63,11 @@ fn is_filler_clause(s: &str, delim: Option<char>) -> bool {
             .iter()
             .chain(if allow_weak { WEAK } else { &[] }.iter());
         for tok in tokens {
-            if let Some(after) = rest.strip_prefix(tok) {
+            let title = titlecase(tok);
+            if let Some(after) = rest
+                .strip_prefix(tok)
+                .or_else(|| rest.strip_prefix(title.as_str()))
+            {
                 // An ASCII token must end at a word boundary ("um" is not "umbrella").
                 let ascii = tok.is_ascii();
                 if ascii && after.chars().next().is_some_and(|c| c.is_alphanumeric()) {
@@ -101,12 +105,22 @@ fn strip_inline(body: &str) -> String {
     }
     let words: Vec<&str> = joined
         .split(' ')
-        .filter(|w| !EN_WORDS.iter().any(|f| w.eq_ignore_ascii_case(f)))
+        .filter(|w| !EN_WORDS.iter().any(|f| *w == *f || *w == titlecase(f)))
         .collect();
     words.join(" ")
 }
 
+/// `um` -> `Um`; non-ASCII tokens are returned unchanged.
+fn titlecase(tok: &str) -> String {
+    let mut chars = tok.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 /// Removes Chinese and English filler words (嗯、呃、那個、um、uh…) without changing meaning.
+/// A non-empty input that would become empty (e.g. 「嗯。」 said as an answer) is returned unchanged.
 pub fn strip_fillers(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for clause in split_clauses(text) {
@@ -138,7 +152,11 @@ pub fn strip_fillers(text: &str) -> String {
             out.push(d);
         }
     }
-    out.trim().to_string()
+    let out = out.trim();
+    if out.is_empty() {
+        return text.trim().to_string();
+    }
+    out.to_string()
 }
 
 #[cfg(test)]
@@ -227,14 +245,12 @@ mod tests {
             "Hummus is 5 mm thick, 1,000.5 grams.",
             "這個 meeting 我們 delay 一下，改到下禮拜。",
             "嗯",
+            "嗯。",
+            "嗯，呃。",
+            "UM, the UH-60 is loud.",
             "",
         ] {
-            let out = strip_fillers(s);
-            let expect = match s {
-                "嗯" => "",
-                other => other,
-            };
-            assert_eq!(out, expect, "input {s:?}");
+            assert_eq!(strip_fillers(s), s, "input {s:?}");
         }
     }
 }

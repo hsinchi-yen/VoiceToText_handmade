@@ -218,7 +218,8 @@ impl Polisher {
     fn polish(&self, text: &str) -> (v2c_core::Result<String>, u64) {
         let input = to_zh_tw(text.trim());
         let t = Instant::now();
-        let out = self.rt.block_on(self.llm.complete(&self.system, &input));
+        let user = prompts::wrap_transcript(&input);
+        let out = self.rt.block_on(self.llm.complete(&self.system, &user));
         let ms = t.elapsed().as_millis() as u64;
         (out.map(|s| to_zh_tw(s.trim())), ms)
     }

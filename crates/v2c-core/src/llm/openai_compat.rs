@@ -5,6 +5,14 @@
 //!
 //! Privacy: request and response bodies carry user text, so they never appear in errors, logs,
 //! or `Debug` output. Errors carry only the stage, provider name, and a [`ProviderErrorKind`].
+//!
+//! The user message is expected to be [`crate::prompts::wrap_transcript`] output; the provider
+//! unwraps it to size `max_tokens` and to clean the answer against the raw transcript.
+//!
+//! LM Studio context length: the model's loaded context (LM Studio "Context Length") must exceed
+//! system prompt (~1k tokens with examples) + transcript + `max_tokens` (about 3x the transcript
+//! length). 4096 is enough for short phrases; use 8192 for long dictation (a few minutes of
+//! hands-free speech), otherwise LM Studio truncates or rejects the request.
 
 use std::{fmt, time::Duration};
 
@@ -14,6 +22,8 @@ use serde::{Deserialize, Serialize};
 use super::LlmProvider;
 use crate::{
     error::{ProviderErrorKind, Stage},
+    postprocess::fillers::strip_fillers,
+    prompts::{self, TRANSCRIPT_CLOSE, TRANSCRIPT_OPEN},
     Result, V2cError,
 };
 
@@ -202,6 +212,7 @@ impl LlmProvider for OpenAiCompatLlm {
     }
 
     async fn complete(&self, system: &str, user: &str) -> Result<String> {
+        let transcript = prompts::unwrap_transcript(user);
         let body = ChatRequest {
             model: self.model.as_deref(),
             messages: [
@@ -215,7 +226,7 @@ impl LlmProvider for OpenAiCompatLlm {
                 },
             ],
             temperature: TEMPERATURE,
-            max_tokens: max_tokens_for(user),
+            max_tokens: max_tokens_for(transcript),
             stream: false,
         };
         let mut req = self
@@ -246,7 +257,7 @@ impl LlmProvider for OpenAiCompatLlm {
             .message
             .and_then(|m| m.content)
             .ok_or_else(|| self.err(ProviderErrorKind::BadResponse))?;
-        let text = clean_output(&raw, user);
+        let text = clean_output(&raw, transcript);
         if text.is_empty() {
             return Err(self.err(ProviderErrorKind::BadResponse));
         }
@@ -255,34 +266,24 @@ impl LlmProvider for OpenAiCompatLlm {
 }
 
 /// Labels small models like to put before the answer. Matched at the very start, followed by a
-/// full- or half-width colon.
+/// full- or half-width colon. Only unambiguous wrappers: generic words such as 結果、輸出、Result
+/// can start a real sentence and are never stripped.
 const LEADING_LABELS: &[&str] = &[
     "潤飾後的文字",
     "潤飾後文字",
     "潤飾結果",
     "潤飾後",
     "润饰后",
-    "修改後",
-    "修正後",
+    "整理後的文字",
     "整理後",
-    "輸出結果",
-    "輸出",
-    "输出",
-    "結果",
-    "结果",
     "譯文",
     "译文",
-    "翻譯",
-    "翻译",
     "英文翻譯",
+    "英文譯文",
     "Polished text",
     "Polished",
-    "Translation",
     "English translation",
-    "English",
-    "Output",
-    "Result",
-    "Answer",
+    "Translation",
 ];
 
 /// Quote pairs a model may wrap the whole answer in.
@@ -297,12 +298,14 @@ const QUOTE_PAIRS: &[(char, char)] = &[
 
 /// Removes model artefacts around the answer: reasoning blocks (`<think>…</think>`), Markdown
 /// code fences, a leading "潤飾後：" style label, and quotes around the whole answer (only when
-/// the user's text was not itself quoted). Returns the trimmed text; empty means "no answer".
+/// the user's text was not itself quoted), plus echoed `<逐字稿>` tags. `user` is the raw
+/// transcript (not the wrapped message). Returns the trimmed text; empty means "no answer".
 pub(crate) fn clean_output(raw: &str, user: &str) -> String {
+    let user = user.trim();
     let mut s = strip_think(raw).trim().to_string();
     s = strip_code_fence(&s).trim().to_string();
-    s = strip_leading_label(&s).trim().to_string();
-    let user = user.trim();
+    s = s.replace(TRANSCRIPT_OPEN, "").replace(TRANSCRIPT_CLOSE, "");
+    s = strip_leading_label(s.trim(), user).trim().to_string();
     for &(open, close) in QUOTE_PAIRS {
         let chars: Vec<char> = s.chars().collect();
         if chars.len() >= 2
@@ -364,15 +367,24 @@ fn strip_code_fence(s: &str) -> &str {
     }
 }
 
-fn strip_leading_label(s: &str) -> &str {
+/// True when `text` starts with `label` (ASCII case-insensitive).
+fn starts_with_label(text: &str, label: &str) -> bool {
+    text.get(..label.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(label))
+}
+
+/// Strips a leading label unless the speaker actually began with that word (checked on the raw
+/// transcript and on it with leading fillers removed).
+fn strip_leading_label<'a>(s: &'a str, user: &str) -> &'a str {
     // Markdown bold around the label: `**Translation:** …`.
     let t = s.trim_start_matches('*');
+    let spoken = strip_fillers(user);
     for label in LEADING_LABELS {
-        let Some(head) = t.get(..label.len()) else {
+        if !starts_with_label(t, label) {
             continue;
-        };
-        if !head.eq_ignore_ascii_case(label) {
-            continue;
+        }
+        if starts_with_label(user, label) || starts_with_label(&spoken, label) {
+            return s;
         }
         let rest = t[label.len()..].trim_start_matches([' ', '*']);
         for colon in ['：', ':'] {
@@ -430,9 +442,39 @@ mod tests {
             "See you the day after tomorrow."
         );
         assert_eq!(clean_output("translation: Hi.", "x"), "Hi.");
+        assert_eq!(clean_output("譯文：Hi.", "你好"), "Hi.");
         // A label-like word that is real content (no colon) stays.
         assert_eq!(clean_output("結果很好。", "x"), "結果很好。");
         assert_eq!(clean_output("Output is fine.", "x"), "Output is fine.");
+        // Generic words are never treated as labels.
+        assert_eq!(clean_output("結果：我們贏了。", "x"), "結果：我們贏了。");
+        assert_eq!(clean_output("Result: we won.", "x"), "Result: we won.");
+        assert_eq!(clean_output("English: 很難。", "x"), "English: 很難。");
+    }
+
+    #[test]
+    fn clean_keeps_label_the_speaker_said() {
+        assert_eq!(
+            clean_output("結果：我們贏了。", "結果我們贏了"),
+            "結果：我們贏了。"
+        );
+        assert_eq!(
+            clean_output("譯文：要再校一次。", "譯文要再校一次"),
+            "譯文：要再校一次。"
+        );
+        // Leading fillers before the word do not hide it.
+        assert_eq!(
+            clean_output("Translation: 我們下週交。", "嗯，translation 我們下週交"),
+            "Translation: 我們下週交。"
+        );
+    }
+
+    #[test]
+    fn clean_strips_echoed_transcript_tags() {
+        assert_eq!(
+            clean_output("<逐字稿>\n我們後天見面。\n</逐字稿>", "我們後天見面"),
+            "我們後天見面。"
+        );
     }
 
     #[test]
@@ -615,6 +657,25 @@ mod wire_tests {
         let reqs = server.received_requests().await.unwrap();
         let body: Value = serde_json::from_slice(&reqs[0].body).unwrap();
         assert_eq!(body["model"], json!("qwen2.5-3b-instruct"));
+    }
+
+    #[tokio::test]
+    async fn wrapped_transcript_is_sent_as_is_and_sized_by_raw_text() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(reply("<逐字稿>\n「我們明天見。」\n</逐字稿>"))
+            .mount(&server)
+            .await;
+        let wrapped = prompts::wrap_transcript(USER);
+        let out = llm(&server, None, None)
+            .complete(SYSTEM, &wrapped)
+            .await
+            .unwrap();
+        assert_eq!(out, "我們明天見。");
+        let reqs = server.received_requests().await.unwrap();
+        let body: Value = serde_json::from_slice(&reqs[0].body).unwrap();
+        assert_eq!(body["messages"][1]["content"], json!(wrapped));
+        assert_eq!(body["max_tokens"], json!(max_tokens_for(USER)));
     }
 
     #[tokio::test]
