@@ -1,4 +1,5 @@
-//! `v2c-cli transcribe <wav> --model <path>`: recognise one WAV file and print the text.
+//! `v2c-cli transcribe <wav> --asr breeze|sensevoice --model <path>`: recognise one WAV file
+//! and print the text.
 //!
 //! Printing recognised text to stdout is intentional here: this is a developer tool run on the
 //! developer's own recordings. Nothing is written to log files.
@@ -7,7 +8,10 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{bail, Context};
-use v2c_asr_local::{BreezeAsr, BreezeOptions, BreezeOutput, DecodeLang, LanguageMode};
+use v2c_asr_local::{
+    sensevoice, BreezeAsr, BreezeOptions, BreezeOutput, DecodeLang, LanguageMode, SenseVoiceAsr,
+    SenseVoiceLanguage, SenseVoiceOptions, Transcript,
+};
 use v2c_core::{asr::AsrContext, audio::AudioClip, audio::SAMPLE_RATE};
 
 #[derive(clap::Args)]
@@ -17,14 +21,15 @@ pub struct Args {
     /// ASR provider: breeze | sensevoice | <cloud id>.
     #[arg(long, default_value = "breeze")]
     pub asr: String,
-    /// Model file for local providers.
+    /// Model for local providers: the GGML file for breeze, the model directory for sensevoice.
     #[arg(long)]
     pub model: Option<PathBuf>,
     #[command(flatten)]
     pub breeze: BreezeArgs,
 }
 
-/// Breeze tuning flags shared by `transcribe` and `bench`.
+/// Breeze tuning flags shared by `transcribe` and `bench`. SenseVoice uses `--lang`
+/// (`detect`/`auto` = model auto-detect) and `--threads`; the other flags are Breeze-only.
 #[derive(clap::Args, Clone)]
 pub struct BreezeArgs {
     /// Decode language: `detect` (detect first; en -> en, else zh), `zh`, or `en`.
@@ -58,6 +63,95 @@ impl BreezeArgs {
         }
         Ok(o)
     }
+
+    pub fn sensevoice_options(&self) -> anyhow::Result<SenseVoiceOptions> {
+        let language = match parse_lang(&self.lang)? {
+            LanguageMode::Detect => SenseVoiceLanguage::Auto,
+            LanguageMode::Fixed(DecodeLang::Zh) => SenseVoiceLanguage::Zh,
+            LanguageMode::Fixed(DecodeLang::En) => SenseVoiceLanguage::En,
+        };
+        let mut o = SenseVoiceOptions {
+            language,
+            ..SenseVoiceOptions::default()
+        };
+        if let Some(t) = self.threads {
+            o.n_threads = t.max(1);
+        }
+        Ok(o)
+    }
+}
+
+/// A loaded local ASR engine.
+pub enum Engine {
+    Breeze(BreezeAsr),
+    SenseVoice(SenseVoiceAsr),
+}
+
+/// Result of one recognition with a timing/language summary (the summary holds no text).
+pub struct EngineOutput {
+    pub transcript: Transcript,
+    pub total_ms: u64,
+    pub summary: String,
+}
+
+impl Engine {
+    pub fn run(&self, clip: &AudioClip, ctx: &AsrContext) -> v2c_core::Result<EngineOutput> {
+        match self {
+            Engine::Breeze(b) => b.transcribe_blocking(clip, ctx).map(|o| EngineOutput {
+                summary: describe(&o),
+                total_ms: o.total_ms(),
+                transcript: o.transcript,
+            }),
+            Engine::SenseVoice(s) => s.transcribe_blocking(clip).map(|o| EngineOutput {
+                summary: format!(
+                    "asr {} ms (sensevoice, cpu), lang {:?}",
+                    o.decode_ms, o.transcript.lang
+                ),
+                total_ms: o.decode_ms,
+                transcript: o.transcript,
+            }),
+        }
+    }
+
+    pub fn is_sensevoice(&self) -> bool {
+        matches!(self, Engine::SenseVoice(_))
+    }
+}
+
+/// Loads the engine named by `--asr`.
+pub fn load_engine(asr: &str, model: Option<&Path>, args: &BreezeArgs) -> anyhow::Result<Engine> {
+    match asr {
+        "sensevoice" => load_sensevoice(model, args).map(Engine::SenseVoice),
+        _ => load_breeze(asr, model, args).map(Engine::Breeze),
+    }
+}
+
+/// Loads SenseVoice from a sherpa-onnx model directory, printing load time.
+pub fn load_sensevoice(model: Option<&Path>, args: &BreezeArgs) -> anyhow::Result<SenseVoiceAsr> {
+    const HINT: &str = "download and extract \
+        https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/\
+        sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2";
+    if !sensevoice::sensevoice_enabled() {
+        bail!("this v2c-cli was built without SenseVoice; rebuild with `--features sensevoice`");
+    }
+    let Some(dir) = model else {
+        bail!("--model <dir> is required for sensevoice (the directory with model.int8.onnx and tokens.txt; {HINT})");
+    };
+    if !dir.is_dir() {
+        bail!("model directory not found: {} ({HINT})", dir.display());
+    }
+    let opts = args.sensevoice_options()?;
+    let t = Instant::now();
+    let sv = SenseVoiceAsr::load(dir, opts).context("loading SenseVoice model")?;
+    eprintln!(
+        "loaded SenseVoice from {} in {} ms (threads: {}, language: {}, itn: {})",
+        dir.display(),
+        t.elapsed().as_millis(),
+        sv.options().n_threads,
+        sv.options().language.code(),
+        sv.options().use_itn,
+    );
+    Ok(sv)
 }
 
 fn parse_lang(s: &str) -> anyhow::Result<LanguageMode> {
@@ -76,7 +170,7 @@ pub fn load_breeze(
     args: &BreezeArgs,
 ) -> anyhow::Result<BreezeAsr> {
     if asr != "breeze" {
-        bail!("ASR provider `{asr}` is not available in the CLI yet (only `breeze`, task T0.1)");
+        bail!("ASR provider `{asr}` is not available in the CLI yet (only `breeze`, `sensevoice`)");
     }
     let Some(model) = model else {
         bail!(
@@ -176,11 +270,14 @@ pub fn describe(out: &BreezeOutput) -> String {
 
 pub fn run(args: Args) -> anyhow::Result<()> {
     let clip = load_wav(&args.wav)?;
-    let breeze = load_breeze(&args.asr, args.model.as_deref(), &args.breeze)?;
-    let out = breeze
-        .transcribe_blocking(&clip, &AsrContext::default())
+    let engine = load_engine(&args.asr, args.model.as_deref(), &args.breeze)?;
+    let out = engine
+        .run(&clip, &AsrContext::default())
         .context("transcribing")?;
-    eprintln!("audio {} ms, {}", clip.duration_ms(), describe(&out));
+    eprintln!("audio {} ms, {}", clip.duration_ms(), out.summary);
+    if engine.is_sensevoice() {
+        eprintln!("note: SenseVoice output is Simplified; the app converts it with zh_tw.");
+    }
     println!("{}", out.transcript.text);
     Ok(())
 }
@@ -263,5 +360,55 @@ mod tests {
         let err = load_breeze("breeze", None, &args).unwrap_err().to_string();
         assert!(err.contains("--model"), "{err}");
         assert!(load_breeze("sensevoice", None, &args).is_err());
+    }
+
+    #[test]
+    fn sensevoice_load_errors_are_clear() {
+        let args = BreezeArgs {
+            lang: "detect".into(),
+            cpu: false,
+            no_flash_attn: false,
+            audio_ctx: None,
+            threads: Some(2),
+        };
+        let err = load_engine("sensevoice", None, &args)
+            .err()
+            .unwrap()
+            .to_string();
+        if sensevoice::sensevoice_enabled() {
+            assert!(err.contains("--model"), "{err}");
+            let err = load_engine("sensevoice", Some(Path::new("no/such/dir")), &args)
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(err.contains("not found"), "{err}");
+        } else {
+            assert!(err.contains("--features sensevoice"), "{err}");
+        }
+    }
+
+    #[test]
+    fn sensevoice_options_from_flags() {
+        let mut args = BreezeArgs {
+            lang: "auto".into(),
+            cpu: false,
+            no_flash_attn: false,
+            audio_ctx: None,
+            threads: Some(3),
+        };
+        let o = args.sensevoice_options().unwrap();
+        assert_eq!(o.language, SenseVoiceLanguage::Auto);
+        assert_eq!(o.n_threads, 3);
+        assert!(o.use_itn);
+        args.lang = "en".into();
+        assert_eq!(
+            args.sensevoice_options().unwrap().language,
+            SenseVoiceLanguage::En
+        );
+        args.lang = "zh".into();
+        assert_eq!(
+            args.sensevoice_options().unwrap().language,
+            SenseVoiceLanguage::Zh
+        );
     }
 }

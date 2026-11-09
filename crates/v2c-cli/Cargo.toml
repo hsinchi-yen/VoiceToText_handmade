@@ -13,6 +13,9 @@ path = "src/main.rs"
 [features]
 # Build Breeze (whisper.cpp) with CUDA: `cargo run -p v2c-cli --release --features cuda -- bench ...`
 cuda = ["v2c-asr-local/cuda"]
+# SenseVoice-Small on CPU via sherpa-onnx (downloads prebuilt sherpa-onnx libs at build time):
+# `cargo run -p v2c-cli --release --features sensevoice -- bench --asr sensevoice --model <dir> ...`
+sensevoice = ["v2c-asr-local/sensevoice"]
 
 [dependencies]
 v2c-core.workspace = true

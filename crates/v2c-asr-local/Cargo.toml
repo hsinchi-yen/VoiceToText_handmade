@@ -11,6 +11,9 @@ publish.workspace = true
 # The release desktop build enables it: `cargo build --release -p v2c-cli --features cuda`.
 default = []
 cuda = ["whisper-rs/cuda"]
+# SenseVoice-Small (CPU) via the official sherpa-onnx Rust API. Opt-in because its build script
+# downloads ~40 MB of prebuilt libraries from GitHub; the desktop app enables it.
+sensevoice = ["dep:sherpa-onnx"]
 
 [dependencies]
 v2c-core.workspace = true
@@ -18,4 +21,13 @@ async-trait.workspace = true
 # spawn_blocking for the async AsrProvider impl.
 tokio.workspace = true
 whisper-rs = "0.16"
-# T1.10 adds the SenseVoice binding; T1.10b adds NVML.
+# `shared`, not the default `static`: the static Windows archive is built with /MT (static CRT)
+# and fails to link next to whisper.cpp (/MD) with LNK2005 duplicate std:: symbols. The shared
+# build ships sherpa-onnx-c-api.dll + onnxruntime.dll, which must sit next to the executable.
+# Exact version: the build script downloads the archive matching this version.
+sherpa-onnx = { version = "=2.0.1", optional = true, default-features = false, features = ["shared"] }
+# T1.10b adds NVML.
+
+[dev-dependencies]
+# WAV reading in the ignored SenseVoice smoke test.
+hound.workspace = true
