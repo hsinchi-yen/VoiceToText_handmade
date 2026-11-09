@@ -19,9 +19,13 @@ cuda = ["v2c-asr-local/cuda"]
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
-v2c-core.workspace = true
-v2c-asr-local.workspace = true
+# `keyring`: API keys from Windows Credential Manager (store installed at startup, main.rs).
+v2c-core = { workspace = true, features = ["keyring"] }
+# `sensevoice`: CPU fallback ASR (sherpa-onnx; its DLLs ship next to v2c.exe, see build.rs).
+v2c-asr-local = { workspace = true, features = ["sensevoice"] }
 v2c-platform.workspace = true
+async-trait.workspace = true
+keyring-core.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -31,12 +35,23 @@ tracing-appender = "0.2"
 cpal = "0.18"
 rubato = "5"
 
+# Windows Credential Manager as the keyring-core default store.
+[target.'cfg(windows)'.dependencies.windows-native-keyring-store]
+version = "1.1"
+
+# Not used from Rust: a direct dependency on the `links = "sherpa-onnx"` package makes Cargo run
+# its build script (which downloads the DLLs and copies them to target/<profile>/) before ours,
+# so build.rs can stage them for the installer. Same version and features as v2c-asr-local's.
+[target.'cfg(windows)'.dependencies.sherpa-onnx-sys]
+version = "=2.0.1"
+default-features = false
+features = ["shared"]
+
 # Overlay window styles (no activation, click-through); see src/overlay.rs.
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.61"
 features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"]
 
 [dev-dependencies]
-async-trait.workspace = true
 hound.workspace = true
 serde_json = "1"

@@ -8,8 +8,8 @@
 //! - [`test_connection`]: wizard step 5 (plan §6.2) and Android settings.
 //! - [`cloud_http_client`]: the only HTTP client cloud providers accept ([`CloudHttp`]).
 //!
-//! Building the pipeline's provider objects from a `RoutePlan` is done in the integration
-//! step (after the OpenAI-compatible LLM from T1.5 lands).
+//! - [`build_cloud_asr`] / [`build_cloud_llm`]: provider objects for a `Target::Cloud`
+//!   (the desktop app wires them into the pipeline, with local fallback).
 
 use std::time::{Duration, Instant};
 
@@ -26,7 +26,7 @@ use crate::config::{CloudKind, CloudService, RouteConfig, TimeoutConfig, LOCAL};
 use crate::error::{ProviderErrorKind, Stage, V2cError};
 use crate::llm::claude::{ClaudeLlm, ANTHROPIC_VERSION};
 use crate::llm::gemini::GeminiLlm;
-use crate::llm::LlmProvider;
+use crate::llm::{LlmProvider, OpenAiCompatLlm};
 use crate::secrets::{ApiKey, SecretStore};
 use crate::Result;
 
@@ -269,7 +269,7 @@ fn key_for(service: &CloudService, secrets: &dyn SecretStore) -> Result<Option<A
 
 /// Builds the ASR provider for a service, or `None` if the kind has no ASR or no model is
 /// set (compat endpoints have no default model).
-pub(crate) fn build_asr(
+pub fn build_asr(
     service: &CloudService,
     key: Option<ApiKey>,
     http: &CloudHttp,
@@ -304,7 +304,7 @@ pub(crate) fn build_asr(
 
 /// Builds Gemini / Claude LLM providers. OpenAI and OpenAI-compatible LLMs use T1.5's
 /// `OpenAiCompatLlm` and are built by the integration step, so they return `None` here.
-pub(crate) fn build_native_llm(
+pub fn build_native_llm(
     service: &CloudService,
     key: Option<ApiKey>,
     http: &CloudHttp,
@@ -326,6 +326,52 @@ pub(crate) fn build_native_llm(
         CloudKind::OpenAi | CloudKind::OpenAiCompat => return Ok(None),
     };
     Ok(Some(p))
+}
+
+/// Speech recognition provider for `service`, with its API key from `secrets`. `Ok(None)` if
+/// the kind has no ASR or no model is set. `Err` for configuration problems (missing key for
+/// an official API, bad `base_url`, keyring failure).
+pub fn build_cloud_asr(
+    service: &CloudService,
+    secrets: &dyn SecretStore,
+    http: &CloudHttp,
+    timeout: Duration,
+) -> Result<Option<Box<dyn AsrProvider>>> {
+    let key = key_for(service, secrets)?;
+    build_asr(service, key, http, timeout)
+}
+
+/// LLM provider for `service` (polish or translate, given by `stage`), with its API key from
+/// `secrets`: Gemini / Claude natively, OpenAI and OpenAI-compatible endpoints through
+/// [`OpenAiCompatLlm`]. `Ok(None)` if no model is set. Errors as for [`build_cloud_asr`].
+pub fn build_cloud_llm(
+    service: &CloudService,
+    secrets: &dyn SecretStore,
+    http: &CloudHttp,
+    timeout: Duration,
+    stage: Stage,
+) -> Result<Option<Box<dyn LlmProvider>>> {
+    let key = key_for(service, secrets)?;
+    match service.kind {
+        CloudKind::OpenAi | CloudKind::OpenAiCompat => {
+            let base = effective_base_url(service)?;
+            let Some(model) = model_for(&service.llm_model, suggested_models(service.kind).llm)
+            else {
+                return Ok(None);
+            };
+            let llm = OpenAiCompatLlm::new(
+                http.client().clone(),
+                base,
+                key.map(|k| k.expose().to_owned()),
+                Some(model),
+                timeout,
+            )
+            .with_name(&service.id)
+            .with_stage(stage);
+            Ok(Some(Box::new(llm)))
+        }
+        CloudKind::Gemini | CloudKind::Claude => build_native_llm(service, key, http, timeout),
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -991,5 +1037,74 @@ mod tests {
         .unwrap();
         assert!(p.ok && p.supports_llm());
         assert_eq!(p.asr, Check::Skipped);
+    }
+    #[tokio::test]
+    async fn cloud_builders_pick_the_provider_per_kind_and_need_keys() {
+        let http = cloud_http_client().unwrap();
+        let t = Duration::from_secs(1);
+        let none = MemorySecretStore::new();
+        // Official APIs need a key.
+        let openai = svc("oa", CloudKind::OpenAi);
+        assert!(matches!(
+            build_cloud_llm(&openai, &none, &http, t, Stage::Polish),
+            Err(V2cError::NotConfigured(_))
+        ));
+        assert!(build_cloud_asr(&openai, &none, &http, t).is_err());
+        let keys = secrets("oa", "sk-TEST");
+        let llm = build_cloud_llm(&openai, &keys, &http, t, Stage::Translate)
+            .unwrap()
+            .unwrap();
+        assert_eq!(llm.name(), "oa");
+        assert_eq!(
+            build_cloud_asr(&openai, &keys, &http, t)
+                .unwrap()
+                .unwrap()
+                .name(),
+            "oa"
+        );
+        // Claude: LLM yes, ASR no.
+        let claude = svc("cl", CloudKind::Claude);
+        let keys = secrets("cl", "sk-ant");
+        assert!(build_cloud_llm(&claude, &keys, &http, t, Stage::Polish)
+            .unwrap()
+            .is_some());
+        assert!(build_cloud_asr(&claude, &keys, &http, t).unwrap().is_none());
+        // Compatible endpoint: key optional, but there is no default model.
+        let mut compat = svc("lan", CloudKind::OpenAiCompat);
+        compat.base_url = Some("http://192.168.1.5:1234/v1".into());
+        assert!(build_cloud_llm(&compat, &none, &http, t, Stage::Polish)
+            .unwrap()
+            .is_none());
+        compat.llm_model = Some("qwen".into());
+        assert!(build_cloud_llm(&compat, &none, &http, t, Stage::Polish)
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn openai_llm_from_builder_sends_the_key_and_model() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(header("authorization", "Bearer sk-TEST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"message": {"content": "Hello."}, "finish_reason": "stop"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut openai = svc("oa", CloudKind::OpenAi);
+        openai.base_url = Some(format!("{}/v1", server.uri()));
+        openai.llm_model = Some("m".into());
+        let llm = build_cloud_llm(
+            &openai,
+            &secrets("oa", "sk-TEST"),
+            &cloud_http_client().unwrap(),
+            Duration::from_secs(2),
+            Stage::Translate,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(llm.complete("sys", "你好").await.unwrap(), "Hello.");
     }
 }

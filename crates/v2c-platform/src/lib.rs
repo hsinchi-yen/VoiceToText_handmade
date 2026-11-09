@@ -20,7 +20,7 @@ pub enum PlatformError {
     Unsupported,
 }
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum InjectError {
     /// The foreground window runs elevated; a normal process cannot send input to it (UIPI).
     #[error("foreground window is elevated")]
@@ -28,6 +28,10 @@ pub enum InjectError {
     /// Only part of the input was accepted by the OS.
     #[error("only {sent} of {total} input events were accepted")]
     Partial { sent: usize, total: usize },
+    /// Ctrl/Shift/Alt/Win were still held after the wait; nothing was sent (typing would turn
+    /// characters into shortcuts).
+    #[error("modifier keys still held")]
+    ModifiersHeld,
     #[error("OS call failed: {0}")]
     Os(String),
 }

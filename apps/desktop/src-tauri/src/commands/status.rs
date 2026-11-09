@@ -4,7 +4,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::app_state::AppState;
-use crate::controller::StatusEvent;
+use crate::controller::{RecordingInfo, StatusEvent};
 
 #[derive(Debug, Serialize)]
 pub struct AppInfo {
@@ -30,4 +30,10 @@ pub fn last_status(state: State<'_, AppState>) -> Option<StatusEvent> {
         .lock()
         .map(|s| s.clone())
         .unwrap_or_default()
+}
+
+/// Whether a recording is running, hands-free, or translating.
+#[tauri::command]
+pub fn recording_info(state: State<'_, AppState>) -> RecordingInfo {
+    *state.recording.borrow()
 }

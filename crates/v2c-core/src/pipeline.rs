@@ -71,6 +71,29 @@ pub struct Pipeline {
     /// Used for polish and translate; `None` if no LLM is available.
     llm: Option<Arc<dyn LlmProvider>>,
     cfg: PipelineConfig,
+    /// Upper bound for the length-scaled polish timeout; `None` = no scaling.
+    polish_cap_ms: Option<u64>,
+}
+
+/// Progress reported by [`Pipeline::run_with_progress`] (no text).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Progress {
+    /// The LLM step (polish or translate) is starting.
+    LlmStarted(Mode),
+}
+
+/// Transcripts up to this many characters (about 10 s of speech) get the plain
+/// `polish_timeout_ms`; longer ones get [`POLISH_MS_PER_CHAR`] more per extra character.
+pub const POLISH_FREE_CHARS: usize = 60;
+/// Extra polish time per character beyond [`POLISH_FREE_CHARS`], ms.
+pub const POLISH_MS_PER_CHAR: u64 = 10;
+
+/// Polish timeout for a transcript of `chars` characters: `base_ms` for short utterances, plus
+/// [`POLISH_MS_PER_CHAR`] per character beyond [`POLISH_FREE_CHARS`], never above `cap_ms`
+/// (and never below `base_ms`). Long hands-free dictation needs more than 1 s to polish.
+pub fn scaled_polish_timeout_ms(base_ms: u64, chars: usize, cap_ms: u64) -> u64 {
+    let extra = (chars.saturating_sub(POLISH_FREE_CHARS) as u64).saturating_mul(POLISH_MS_PER_CHAR);
+    base_ms.saturating_add(extra).min(cap_ms.max(base_ms))
 }
 
 /// A clip whose loudest 30 ms window is below this RMS level is treated as silence
@@ -84,7 +107,27 @@ impl Pipeline {
         llm: Option<Arc<dyn LlmProvider>>,
         cfg: PipelineConfig,
     ) -> Self {
-        Self { asr, llm, cfg }
+        Self {
+            asr,
+            llm,
+            cfg,
+            polish_cap_ms: None,
+        }
+    }
+
+    /// Scales the polish timeout with the transcript length (see
+    /// [`scaled_polish_timeout_ms`]), up to `cap_ms` (normally the LLM provider's own timeout).
+    pub fn with_polish_timeout_cap_ms(mut self, cap_ms: u64) -> Self {
+        self.polish_cap_ms = Some(cap_ms);
+        self
+    }
+
+    /// The polish timeout used for a transcript of `chars` characters.
+    pub fn polish_timeout_for(&self, chars: usize) -> u64 {
+        match self.polish_cap_ms {
+            Some(cap) => scaled_polish_timeout_ms(self.cfg.polish_timeout_ms, chars, cap),
+            None => self.cfg.polish_timeout_ms,
+        }
     }
 
     pub fn config(&self) -> &PipelineConfig {
@@ -94,6 +137,17 @@ impl Pipeline {
     /// Runs one utterance. Returns `Ok(None)` for clips that are too short or silent, and for
     /// clips in which nothing was recognised.
     pub async fn run(&self, clip: AudioClip, mode: Mode) -> Result<Option<Output>> {
+        self.run_with_progress(clip, mode, &|_| {}).await
+    }
+
+    /// Like [`Pipeline::run`], calling `progress` when a stage starts (e.g. to show
+    /// "polishing" in the UI). `progress` must return quickly.
+    pub async fn run_with_progress(
+        &self,
+        clip: AudioClip,
+        mode: Mode,
+        progress: &(dyn Fn(Progress) + Send + Sync),
+    ) -> Result<Option<Output>> {
         let started = Instant::now();
 
         // 1. Too short or silent: output nothing.
@@ -141,6 +195,7 @@ impl Pipeline {
         let mut llm_ms = None;
         let (text, lang) = match (mode, &self.llm) {
             (Mode::Dictate, Some(llm)) if self.cfg.polish_enabled => {
+                progress(Progress::LlmStarted(mode));
                 let t = Instant::now();
                 let polished = self.polish(llm.as_ref(), &text).await;
                 llm_ms = Some(elapsed_ms(t));
@@ -168,6 +223,7 @@ impl Pipeline {
                 return Err(V2cError::NotConfigured("translation model"))
             }
             (Mode::TranslateZhToEn, Some(llm)) => {
+                progress(Progress::LlmStarted(mode));
                 let t = Instant::now();
                 let translated = llm
                     .complete(
@@ -224,7 +280,8 @@ impl Pipeline {
     async fn polish(&self, llm: &dyn LlmProvider, text: &str) -> Option<String> {
         let system = prompts::polish(&self.cfg.vocabulary);
         let user = prompts::wrap_transcript(text);
-        let limit = Duration::from_millis(self.cfg.polish_timeout_ms);
+        let timeout_ms = self.polish_timeout_for(text.chars().count());
+        let limit = Duration::from_millis(timeout_ms);
         match tokio::time::timeout(limit, llm.complete(&system, &user)).await {
             Ok(Ok(out)) if !out.trim().is_empty() => Some(out.trim().to_owned()),
             Ok(Ok(_)) => {
@@ -242,8 +299,7 @@ impl Pipeline {
             Err(_) => {
                 warn!(
                     provider = llm.name(),
-                    timeout_ms = self.cfg.polish_timeout_ms,
-                    "polish timed out; falling back"
+                    timeout_ms, "polish timed out; falling back"
                 );
                 None
             }
@@ -591,6 +647,81 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, V2cError::Provider { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn polish_timeout_scales_with_length_and_is_capped() {
+        // Short utterances (about 10 s of speech) keep the 1.0 s budget.
+        assert_eq!(scaled_polish_timeout_ms(1000, 0, 3000), 1000);
+        assert_eq!(
+            scaled_polish_timeout_ms(1000, POLISH_FREE_CHARS, 3000),
+            1000
+        );
+        // Longer ones get 10 ms per extra character.
+        assert_eq!(
+            scaled_polish_timeout_ms(1000, POLISH_FREE_CHARS + 100, 3000),
+            2000
+        );
+        // Capped at the provider timeout, but never below the configured base.
+        assert_eq!(scaled_polish_timeout_ms(1000, 10_000, 3000), 3000);
+        assert_eq!(scaled_polish_timeout_ms(1000, 10_000, 500), 1000);
+        assert_eq!(
+            scaled_polish_timeout_ms(1000, usize::MAX, u64::MAX),
+            u64::MAX
+        );
+    }
+
+    #[test]
+    fn polish_timeout_scaling_is_opt_in() {
+        let asr = FakeAsr::new("x", Lang::Zh);
+        let p = pipeline(asr.clone(), None, true);
+        assert_eq!(p.polish_timeout_for(1_000), 50);
+        let p = pipeline(asr, None, true).with_polish_timeout_cap_ms(5_000);
+        assert_eq!(p.polish_timeout_for(10), 50);
+        assert_eq!(p.polish_timeout_for(POLISH_FREE_CHARS + 20), 250);
+    }
+
+    #[tokio::test]
+    async fn long_transcript_gets_a_longer_polish_budget() {
+        // 260 chars: budget = 50 + 200 * 10 = 2050 ms; the LLM takes 300 ms.
+        let long: &'static str = Box::leak("好".repeat(260).into_boxed_str());
+        let asr = FakeAsr::new(long, Lang::Zh);
+        let llm = FakeLlm::new(LlmBehavior::Sleep(300));
+        let p = pipeline(asr, Some(llm), true).with_polish_timeout_cap_ms(3_000);
+        let out = p
+            .run(tone(1000, 0.3), Mode::Dictate)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        assert_eq!(out.text, "too late");
+    }
+
+    #[tokio::test]
+    async fn progress_reports_llm_start_only_when_an_llm_runs() {
+        let seen = std::sync::Mutex::new(Vec::new());
+        let record = |p: Progress| seen.lock().unwrap().push(p);
+        let asr = FakeAsr::new("你好", Lang::Zh);
+        let p = pipeline(asr.clone(), None, true);
+        p.run_with_progress(tone(1000, 0.3), Mode::Dictate, &record)
+            .await
+            .unwrap();
+        assert!(seen.lock().unwrap().is_empty());
+        let llm = FakeLlm::new(LlmBehavior::Reply("Hello."));
+        let p = pipeline(asr, Some(llm), true);
+        p.run_with_progress(tone(1000, 0.3), Mode::Dictate, &record)
+            .await
+            .unwrap();
+        p.run_with_progress(tone(1000, 0.3), Mode::TranslateZhToEn, &record)
+            .await
+            .unwrap();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                Progress::LlmStarted(Mode::Dictate),
+                Progress::LlmStarted(Mode::TranslateZhToEn)
+            ]
+        );
     }
 
     #[test]
