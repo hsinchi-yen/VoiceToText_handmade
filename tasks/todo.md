@@ -43,7 +43,7 @@
   - [ ] 🧑 用自己的金鑰實測至少一家（可選）
 - [ ] W4 T1.10 SenseVoice-Small CPU 備援
   - [x] 程式已合併（2026-11-09）：`SenseVoiceAsr`（`sensevoice` feature，sherpa-onnx 2.0.1 shared）、`select::pick`；CPU 約 0.4 秒／10 秒音檔（TTS 測試）
-  - [ ] 待 T1.1 合併後：bench 對 SenseVoice 輸出先過 `zh_tw` 再算 CER
+  - [x] bench 對 ASR 輸出先過 `zh_tw` 再算 CER（overlay follow-ups，2026-11-09）
   - [ ] 🧑 真人錄音 bench
 - [ ] W5 T1.6 中翻英
 - [x] W5 T1.9 輸入紀錄（DPAPI 加密、7 天、不記錄的 App、日誌不含文字）— 2026-11-09 合併：SQLite＋DPAPI、200 筆、每小時清除、只有主視窗能呼叫、重新輸出只打進先前的視窗
@@ -53,6 +53,9 @@
   - [ ] 🧑 實機讓路測試（見 human-checklist）
 - [ ] W6 T1.7b 「新增雲端服務」精靈＋`docs/cloud-setup.md`
 - [ ] W6 T1.8 個人詞庫
+  - [x] 程式已合併（2026-11-09）：`Vocab` 檔案、ASR initial prompt（詞彙在前、基本句在後、72 字上限）、潤飾／翻譯 1000 字上限與清理、詞庫頁、CLI `--vocab`
+  - [ ] pipeline 讀入詞庫並監聽 `v2c:vocab-changed`（整合合併後接）
+  - [ ] 🧑 加入 5 個常用詞實測
 - [ ] W7 T1.11 設定視窗、首次啟動、NSIS 安裝檔、README（Defender 實測）
 - [ ] **檢查點 1**：日常使用一週，問題記在 `dogfood-windows.md`
 
