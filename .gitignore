@@ -9,6 +9,7 @@ apps/android/local.properties
 
 # Test audio is the user's own voice — never commit it
 tests/fixtures/audio/*.wav
+tests/fixtures/audio/*.m4a
 
 # Model files
 *.gguf

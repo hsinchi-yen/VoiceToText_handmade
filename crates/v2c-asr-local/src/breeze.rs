@@ -114,7 +114,10 @@ impl Default for BreezeOptions {
             use_gpu: true,
             flash_attn: true,
             n_threads: cores.clamp(1, 8),
-            language: LanguageMode::Detect,
+            // Measured on the user's recordings (tasks/spike-results.md, 2026-11-09): Breeze's
+            // language detection labels pure English as zh (p~0.95), and zh decoding keeps
+            // English words verbatim without translating them, so detection only adds ~290 ms.
+            language: LanguageMode::Fixed(DecodeLang::Zh),
             audio_ctx: None,
         }
     }
@@ -406,10 +409,10 @@ mod tests {
     }
 
     #[test]
-    fn default_options_enable_flash_attn_and_detection() {
+    fn default_options_enable_flash_attn_and_decode_as_zh() {
         let o = BreezeOptions::default();
         assert!(o.flash_attn);
-        assert_eq!(o.language, LanguageMode::Detect);
+        assert_eq!(o.language, LanguageMode::Fixed(DecodeLang::Zh));
         assert!(o.n_threads >= 1 && o.n_threads <= 8);
     }
 }

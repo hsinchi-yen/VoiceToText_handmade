@@ -38,6 +38,7 @@ pub struct Args {
 #[derive(clap::Args, Clone)]
 pub struct BreezeArgs {
     /// Decode language: `detect` (detect first; en -> en, else zh), `zh`, or `en`.
+    /// The desktop app decodes Breeze as `zh` (no detection); use `--lang zh` to match it.
     #[arg(long, default_value = "detect")]
     pub lang: String,
     /// Run on CPU even when built with `--features cuda`.

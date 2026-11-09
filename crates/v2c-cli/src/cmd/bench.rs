@@ -512,10 +512,11 @@ fn within_polish_target(total_ms: u64, audio_ms: u64) -> bool {
     per_10s(total_ms, audio_ms) <= TARGET_WITH_POLISH_MS_PER_10S
 }
 
-/// ASR time scaled to 10 s of audio. Short clips scale up their fixed overhead, so this
-/// errs on the strict side.
+/// ASR time normalised to 10 s of audio. The target is "a sentence of up to 10 s finishes
+/// within the budget", and Whisper's cost is nearly fixed (it always encodes a 30 s window),
+/// so clips up to 10 s are judged on their absolute time; longer clips are scaled down.
 fn per_10s(asr_ms: u64, audio_ms: u64) -> u64 {
-    asr_ms * 10_000 / audio_ms.max(1)
+    asr_ms * 10_000 / audio_ms.max(10_000)
 }
 
 fn within_latency_target(asr_ms: u64, audio_ms: u64) -> bool {
@@ -567,9 +568,13 @@ mod tests {
     fn latency_target_scales_to_ten_seconds() {
         assert!(within_latency_target(1200, 10_000));
         assert!(!within_latency_target(1201, 10_000));
-        assert!(within_latency_target(600, 5_000));
-        assert!(!within_latency_target(700, 5_000));
-        assert_eq!(per_10s(100, 0), 1_000_000);
+        // Up to 10 s of audio: absolute time against the target.
+        assert!(within_latency_target(1200, 5_000));
+        assert!(!within_latency_target(1201, 5_000));
+        assert_eq!(per_10s(100, 0), 100);
+        // Longer clips are scaled to 10 s.
+        assert!(within_latency_target(2400, 20_000));
+        assert!(!within_latency_target(2402, 20_000));
     }
 
     #[test]

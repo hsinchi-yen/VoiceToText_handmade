@@ -24,6 +24,8 @@
 //!    the Traditional words next to it are kept (我們的文件和视频 -> 我們的文件和影片).
 //! 4. OpenCC rewrites 台 to 臺 (台灣 -> 臺灣), which is valid but not how most people in Taiwan
 //!    write it, so 台 is kept as written.
+//! 5. 后 is shared (皇后) but in speech is almost always Simplified 後 (以后, 然后, 后天), and
+//!    OpenCC keeps it. It is rewritten to 後 except in "queen" contexts (see `resolve_shared`).
 
 use std::sync::OnceLock;
 
@@ -86,6 +88,24 @@ impl Converters {
     }
 
     /// Exists only in Traditional Chinese.
+    /// 后 is valid Traditional only as "queen" (皇后, 王后, 太后, 影后, 天后, 后妃); in all other
+    /// uses (以后, 然后, 之后, 后天) it is the Simplified form of 後. OpenCC keeps a lone 后 and
+    /// has no phrase for most of these, so recognisers that output Traditional text with a
+    /// stray 后 (SenseVoice) would keep it. Rewrite it outside the "queen" contexts.
+    fn resolve_shared(&self, run: &mut [char]) {
+        const QUEEN_BEFORE: &str = "皇王太影歌天母";
+        for i in 0..run.len() {
+            if run[i] != '后' {
+                continue;
+            }
+            let prev_queen = i > 0 && QUEEN_BEFORE.contains(run[i - 1]);
+            let next_queen = run.get(i + 1) == Some(&'妃');
+            if !prev_queen && !next_queen {
+                run[i] = '後';
+            }
+        }
+    }
+
     fn traditional_only(&self, c: char) -> bool {
         is_cjk(c) && changes(&self.t2s, c)
     }
@@ -148,7 +168,7 @@ pub fn to_zh_tw(text: &str) -> String {
         return text.to_owned();
     };
     // Already Traditional (Breeze's normal output): leave it exactly as recognised.
-    if !text.chars().any(|c| cc.simplified_only(c)) {
+    if !text.chars().any(|c| cc.simplified_only(c) || c == '后') {
         return text.to_owned();
     }
     let mut out = String::with_capacity(text.len());
@@ -157,11 +177,13 @@ pub fn to_zh_tw(text: &str) -> String {
         if is_cjk(c) {
             run.push(c);
         } else {
+            cc.resolve_shared(&mut run);
             cc.convert_run(&run, &mut out);
             run.clear();
             out.push(c);
         }
     }
+    cc.resolve_shared(&mut run);
     cc.convert_run(&run, &mut out);
     out
 }
@@ -260,6 +282,36 @@ mod tests {
             to_zh_tw("我們的文件都在這裡。这个视频的内存不够"),
             "我們的文件都在這裡。這個影片的記憶體不夠"
         );
+    }
+
+    #[test]
+    fn shared_characters_are_resolved_by_phrase() {
+        // SenseVoice output: Traditional except for a shared character in a known phrase.
+        let cases = [
+            (
+                "嗯，那個我們明天呃不對，是后天早上10點見面。",
+                "嗯，那個我們明天呃不對，是後天早上10點見面。",
+            ),
+            ("然后我們再說", "然後我們再說"),
+            ("以后再說", "以後再說"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(to_zh_tw(input), expected, "input: {input}");
+        }
+        // Valid Traditional uses of shared characters are kept.
+        for s in [
+            "皇后",
+            "皇后很美",
+            "王后",
+            "天后宮",
+            "后妃",
+            "影后",
+            "里長",
+            "表面",
+            "干擾",
+        ] {
+            assert_eq!(to_zh_tw(s), s);
+        }
     }
 
     #[test]
