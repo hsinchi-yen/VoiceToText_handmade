@@ -61,6 +61,14 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
   6. 系統管理員身分開記事本 → 顯示 elevated 錯誤，手動 Ctrl+V 能貼出文字
   7. Win+V：測試文字不在剪貼簿歷史裡
   8. （若有 VMware/VirtualBox）不加 `--paste` 也會自動走貼上；確認 150 ms 是否足夠
+- [ ] T1.10b 顯示卡記憶體管理（等桌面 App 整合完成後測；以預設 `auto` 啟動，另開 `nvidia-smi -l 1` 觀察）
+  1. 啟動後 Breeze 已載入
+  2. Blender（在 `heavy_apps` 名單）放到前景 → 5 秒內改用 CPU、浮動標籤提示一次、顯存降約 1.5 GB
+  3. 關掉 Blender → 約 20～25 秒後載回 Breeze
+  4. 全螢幕遊戲或吃顯存的程式讓可用量低於 2 GB → 約 10 秒後卸載；結束後恢復
+  5. 閒置 15 分鐘 → 卸載；再按熱鍵第一句稍慢
+  6. profile 切到 `cpu_only` 再切回 → 立即卸載、切回後重新載入
+  7. 依 `docs/local-setup.md` 設定 NVIDIA 控制面板、Windows 圖形設定、LM Studio
 - [ ] 在 LM Studio 載入 3B 模型並啟動伺服器（T1.5 前）
 - [ ] 各卡的實機驗收（見各卡「🧑 需人工」）
 - [ ] 檢查點 1：日常使用一週，問題記在 `tasks/dogfood-windows.md`
