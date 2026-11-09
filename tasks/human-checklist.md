@@ -51,7 +51,7 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] 檢查點 0 核准
 
 ## Phase 1
-- [ ] T1.10 SenseVoice（模型已下載到 `%LOCALAPPDATA%2c\models\sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17\`；同層的 `dl-sensevoice\sv.tar.bz2` 可刪）：錄好音檔後執行 `cargo run -p v2c-cli --release --features sensevoice -- bench --asr sensevoice --model "$env:LOCALAPPDATA2c\models\sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17" tests/fixtures/audio`
+- [ ] T1.10 SenseVoice（模型已下載到 `%LOCALAPPDATA%\v2c\models\sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17\`；同層的 `dl-sensevoice\sv.tar.bz2` 可刪）：錄好音檔後執行 `cargo run -p v2c-cli --release --features sensevoice -- bench --asr sensevoice --model "$env:LOCALAPPDATA\v2c\models\sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17" tests/fixtures/audio`
 - [ ] T1.2 剪貼簿貼上＋還原（指令：`cargo run -p v2c-cli -- inject-test --paste "測試\n第二行"`，3 秒內切到目標視窗）
   1. `cargo test -p v2c-platform -- --ignored`（兩個實機剪貼簿測試，會短暫改動剪貼簿；應全部通過）；`inject-test` 結束時應印 `clipboard: restored`
   2. 小畫家框選並複製 → 對記事本執行指令，出現兩行 → 回小畫家 Ctrl+V，原圖仍在
