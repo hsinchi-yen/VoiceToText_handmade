@@ -13,6 +13,7 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 
 ## 建議的系統設定（一次性）
 - [ ] 系統環境變數 `CUDA_PATH` 目前指向 v11.0：改成 `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.5`，並新增 `CUDA_PATH_V13_5`（同值）。GPU 版編譯需要。
+  - **同時修正 `Path`**（2026-11-09 發現）：系統 `Path` 只有 `CUDA\v11.0\bin` 與 `CUDA\v11.0\libnvvp`，CMake 會抓到 v11 的 nvcc 與標頭而編譯失敗（「unsupported Microsoft Visual Studio version」）。移除這兩項，加入 `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.5\bin` 與 `...\v13.5\bin\x64`（`cublas64_13.dll` 在 `bin\x64`，少了它 v2c-cli 會以代碼 53 直接結束）。改完重開終端機。
 - [ ] 把 VS Build Tools 內建的 CMake 加入 PATH：`C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin`
 - [ ] 每次開 PowerShell 編譯前（或設成使用者環境變數）：
   ```powershell
@@ -21,9 +22,9 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
   ```
 
 ## Phase 0（Phase 1 已依你同意平行開發；以下實測若失敗，agent 會回頭修）
-- [ ] T0.1 錄音：依 `tests/fixtures/audio/README.md` 錄 10 段 WAV
-- [ ] T0.1 轉檔：`powershell -ExecutionPolicy Bypass -File tools\convert-breeze\convert-breeze.ps1`，問 `Proceed? [y/N]` 時輸入 `y`（約 20～40 分鐘、下載約 3 GB）；把印出的檔案大小與 SHA-256 填進 `tasks/spike-results.md`
-- [ ] T0.1 量測（設好上面的環境變數）：
+- [x] T0.1 錄音：依 `tests/fixtures/audio/README.md` 錄 10 段 WAV（2026-11-09 完成，m4a 由 agent 轉成 WAV）
+- [x] （2026-11-09 agent 代為執行，結果在 `spike-results.md`）T0.1 轉檔：`powershell -ExecutionPolicy Bypass -File tools\convert-breeze\convert-breeze.ps1`，問 `Proceed? [y/N]` 時輸入 `y`（約 20～40 分鐘、下載約 3 GB）；把印出的檔案大小與 SHA-256 填進 `tasks/spike-results.md`
+- [x] （2026-11-09 agent 代為執行：q5_0 平均 860 ms、CER 2.9%，通過）T0.1 量測（設好上面的環境變數）：
   ```powershell
   cargo run -p v2c-cli --release --features cuda -- bench --asr breeze --model models\ggml-breeze-asr-25-q5_0.bin tests\fixtures\audio
   cargo run -p v2c-cli --release --features cuda -- bench --asr breeze --model models\ggml-breeze-asr-25-q8_0.bin tests\fixtures\audio
@@ -112,6 +113,16 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
   - polished 那行沒有改變語意、沒有多出或少掉內容、問句沒被回答、「幫我寫一封信…」這類請求沒被執行
   - filler-01 應得到「我們後天早上十點見面。」；沒有簡體字
   - 每段的 `PASS/FAIL asr+polish (… per 10 s, target <= 2500)` 與摘要的 `polish verdict`
+- [ ] T1.11 安裝檔與初次設定（安裝檔：`C:\Users\lance.tn\.v2ct-t111\release\bundle\nsis\v2c_0.1.0_x64-setup.exe`，約 439 MiB，SHA-256 `E50195529DCAA61C9E963DB857EFA2A1FD1D9378BC0EF07793AF8597AD2BF569`；可用 `cd apps/desktop && npm run tauri:build:cuda` 重建）
+  1. **授權確認**：安裝檔隨附 VC++ 執行階段（`msvcp140.dll` 等），前提是你有有效的 Visual Studio（含 Build Tools／Community）授權；確認後打勾
+  2. **Windows Sandbox（模擬沒有 NVIDIA 的乾淨電腦）**：把安裝檔複製進 Sandbox 執行 → SmartScreen 按「其他資訊 → 仍要執行」→ 不需要系統管理員權限即可安裝 → 啟動時沒有缺 DLL 的錯誤 → 自動進入初次設定
+     - 偵測顯示卡應顯示「沒有偵測到 NVIDIA」→ 下載 SenseVoice（約 160 MB；試暫停與繼續）→ 自動重新啟動並從「麥克風」步驟接續 → 測試麥克風（Sandbox 需先開麥克風）→ 在文字框按住右 Ctrl 說一句
+     - 解除安裝後 `%APPDATA%\v2c` 仍在
+  3. **實機安裝（有 NVIDIA）**：初次設定用「從本機檔案匯入」選 `ggml-breeze-asr-25-q5_0.bin` → 日誌出現 Breeze active；設定頁 VRAM 條約每 2 秒更新；打開「開機自動啟動」後重開機 → v2c 只出現在系統列、不跳出主視窗；這時再從開始功能表開 v2c → 只叫出原本那一份的視窗，說一句不會打兩次
+  4. **設定頁**：改按住判定時間、潤飾開關、route 後立即生效；麥克風與輸入紀錄設定會提示需重新啟動；`config.toml` 原有註解保留
+  5. **Defender**：在測試機執行 `"%ProgramFiles%\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -File <安裝檔>`；有誤報就記下來（README 已寫處理方式）
+  6. **Breeze 下載網址**：把轉好的 GGML 上傳到你的 Hugging Face repo 後，把 url、sha256、size 填進 `apps/desktop/src-tauri/models.json`（目前是 `PLACEHOLDER-HF-USER`，App 會顯示「尚未提供下載」）
+  7. 要分享給 RTX 30／40 系列使用者時，告訴 agent 加入更多 CUDA 架構（目前只建 sm_75，新顯示卡第一次載入較慢）
 - [ ] 各卡的實機驗收（見各卡「🧑 需人工」）
 - [ ] 檢查點 1：日常使用一週，問題記在 `tasks/dogfood-windows.md`
 

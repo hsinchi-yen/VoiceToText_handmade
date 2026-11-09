@@ -11,7 +11,8 @@
   - [x] 🧑 你審查介面後合併（2026-11-09 核准）
 - [ ] W1 T0.1 Breeze-ASR-25 轉 GGML＋量測（≤ 1.2 秒、繁體、英文保留、純英不被翻譯）＋ VRAM 實測
   - [x] 程式已合併（2026-11-09）：`BreezeAsr`、轉檔腳本、`transcribe`/`bench`（含 PASS/FAIL 判定、簡體字偵測）；CPU 與 CUDA 版皆可編譯
-  - [ ] 🧑 轉檔、錄音、量測、VRAM（見 human-checklist）
+  - [x] 錄音（你）、轉檔、量測（agent，2026-11-09）：q5_0 平均 860 ms／最大 961 ms、CER 2.9%、無簡體字、英文未被翻譯；預設 q5_0；Breeze 改為直接以 zh 解碼（省約 290 ms）。見 `spike-results.md`
+  - [ ] 🧑 VRAM 實測（Breeze＋LM Studio 四種組合）、AMD 內顯
 - [ ] W1 T0.2 熱鍵狀態機＋Windows 掛勾
   - [x] 程式已合併（2026-11-09）：狀態機 30 個測試涵蓋第 3 節每一列；掛勾忽略 v2c 自己注入的按鍵
   - [ ] 🧑 `hotkey-test` 實機按鍵
@@ -46,7 +47,7 @@
 - [ ] W4 T1.10 SenseVoice-Small CPU 備援
   - [x] 程式已合併（2026-11-09）：`SenseVoiceAsr`（`sensevoice` feature，sherpa-onnx 2.0.1 shared）、`select::pick`；CPU 約 0.4 秒／10 秒音檔（TTS 測試）
   - [x] bench 對 ASR 輸出先過 `zh_tw` 再算 CER（overlay follow-ups，2026-11-09）
-  - [ ] 🧑 真人錄音 bench
+  - [x] 真人錄音 bench（2026-11-09）：平均 219 ms、CER 8.6%；「后」→「後」已修
 - [ ] W5 T1.6 中翻英
   - [x] 右 Ctrl+Shift 走 `TranslateZhToEn`；沒有 LLM 時提示「中翻英需要 LM Studio 或雲端服務」（整合，2026-11-09 合併）
   - [ ] 🧑 實機說 5 句中文確認譯文
@@ -64,6 +65,10 @@
   - [x] pipeline 讀入詞庫、監聽 `v2c:vocab-changed`（整合，2026-11-09 合併）
   - [ ] 🧑 加入 5 個常用詞實測
 - [ ] W7 T1.11 設定視窗、首次啟動、NSIS 安裝檔、README（Defender 實測）
+  - [x] 程式完成（2026-11-09，分支 `t1.11-settings-installer`）：設定頁（含 VRAM 使用條）、開機自動啟動、初次設定與模型下載（續傳、SHA-256、`models.json`）、只有主視窗能呼叫指令的 ACL、NSIS 安裝檔（只裝給目前使用者）、隨附 cuBLAS 與 VC++ 執行階段、README；在建置機上用 Defender 掃描沒有發現威脅
+  - [x] 審查修正：只允許一個執行個體、沒有模型或剛重啟時一定顯示主視窗、匯入與下載的暫存檔分開、manifest 一定要有 size、README 用字（2026-11-09 合併，a38f3fe）
+  - [ ] 延後處理：熱鍵錄製（平台層目前只支援右 Ctrl，所以只顯示不能改）；下載模型後改用重新啟動，等之後新增 `Engine::rescan_models()`；Breeze 下載網址等你上傳到 Hugging Face
+  - [ ] 🧑 Sandbox 乾淨安裝、實機安裝、Defender、VS 授權確認（見 human-checklist）
 - [ ] **檢查點 1**：日常使用一週，問題記在 `dogfood-windows.md`
 
 ## Phase 2 — Android

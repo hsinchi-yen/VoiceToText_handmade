@@ -105,8 +105,10 @@ $env:CMAKE_CUDA_ARCHITECTURES = '75'         # 只編 RTX 2060 (Turing)，省很
 
 | 檔案 | 大小 (MB) | SHA-256 |
 |------|-----------|---------|
-| ggml-breeze-asr-25-q5_0.bin | | |
-| ggml-breeze-asr-25-q8_0.bin | | |
+| ggml-breeze-asr-25-q5_0.bin | 1031（1,080,732,108 bytes） | `9be65cda66ee424a261cae9e9864e5aceb2f1be63cc01e5b670e57d022fdf335` |
+| ggml-breeze-asr-25-q8_0.bin | 1579（1,656,129,708 bytes） | `669eb226a0e23b42465a6d2f60ce1902fbd534e19faab59511730420eb25e90d` |
+
+（2026-11-09 由 agent 執行 `convert-breeze.ps1 -Yes` 轉檔；whisper.cpp v1.8.3 quantize）
 
 ### 延遲與準確度（🧑 填，release＋cuda）
 
@@ -114,32 +116,49 @@ $env:CMAKE_CUDA_ARCHITECTURES = '75'         # 只編 RTX 2060 (Turing)，省很
 
 | 段落 | 音檔 ms | q5_0 ASR ms（偵測＋解碼） | q5_0 CER | q8_0 ASR ms | q8_0 CER | 偵測語言 | 繁體？ | 英文保留／未被翻譯？ |
 |------|---------|---------------------------|----------|-------------|----------|----------|--------|----------------------|
-| zh-01 | | | | | | | | |
-| zh-02 | | | | | | | | |
-| zh-03 | | | | | | | | |
-| en-01 | | | | | | | | |
-| en-02 | | | | | | | | |
-| mix-01 | | | | | | | | |
-| mix-02 | | | | | | | | |
-| mix-03 | | | | | | | | |
-| filler-01 | | | | | | | | |
-| vocab-01 | | | | | | | | |
-| **平均／最大** | | | | | | | | |
+| zh-01 | 6975 | 824（288＋536） | 0.0% | 799 | 0.0% | zh 0.99 | ✅ | — |
+| zh-02 | 6592 | 908（293＋615） | 5.3% | 905 | 5.3% | zh 0.99 | ✅ | — |
+| zh-03 | 6272 | 890（291＋599） | 0.0% | 893 | 0.0% | zh 0.99 | ✅ | — |
+| en-01 | 6719 | 835（300＋535） | 2.0% | 776 | 2.0% | **zh 0.95** | — | ✅ 未被翻譯（slides→sliders） |
+| en-02 | 4863 | 770（286＋484） | 0.0% | 764 | 0.0% | **zh 0.95** | — | ✅ |
+| mix-01 | 4416 | 800（286＋514） | 4.3% | 789 | 4.3% | zh 0.98 | ✅ | ✅ meeting、delay |
+| mix-02 | 6976 | 842（289＋553） | 0.0% | 811 | 0.0% | zh 0.99 | ✅ | ✅ code、push、review |
+| mix-03 | 5312 | 875（292＋583） | 0.0% | 818 | 0.0% | zh 0.99 | ✅ | ✅ feature、deadline（QA→qa） |
+| filler-01 | 7680 | 896（292＋604） | 10.5% | 823 | 21.1% | zh 0.99 | ✅ 後天 | q8 漏掉「嗯」「呃」 |
+| vocab-01 | 7168 | 961（301＋660） | 6.5% | 936 | 3.2% | zh 0.99 | ✅ | q5 開頭「請把」→「錢包」（bench 未帶詞庫） |
+| **平均／最大** | | **860／961** | **2.9%** | **831／936** | **3.6%** | | 無簡體字 | |
 
-`--lang zh` 對照：en-01 輸出＿＿＿＿、en-02 輸出＿＿＿＿（有沒有被翻成中文？）
+2026-11-09 由 agent 以你的錄音實測（release＋cuda，RTX 2060，CUDA 13.5，sm_75，flash attention 開）。模型載入約 2.3 秒、暖機 781 ms。
+
+`--lang zh`（q5_0，跳過語言偵測）：平均 **577 ms**、最大 669 ms、CER 2.9%（與偵測時相同）；en-01／en-02 仍輸出原本的英文，**沒有被翻成中文**。
+
+觀察與決定：
+- **速度通過**：每段實際 ASR 時間都 ≤ 961 ms（目標 1200 ms）。bench 原本把短音檔「換算成每 10 秒」，4.4 秒音檔 800 ms 會被算成 1813 ms 而判 FAIL；Whisper 固定編碼 30 秒視窗、成本幾乎固定，這樣換算不合理。已改為「10 秒以內的句子看實際時間，超過 10 秒才換算」（`bench.rs` `per_10s`）。
+- **語言偵測沒有用**：Breeze 把純英文也判成 zh（p≈0.95），而以 zh 解碼英文照樣保留、不翻譯，偵測只多花約 290 ms。已把 `BreezeOptions` 預設改為直接以 zh 解碼（桌面 App 跟著生效；CLI 的 `--lang` 預設仍是 `detect`，`--lang zh` 等於 App 行為）。
+- **預設量化：q5_0**。q8_0 速度只快約 30 ms、CER 沒有比較好（3.6% vs 2.9%），卻多 550 MB 顯存與硬碟。
+- **Breeze 不輸出標點**（例：「今天下午三點要開會記得把報告準備好」）。開 LM Studio 潤飾時會補標點；潤飾關閉或 LM Studio 沒開時，輸出沒有標點 —— 列入 dogfood 觀察，必要時再加規則式補句號。
+- 數字會輸出阿拉伯數字（10 點），CER 算錯字，但實際使用可接受。
 
 ### VRAM（🧑 填，`nvidia-smi` memory.used，MiB）
 
-執行前（平常狀態）基準：＿＿＿＿ MiB／6144 MiB
+執行前（平常狀態）基準：**1267 MiB**／6144 MiB（Windows 桌面＋其他程式；卸載後回到 1004 MiB）
 
-| 組合 | Breeze 用量 | LM Studio 用量 | 合計（v2c＋LM Studio） | 剩餘 | 畫面卡頓？（拖曳視窗／播影片） |
-|------|-------------|----------------|------------------------|------|------------------------------|
-| Breeze q5_0 ＋ LM Studio 3B | | | | | 是／否 |
-| Breeze q5_0 ＋ LM Studio 4B | | | | | 是／否 |
-| Breeze q8_0 ＋ LM Studio 3B | | | | | 是／否 |
-| Breeze q8_0 ＋ LM Studio 4B | | | | | 是／否 |
+2026-11-10 由 agent 實測：`nvidia-smi` 每 0.3 秒取樣取最高值；LM Studio 載入 `qwen2.5-coder-3b-instruct`（`--gpu max`、context 8192）；Breeze 用 `bench --lang zh --repeat 10`（100 次辨識）。你只有 3B 模型，4B 兩列沒測。
 
-「均衡」方案合計 ≤ 4 GB？ 是／否
+| 組合 | Breeze 用量 | LM Studio 用量 | 合計（v2c＋LM Studio） | 剩餘 | ASR 平均／最大 | 畫面卡頓？（拖曳視窗／播影片） |
+|------|-------------|----------------|------------------------|------|----------------|------------------------------|
+| Breeze q5_0 單獨 | 1779 | — | 1779 | 3098 | — | 🧑 |
+| Breeze q5_0 ＋ LM Studio 3B | 1645 | 2373 | 4018 | **859** | 599／740 ms | 🧑 |
+| Breeze q5_0 ＋ LM Studio 4B | 未測 | | | | | |
+| Breeze q8_0 ＋ LM Studio 3B | 2137 | 2373 | 4510 | **367** | 614／997 ms | 🧑 |
+| Breeze q8_0 ＋ LM Studio 4B | 未測 | | | | | |
+
+「均衡」方案合計 ≤ 4 GB？ q5_0＋3B：**約 4.0 GB（剛好在邊界）**；q8_0＋3B：否（4.4 GB）。
+
+**重要發現：預設的 `vram_reserve_mb = 2048` 和「Breeze＋LM Studio 3B 同時在顯卡上」互斥。**
+- LM Studio 3B 載入後可用約 2504 MiB；`GpuGuard::can_load` 需要 `2048（保留）＋約 1700（Breeze）＋margin`，所以 Breeze 不會載入，App 會改用 CPU 的 SenseVoice。
+- 若 Breeze 先載入、LM Studio 後載入，可用量掉到約 859 MiB < 2048，約 10 秒後 Breeze 會被卸載。
+- 也就是說，預設設定下「開著 LM Studio 3B」＝「辨識改用 SenseVoice」。要兩者同時在 GPU 上，保留額度需降到約 700 MiB 以下（剩 859 MiB 時畫面是否卡頓要你實際確認），或讓 LM Studio 用 CPU／較少 GPU 層。待你決定。
 
 ### 筆電能否把畫面輸出切到 AMD 內顯（🧑 填）
 
@@ -147,7 +166,29 @@ $env:CMAKE_CUDA_ARCHITECTURES = '75'         # 只編 RTX 2060 (Turing)，省很
 - MUX 開關／Advanced Optimus：有／沒有
 - 結果：＿＿＿＿
 
+## T1.10 SenseVoice-Small 真人錄音（2026-11-09，CPU，release＋sensevoice）
+
+指令：`cargo run -p v2c-cli --release --features sensevoice -- bench --asr sensevoice --model "%LOCALAPPDATA%\v2c\models\sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17" tests/fixtures/audio`（WAV 由你的 m4a 以 ffmpeg 轉成 16 kHz mono s16）
+
+| 段落 | 音檔 ms | ASR ms | CER | 偵測 | 主要差異 |
+|------|---------|--------|-----|------|----------|
+| zh-01 | 6975 | 236 | 0.0% | Zh | — |
+| zh-02 | 6592 | 235 | 5.3% | Zh | 漏「再」 |
+| zh-03 | 6272 | 207 | 0.0% | Zh | — |
+| en-01 | 6719 | 235 | 3.9% | En | — |
+| en-02 | 4863 | 177 | 0.0% | En | — |
+| mix-01 | 4416 | 170 | 17.4% | Mixed | `meetinging`（模型重複字尾）、「下個禮拜」 |
+| mix-02 | 6976 | 243 | 3.7% | Mixed | `coded` |
+| mix-03 | 5312 | 168 | 17.2% | Mixed | `featureature`（模型重複字尾）、`qa` 小寫 |
+| filler-01 | 7680 | 280 | 15.8% | Zh | 「后天」沒轉成「後天」（已修，見下）、「10點」 |
+| vocab-01 | 7168 | 242 | 22.6% | Mixed | `lMt`、`v to c`（SenseVoice 不吃詞庫 prompt） |
+| **平均／最大** | | **219／280** | **8.6%** | | |
+
+- 速度：全部 PASS（約 0.35 秒／10 秒音檔，RTF 0.035），沒有簡體字警告。
+- 「后」修正：`zh_tw` 原本把「后」視為簡繁共用字而保留（皇后），SenseVoice 輸出繁體句中夾一個「后」就不會被轉。已改為「后」除了皇后、王后、太后、天后、影后、后妃等用法外一律轉「後」（`postprocess::zh_tw::resolve_shared`，有測試）。
+- 英文字尾重複（`meetinging`、`featureature`）是 SenseVoice 模型本身的輸出，`clean_output` 沒有改動文字；不做規則式刪除（會誤傷 singing、ringing）。開潤飾（LM Studio）時通常會被修正；主力 Breeze 量測後再比較。
+
 ### 結論（量測後填）
 
-- 預設量化：q5_0／q8_0
-- 是否需要備案（Whisper large-v3-turbo）：是／否
+- 預設量化：**q5_0**（2026-11-09 實測）
+- 是否需要備案（Whisper large-v3-turbo）：**否**（速度與準確度都達標；VRAM 待你實測）
