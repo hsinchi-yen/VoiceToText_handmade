@@ -24,3 +24,10 @@ v2c-platform.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 hound.workspace = true
+# `bench --llm lmstudio`: async runtime and the shared HTTP client for `OpenAiCompatLlm`.
+reqwest.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+wiremock.workspace = true

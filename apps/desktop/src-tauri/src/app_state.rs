@@ -39,16 +39,7 @@ pub fn load_or_create_config(path: &Path) -> (Config, Option<&'static str>) {
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let cfg = Config::with_defaults();
-            let written = path
-                .parent()
-                .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|()| {
-                    let text = cfg
-                        .to_toml_string()
-                        .map_err(|e| std::io::Error::other(e.to_string()))?;
-                    std::fs::write(path, text)
-                });
-            match written {
+            match save_config(path, &cfg) {
                 Ok(()) => info!("created default config.toml"),
                 Err(e) => warn!(error = %e, "could not write default config.toml"),
             }
@@ -59,6 +50,20 @@ pub fn load_or_create_config(path: &Path) -> (Config, Option<&'static str>) {
             (Config::with_defaults(), Some("config_unreadable"))
         }
     }
+}
+
+/// Writes `cfg` to `path` (creating the folder), via a temporary file so a crash never leaves
+/// a half-written `config.toml`.
+pub fn save_config(path: &Path, cfg: &Config) -> std::io::Result<()> {
+    let text = cfg
+        .to_toml_string()
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path)
 }
 
 pub fn pipeline_config(cfg: &Config) -> PipelineConfig {

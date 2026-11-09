@@ -11,7 +11,8 @@ use crate::{
     audio::AudioClip,
     error::{ProviderErrorKind, Stage},
     llm::LlmProvider,
-    postprocess::zh_tw::to_zh_tw,
+    postprocess::{fillers::strip_fillers, zh_tw::to_zh_tw},
+    prompts,
     redact::Redacted,
     Lang, Mode, Result, V2cError,
 };
@@ -152,11 +153,15 @@ impl Pipeline {
                     }
                     None => {
                         warnings.push(Warning::PolishFellBack);
-                        // TODO(T1.5): fall back to `postprocess::fillers::strip_fillers`.
-                        text
+                        strip_fillers(&text)
                     }
                 };
                 (text, transcript.lang)
+            }
+            // Polish on but no LLM available (LM Studio not running, plan §6.1): rule-based
+            // filler removal only.
+            (Mode::Dictate, None) if self.cfg.polish_enabled => {
+                (strip_fillers(&text), transcript.lang)
             }
             (Mode::Dictate, _) => (text, transcript.lang),
             (Mode::TranslateZhToEn, None) => {
@@ -165,7 +170,10 @@ impl Pipeline {
             (Mode::TranslateZhToEn, Some(llm)) => {
                 let t = Instant::now();
                 let translated = llm
-                    .complete(&translate_system_prompt(&self.cfg.vocabulary), &text)
+                    .complete(
+                        &prompts::translate(&self.cfg.vocabulary),
+                        &prompts::wrap_transcript(&text),
+                    )
                     .await?;
                 llm_ms = Some(elapsed_ms(t));
                 let t = Instant::now();
@@ -214,9 +222,10 @@ impl Pipeline {
 
     /// Calls the LLM with the polish timeout. `None` on error, timeout, or empty output.
     async fn polish(&self, llm: &dyn LlmProvider, text: &str) -> Option<String> {
-        let system = polish_system_prompt(&self.cfg.vocabulary);
+        let system = prompts::polish(&self.cfg.vocabulary);
+        let user = prompts::wrap_transcript(text);
         let limit = Duration::from_millis(self.cfg.polish_timeout_ms);
-        match tokio::time::timeout(limit, llm.complete(&system, text)).await {
+        match tokio::time::timeout(limit, llm.complete(&system, &user)).await {
             Ok(Ok(out)) if !out.trim().is_empty() => Some(out.trim().to_owned()),
             Ok(Ok(_)) => {
                 warn!(
@@ -254,23 +263,6 @@ fn peak_window_rms(clip: &AudioClip) -> f32 {
 
 fn elapsed_ms(since: Instant) -> u64 {
     since.elapsed().as_millis() as u64
-}
-
-/// Placeholder until T1.5 implements `prompts::polish` (calling it now would panic).
-fn polish_system_prompt(vocabulary: &[String]) -> String {
-    let _ = vocabulary;
-    // TODO(T1.5): return `prompts::polish(vocabulary)`.
-    "Remove filler words from the user's dictated text without changing its meaning. \
-     Output only the result."
-        .to_owned()
-}
-
-/// Placeholder until T1.6 implements `prompts::translate` (calling it now would panic).
-fn translate_system_prompt(vocabulary: &[String]) -> String {
-    let _ = vocabulary;
-    // TODO(T1.6): return `prompts::translate(vocabulary)`.
-    "Translate the user's Chinese text into natural English. Output only the translation."
-        .to_owned()
 }
 
 #[cfg(test)]
@@ -460,11 +452,10 @@ mod tests {
         assert_eq!(out.text, "這個軟體");
         assert!(out.timings.llm_ms.is_some());
         assert!(out.warnings.is_empty());
-        // The LLM receives the already-converted ASR text.
-        assert_eq!(
-            llm.last_user.lock().unwrap().as_deref(),
-            Some("嗯 這個軟體")
-        );
+        // The LLM receives the already-converted ASR text, wrapped as data.
+        let user = llm.last_user.lock().unwrap().clone().unwrap();
+        assert_eq!(user, prompts::wrap_transcript("嗯 這個軟體"));
+        assert_eq!(prompts::unwrap_transcript(&user), "嗯 這個軟體");
     }
 
     #[tokio::test]
@@ -493,6 +484,45 @@ mod tests {
             .unwrap();
         assert_eq!(out.text, "你好");
         assert_eq!(out.warnings, vec![Warning::PolishFellBack]);
+    }
+
+    #[tokio::test]
+    async fn polish_failure_strips_fillers() {
+        let asr = FakeAsr::new("嗯，我們明天見。", Lang::Zh);
+        let p = pipeline(asr, Some(FakeLlm::new(LlmBehavior::Fail)), true);
+        let out = p
+            .run(tone(1000, 0.3), Mode::Dictate)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(out.text, strip_fillers("嗯，我們明天見。"));
+        assert!(!out.text.starts_with('嗯'), "{}", out.text);
+        assert_eq!(out.warnings, vec![Warning::PolishFellBack]);
+    }
+
+    #[tokio::test]
+    async fn polish_without_llm_strips_fillers() {
+        let asr = FakeAsr::new("嗯，我們明天見。", Lang::Zh);
+        let p = pipeline(asr, None, true);
+        let out = p
+            .run(tone(1000, 0.3), Mode::Dictate)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!out.text.starts_with('嗯'), "{}", out.text);
+        assert_eq!(out.timings.llm_ms, None);
+    }
+
+    #[tokio::test]
+    async fn polish_disabled_keeps_text_verbatim() {
+        let asr = FakeAsr::new("嗯，我們明天見。", Lang::Zh);
+        let p = pipeline(asr, None, false);
+        let out = p
+            .run(tone(1000, 0.3), Mode::Dictate)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(out.text, "嗯，我們明天見。");
     }
 
     #[tokio::test]

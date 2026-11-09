@@ -17,6 +17,8 @@ pub mod pipeline;
 pub mod postprocess;
 pub mod prompts;
 pub mod redact;
+pub mod route;
+pub mod secrets;
 pub mod trigger;
 pub mod vocab;
 
