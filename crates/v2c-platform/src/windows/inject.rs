@@ -9,8 +9,10 @@
 //! - Typing that the OS only partly accepts returns [`InjectError::Partial`];
 //!   [`run_with_fallback`] then pastes the part that was not typed.
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
+use thiserror::Error;
 use v2c_core::config::NewlineKey;
 use v2c_core::inject_plan::Action;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -20,7 +22,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_V,
 };
 
-use super::clipboard::{self, WinClipboard};
+use super::clipboard::{self, RestoreOutcome, WinClipboard};
 use super::foreground;
 use crate::{InjectError, Injector};
 
@@ -93,22 +95,45 @@ impl Injector for SendInputInjector {
     }
 }
 
+/// Error from [`run_with_fallback`].
+#[derive(Debug, Error, PartialEq, Eq)]
+#[error("{error}")]
+pub struct FallbackError {
+    pub error: InjectError,
+    /// Part of the text was already typed and the error came from pasting the rest. With
+    /// `InjectError::Elevated` this means only the *untyped remainder* is on the clipboard.
+    pub after_partial_typing: bool,
+}
+
+impl From<InjectError> for FallbackError {
+    fn from(error: InjectError) -> Self {
+        FallbackError {
+            error,
+            after_partial_typing: false,
+        }
+    }
+}
+
 /// Runs `actions`; if the OS accepted only part of the typed input, pastes the rest
 /// (tasks/plan.md section 4.3). Other errors, including `Elevated`, are returned unchanged.
 pub fn run_with_fallback<I: Injector + ?Sized>(
     injector: &I,
     actions: &[Action],
-) -> Result<(), InjectError> {
+) -> Result<(), FallbackError> {
     match injector.run(actions) {
         Err(InjectError::Partial { sent, .. }) => {
             let rest = actions_text(&remaining_after(actions, sent));
             if rest.is_empty() {
-                Ok(())
-            } else {
-                injector.run(&[Action::Paste(rest)])
+                return Ok(());
             }
+            injector
+                .run(&[Action::Paste(rest)])
+                .map_err(|error| FallbackError {
+                    error,
+                    after_partial_typing: true,
+                })
         }
-        other => other,
+        other => other.map_err(FallbackError::from),
     }
 }
 
@@ -183,27 +208,63 @@ fn typed_events(action: &Action) -> usize {
     }
 }
 
+/// 0 = no paste yet / last paste failed, else `outcome_code`.
+static LAST_RESTORE: AtomicU8 = AtomicU8::new(0);
+
+fn outcome_code(o: RestoreOutcome) -> u8 {
+    match o {
+        RestoreOutcome::Restored => 1,
+        RestoreOutcome::SkippedChangedByOther => 2,
+    }
+}
+
+/// What happened to the user's clipboard after the most recent successful paste (any
+/// thread), so callers can log it, e.g. `outcome.as_str()`; `None` if the last paste failed
+/// or none ran. This crate has no logger of its own.
+pub fn last_restore_outcome() -> Option<RestoreOutcome> {
+    match LAST_RESTORE.load(Ordering::Relaxed) {
+        1 => Some(RestoreOutcome::Restored),
+        2 => Some(RestoreOutcome::SkippedChangedByOther),
+        _ => None,
+    }
+}
+
 /// Clipboard paste with restore; modifiers must already be released.
 fn paste(text: &str) -> Result<(), InjectError> {
+    LAST_RESTORE.store(0, Ordering::Relaxed);
     let mut cb = WinClipboard::new()?;
-    clipboard::paste_with_restore(&mut cb, text, send_ctrl_v, || {
-        std::thread::sleep(PASTE_SETTLE)
-    })
-    .map(|_| ())
+    let outcome = clipboard::paste_with_restore(&mut cb, text, send_ctrl_v, PASTE_SETTLE)?;
+    LAST_RESTORE.store(outcome_code(outcome), Ordering::Relaxed);
+    Ok(())
 }
 
 fn send_ctrl_v() -> Result<(), InjectError> {
     let events = ctrl_v_events();
     let accepted = send(&events);
-    if accepted < events.len() {
-        // Never leave Ctrl held down.
-        send(&[vk_input(VK_V, true), vk_input(VK_CONTROL, true)]);
+    let (key_ups, pasted) = ctrl_v_cleanup(accepted);
+    let ups: Vec<INPUT> = key_ups.iter().map(|&vk| vk_input(vk, true)).collect();
+    send(&ups);
+    if !pasted {
         return Err(InjectError::Os(format!(
             "Ctrl+V not accepted ({accepted} of {} events); text left on the clipboard",
             events.len()
         )));
     }
     Ok(())
+}
+
+/// After `accepted` of the 4 [`ctrl_v_events`]: which key-ups still need sending (so no
+/// key stays down), and whether the paste happened. Once Ctrl-down and V-down went through
+/// the app has pasted, so we treat it as success (and restore) rather than risk a
+/// duplicate paste on retry.
+fn ctrl_v_cleanup(accepted: usize) -> (Vec<VIRTUAL_KEY>, bool) {
+    match accepted {
+        0 => (vec![], false),
+        1 => (vec![VK_CONTROL], false),
+        2 => (vec![VK_V, VK_CONTROL], true),
+        3 => (vec![VK_CONTROL], true),
+        _ => (vec![], true),
+    }
 }
 
 fn ctrl_v_events() -> Vec<INPUT> {
@@ -539,22 +600,28 @@ mod tests {
         assert_eq!(remaining_after(&a, 2), vec![t("b")]);
     }
 
-    /// Returns `first` on the first call and `Ok` afterwards.
+    /// Returns `first`, then `then`, then `Ok`.
     struct FakeInjector {
         first: std::cell::RefCell<Option<Result<(), InjectError>>>,
+        then: std::cell::RefCell<Option<Result<(), InjectError>>>,
         calls: std::cell::RefCell<Vec<Vec<Action>>>,
     }
 
     impl Injector for FakeInjector {
         fn run(&self, actions: &[Action]) -> Result<(), InjectError> {
             self.calls.borrow_mut().push(actions.to_vec());
-            self.first.borrow_mut().take().unwrap_or(Ok(()))
+            self.first
+                .borrow_mut()
+                .take()
+                .or_else(|| self.then.borrow_mut().take())
+                .unwrap_or(Ok(()))
         }
     }
 
     fn fake(first: Result<(), InjectError>) -> FakeInjector {
         FakeInjector {
             first: Some(first).into(),
+            then: None.into(),
             calls: Default::default(),
         }
     }
@@ -573,11 +640,41 @@ mod tests {
     fn fallback_passes_other_results_through() {
         let a = [t("x")];
         let inj = fake(Err(InjectError::Elevated));
-        assert_eq!(run_with_fallback(&inj, &a), Err(InjectError::Elevated));
+        assert_eq!(
+            run_with_fallback(&inj, &a),
+            Err(FallbackError {
+                error: InjectError::Elevated,
+                after_partial_typing: false
+            })
+        );
         assert_eq!(inj.calls.into_inner().len(), 1);
         let inj = fake(Ok(()));
         assert_eq!(run_with_fallback(&inj, &a), Ok(()));
         assert_eq!(inj.calls.into_inner().len(), 1);
+    }
+
+    #[test]
+    fn elevated_after_partial_typing_is_flagged() {
+        let a = [t("abc")];
+        let inj = FakeInjector {
+            first: Some(Err(InjectError::Partial { sent: 2, total: 6 })).into(),
+            then: Some(Err(InjectError::Elevated)).into(),
+            calls: Default::default(),
+        };
+        let err = run_with_fallback(&inj, &a).unwrap_err();
+        assert_eq!(err.error, InjectError::Elevated);
+        assert!(err.after_partial_typing);
+        assert_eq!(inj.calls.into_inner()[1], vec![Action::Paste("bc".into())]);
+    }
+
+    #[test]
+    fn ctrl_v_cleanup_releases_keys_and_judges_paste() {
+        assert_eq!(ctrl_v_cleanup(0), (vec![], false));
+        assert_eq!(ctrl_v_cleanup(1), (vec![VK_CONTROL], false));
+        // Ctrl down + V down reached the app: pasted; release both.
+        assert_eq!(ctrl_v_cleanup(2), (vec![VK_V, VK_CONTROL], true));
+        assert_eq!(ctrl_v_cleanup(3), (vec![VK_CONTROL], true));
+        assert_eq!(ctrl_v_cleanup(4), (vec![], true));
     }
 
     #[test]

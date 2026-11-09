@@ -36,7 +36,9 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     use v2c_core::config::default_app_rules;
     use v2c_core::inject_plan::{plan, profile_for, AppProfile};
     use v2c_platform::windows::foreground::WinForeground;
-    use v2c_platform::windows::inject::{run_with_fallback, SendInputInjector};
+    use v2c_platform::windows::inject::{
+        last_restore_outcome, run_with_fallback, FallbackError, SendInputInjector,
+    };
     use v2c_platform::{Foreground, InjectError};
 
     let text = unescape_newlines(&args.text);
@@ -81,13 +83,25 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     let started = std::time::Instant::now();
     match run_with_fallback(&SendInputInjector, &actions) {
         Ok(()) => {}
-        Err(InjectError::Elevated) => anyhow::bail!(
-            "foreground window is elevated (administrator); the text was left on the \
-             clipboard, paste it with Ctrl+V"
-        ),
+        Err(FallbackError {
+            error: InjectError::Elevated,
+            after_partial_typing,
+        }) => {
+            let what = if after_partial_typing {
+                "part of the text was typed; the untyped remainder is on the clipboard"
+            } else {
+                "the text was left on the clipboard"
+            };
+            anyhow::bail!(
+                "foreground window is elevated (administrator); {what}, paste it with Ctrl+V"
+            )
+        }
         Err(e) => anyhow::bail!("injection failed: {e}"),
     }
     println!("done in {} ms", started.elapsed().as_millis());
+    if let Some(outcome) = last_restore_outcome() {
+        println!("clipboard: {}", outcome.as_str());
+    }
     Ok(())
 }
 

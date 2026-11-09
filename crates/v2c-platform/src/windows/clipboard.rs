@@ -11,13 +11,16 @@
 //!   `CF_GDIOBJFIRST..LAST`, and the OLE bookkeeping formats "DataObject" / "Ole Private
 //!   Data" (OLE rebuilds them). An app that copies *only* an enhanced metafile loses it.
 //!   After a restore v2c, not the original app, owns the clipboard.
+//! - Size cap: a format over [`MAX_FORMAT_BYTES`], or one that would push the snapshot over
+//!   [`MAX_SNAPSHOT_BYTES`], is dropped (e.g. a huge Excel range keeps its text but may lose
+//!   its native/bitmap formats), so pasting never stalls for seconds copying memory.
 //!   Delayed-rendered data is rendered during the snapshot, so the original owner app no
 //!   longer needs to be running for the restore.
 //!
 //! Text v2c puts on the clipboard is tagged so it stays out of Win+V history, the cloud
 //! clipboard and clipboard managers (the transcript must not be persisted elsewhere).
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{GlobalFree, HANDLE, HWND};
 use windows_sys::Win32::System::DataExchange::{
@@ -33,7 +36,10 @@ use windows_sys::Win32::System::Ole::{
     CF_GDIOBJLAST, CF_METAFILEPICT, CF_OWNERDISPLAY, CF_PALETTE, CF_PRIVATEFIRST, CF_PRIVATELAST,
     CF_UNICODETEXT,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, HWND_MESSAGE};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DestroyWindow, DispatchMessageW, PeekMessageW, TranslateMessage, HWND_MESSAGE,
+    MSG, PM_REMOVE,
+};
 
 use crate::InjectError;
 
@@ -41,6 +47,8 @@ use crate::InjectError;
 const OPEN_ATTEMPTS: u32 = 20;
 /// Pause between `OpenClipboard` attempts (20 x 10 ms = up to ~200 ms).
 const OPEN_RETRY_DELAY: Duration = Duration::from_millis(10);
+/// Longest stretch without pumping our owner window's messages while waiting.
+const PUMP_SLICE: Duration = Duration::from_millis(5);
 
 /// Contents of the clipboard at one moment: `(format, bytes)` in the clipboard's own
 /// enumeration order (which is the owner's order of preference). Empty = clipboard was empty.
@@ -61,8 +69,8 @@ impl std::fmt::Debug for Snapshot {
     }
 }
 
-/// Clipboard primitives. All methods except `open`/`sequence_number` require the clipboard
-/// to be open. A trait so the save/set/restore ordering can be unit-tested with a fake.
+/// Clipboard primitives. All methods except `open`/`sequence_number`/`wait` require the
+/// clipboard to be open. A trait so the save/set/restore ordering can be unit-tested.
 pub trait ClipboardOps {
     /// Opens the clipboard, retrying briefly while another app holds it.
     fn open(&mut self) -> Result<(), InjectError>;
@@ -74,6 +82,8 @@ pub trait ClipboardOps {
     fn restore(&mut self, snapshot: &Snapshot) -> Result<(), InjectError>;
     /// `GetClipboardSequenceNumber`: changes whenever anyone changes the clipboard.
     fn sequence_number(&self) -> u32;
+    /// Waits `d` while staying responsive to clipboard messages (clipboard closed).
+    fn wait(&mut self, d: Duration);
 }
 
 /// Result of [`paste_with_restore`] when no error occurred.
@@ -84,8 +94,19 @@ pub enum RestoreOutcome {
     SkippedChangedByOther,
 }
 
-/// Save clipboard -> set `text` -> `send_paste()` -> `settle()` -> restore.
+impl RestoreOutcome {
+    /// Stable name for logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RestoreOutcome::Restored => "restored",
+            RestoreOutcome::SkippedChangedByOther => "skipped_changed_by_other",
+        }
+    }
+}
+
+/// Save clipboard -> set `text` -> `send_paste()` -> wait `settle` -> restore.
 ///
+/// If setting the text fails, the snapshot is put back before the error is returned.
 /// If `send_paste` fails the text is deliberately left on the clipboard (the original is
 /// not restored) so the user can paste it by hand; its error is returned.
 /// Errors after `send_paste` succeeded start with "pasted, but": the text *was* delivered,
@@ -94,17 +115,22 @@ pub fn paste_with_restore<C: ClipboardOps>(
     cb: &mut C,
     text: &str,
     send_paste: impl FnOnce() -> Result<(), InjectError>,
-    settle: impl FnOnce(),
+    settle: Duration,
 ) -> Result<RestoreOutcome, InjectError> {
     cb.open()?;
     let saved = cb.snapshot();
-    let set = cb.set_text(text);
-    let ours = cb.sequence_number();
+    if let Err(e) = cb.set_text(text) {
+        // EmptyClipboard may already have run: don't lose the user's clipboard.
+        let _ = cb.restore(&saved);
+        cb.close();
+        return Err(e);
+    }
     cb.close();
-    set?;
+    // Read after closing: closing (format synthesis) must not count as "someone else".
+    let ours = cb.sequence_number();
 
     send_paste()?;
-    settle();
+    cb.wait(settle);
 
     let restore_failed = |e: InjectError| {
         InjectError::Os(format!("pasted, but restoring the clipboard failed: {e}"))
@@ -121,12 +147,27 @@ pub fn paste_with_restore<C: ClipboardOps>(
     outcome
 }
 
-/// Puts `text` on the clipboard and leaves it there (elevated-window fallback).
+/// Puts `text` on the clipboard and leaves it there (elevated-window fallback). If setting
+/// fails, the previous content is put back.
 pub fn copy_text<C: ClipboardOps>(cb: &mut C, text: &str) -> Result<(), InjectError> {
     cb.open()?;
+    let saved = cb.snapshot();
     let r = cb.set_text(text);
+    if r.is_err() {
+        let _ = cb.restore(&saved);
+    }
     cb.close();
     r
+}
+
+/// Largest single format kept in a snapshot (bigger ones are dropped, see module docs).
+pub const MAX_FORMAT_BYTES: usize = 16 * 1024 * 1024;
+/// Largest total snapshot; formats that would exceed it are dropped.
+pub const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+
+/// Whether a format of `size` bytes still fits after `used` bytes were kept.
+fn fits_budget(size: usize, used: usize) -> bool {
+    size <= MAX_FORMAT_BYTES && used.saturating_add(size) <= MAX_SNAPSHOT_BYTES
 }
 
 /// Clipboard line endings are CRLF: `\n` and lone `\r` become `\r\n`.
@@ -228,6 +269,36 @@ impl Drop for WinClipboard {
     }
 }
 
+impl WinClipboard {
+    /// Handles pending messages for our owner window (e.g. `WM_DESTROYCLIPBOARD` sent by
+    /// another app's `EmptyClipboard`, which blocks that app until we answer).
+    fn pump(&self) {
+        // SAFETY: MSG is plain data; all-zero is a valid value.
+        let mut msg: MSG = unsafe { std::mem::zeroed() };
+        // SAFETY: `msg` is a valid out pointer; only our window's messages are removed.
+        while unsafe { PeekMessageW(&mut msg, self.hwnd, 0, 0, PM_REMOVE) } != 0 {
+            // SAFETY: `msg` was filled by PeekMessageW.
+            unsafe {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+
+    /// Sleeps for `d` in short slices, pumping messages in between.
+    fn pumping_sleep(&self, d: Duration) {
+        let deadline = Instant::now() + d;
+        loop {
+            self.pump();
+            let now = Instant::now();
+            if now >= deadline {
+                return;
+            }
+            std::thread::sleep((deadline - now).min(PUMP_SLICE));
+        }
+    }
+}
+
 impl ClipboardOps for WinClipboard {
     fn open(&mut self) -> Result<(), InjectError> {
         for attempt in 0..OPEN_ATTEMPTS {
@@ -237,7 +308,7 @@ impl ClipboardOps for WinClipboard {
                 return Ok(());
             }
             if attempt + 1 < OPEN_ATTEMPTS {
-                std::thread::sleep(OPEN_RETRY_DELAY);
+                self.pumping_sleep(OPEN_RETRY_DELAY);
             }
         }
         Err(InjectError::Os(
@@ -261,6 +332,7 @@ impl ClipboardOps for WinClipboard {
             register_format("Ole Private Data"),
         ];
         let mut items = Vec::new();
+        let mut used = 0usize;
         let mut format = 0u32;
         loop {
             // SAFETY: the clipboard is open; 0 starts / ends the enumeration.
@@ -271,7 +343,8 @@ impl ClipboardOps for WinClipboard {
             if is_handle_format(format) || ole_internal.contains(&format) {
                 continue;
             }
-            if let Some(bytes) = read_bytes(format) {
+            if let Some(bytes) = read_bytes(format, used) {
+                used += bytes.len();
                 items.push((format, bytes));
             }
         }
@@ -291,6 +364,10 @@ impl ClipboardOps for WinClipboard {
     fn sequence_number(&self) -> u32 {
         // SAFETY: plain FFI call.
         unsafe { GetClipboardSequenceNumber() }
+    }
+
+    fn wait(&mut self, d: Duration) {
+        self.pumping_sleep(d);
     }
 }
 
@@ -319,8 +396,9 @@ fn register_format(name: &str) -> u32 {
     unsafe { RegisterClipboardFormatW(wide.as_ptr()) }
 }
 
-/// Copies one `HGLOBAL` clipboard format. `None` if absent or not memory-backed.
-fn read_bytes(format: u32) -> Option<Vec<u8>> {
+/// Copies one `HGLOBAL` clipboard format. `None` if absent, not memory-backed, or over
+/// the size budget given `used` bytes already kept.
+fn read_bytes(format: u32, used: usize) -> Option<Vec<u8>> {
     // SAFETY: the clipboard is open; the returned handle belongs to the clipboard and is
     // only read (locked / unlocked), never freed.
     unsafe {
@@ -329,7 +407,7 @@ fn read_bytes(format: u32) -> Option<Vec<u8>> {
             return None;
         }
         let size = GlobalSize(handle);
-        if size == 0 {
+        if size == 0 || !fits_budget(size, used) {
             return None;
         }
         let ptr = GlobalLock(handle).cast::<u8>();
@@ -379,6 +457,10 @@ mod tests {
         is_open: bool,
         log: Vec<&'static str>,
         fail_open: bool,
+        /// `set_text` empties the clipboard, then fails (like a failing SetClipboardData).
+        fail_set: bool,
+        /// Another app copies this while we wait.
+        copy_during_wait: Option<Snapshot>,
     }
 
     /// In-memory clipboard; clones share state so the paste / settle closures can inspect it.
@@ -399,12 +481,6 @@ mod tests {
         }
         fn is_open(&self) -> bool {
             self.0.borrow().is_open
-        }
-        /// Another application copies something.
-        fn external_copy(&self, s: Snapshot) {
-            let mut st = self.0.borrow_mut();
-            st.content = s;
-            st.seq += 1;
         }
     }
 
@@ -434,8 +510,12 @@ mod tests {
             let mut st = self.0.borrow_mut();
             assert!(st.is_open);
             st.log.push("set_text");
-            st.content = text_snapshot(text);
             st.seq += 1;
+            if st.fail_set {
+                st.content = Snapshot::default();
+                return Err(InjectError::Os("SetClipboardData failed".into()));
+            }
+            st.content = text_snapshot(text);
             Ok(())
         }
         fn restore(&mut self, s: &Snapshot) -> Result<(), InjectError> {
@@ -449,7 +529,19 @@ mod tests {
         fn sequence_number(&self) -> u32 {
             self.0.borrow().seq
         }
+        fn wait(&mut self, d: Duration) {
+            let mut st = self.0.borrow_mut();
+            assert!(!st.is_open, "must not hold the clipboard while waiting");
+            assert_eq!(d, SETTLE);
+            st.log.push("wait");
+            if let Some(s) = st.copy_during_wait.take() {
+                st.content = s;
+                st.seq += 1;
+            }
+        }
     }
+
+    const SETTLE: Duration = Duration::from_millis(150);
 
     fn text_snapshot(text: &str) -> Snapshot {
         Snapshot(vec![(u32::from(CF_UNICODETEXT), unicode_text_bytes(text))])
@@ -479,13 +571,13 @@ mod tests {
                 assert_eq!(probe.content(), text_snapshot("嗨\r\nhi"));
                 Ok(())
             },
-            || {},
+            SETTLE,
         );
         assert_eq!(out, Ok(RestoreOutcome::Restored));
         assert_eq!(cb.content(), original());
         assert_eq!(
             cb.log(),
-            ["open", "snapshot", "set_text", "close", "open", "restore", "close"]
+            ["open", "snapshot", "set_text", "close", "wait", "open", "restore", "close"]
         );
         assert!(!cb.is_open());
     }
@@ -493,24 +585,52 @@ mod tests {
     #[test]
     fn empty_clipboard_is_restored_as_empty() {
         let mut cb = Fake::default();
-        let out = paste_with_restore(&mut cb, "x", || Ok(()), || {});
+        let out = paste_with_restore(&mut cb, "x", || Ok(()), SETTLE);
         assert_eq!(out, Ok(RestoreOutcome::Restored));
         assert!(cb.content().is_empty());
     }
 
     #[test]
+    fn failed_set_puts_the_original_back() {
+        let mut cb = Fake::with(original());
+        cb.0.borrow_mut().fail_set = true;
+        let mut pasted = false;
+        let out = paste_with_restore(
+            &mut cb,
+            "x",
+            || {
+                pasted = true;
+                Ok(())
+            },
+            SETTLE,
+        );
+        assert_eq!(out, Err(InjectError::Os("SetClipboardData failed".into())));
+        assert!(!pasted);
+        assert_eq!(cb.content(), original());
+        assert_eq!(
+            cb.log(),
+            ["open", "snapshot", "set_text", "restore", "close"]
+        );
+
+        let mut cb = Fake::with(original());
+        cb.0.borrow_mut().fail_set = true;
+        assert!(copy_text(&mut cb, "x").is_err());
+        assert_eq!(cb.content(), original());
+        assert!(!cb.is_open());
+    }
+
+    #[test]
     fn failed_paste_leaves_text_and_skips_restore() {
         let mut cb = Fake::with(original());
-        let mut settled = false;
         let out = paste_with_restore(
             &mut cb,
             "keep me",
             || Err(InjectError::Os("ctrl+v rejected".into())),
-            || settled = true,
+            SETTLE,
         );
         assert_eq!(out, Err(InjectError::Os("ctrl+v rejected".into())));
-        assert!(!settled);
         assert_eq!(cb.content(), text_snapshot("keep me"));
+        assert!(!cb.log().contains(&"wait"));
         assert!(!cb.log().contains(&"restore"));
         assert!(!cb.is_open());
     }
@@ -518,17 +638,34 @@ mod tests {
     #[test]
     fn newer_clipboard_content_is_not_overwritten() {
         let mut cb = Fake::with(original());
-        let other = cb.clone();
         let newer = Snapshot(vec![(13, vec![0x42, 0, 0, 0])]);
-        let out = paste_with_restore(
-            &mut cb,
-            "x",
-            || Ok(()),
-            || other.external_copy(newer.clone()),
-        );
+        cb.0.borrow_mut().copy_during_wait = Some(newer.clone());
+        let out = paste_with_restore(&mut cb, "x", || Ok(()), SETTLE);
         assert_eq!(out, Ok(RestoreOutcome::SkippedChangedByOther));
         assert_eq!(cb.content(), newer);
         assert!(!cb.is_open());
+    }
+
+    #[test]
+    fn size_budget() {
+        assert!(fits_budget(10, 0));
+        assert!(fits_budget(MAX_FORMAT_BYTES, 0));
+        assert!(!fits_budget(MAX_FORMAT_BYTES + 1, 0));
+        assert!(fits_budget(
+            MAX_FORMAT_BYTES,
+            MAX_SNAPSHOT_BYTES - MAX_FORMAT_BYTES
+        ));
+        assert!(!fits_budget(1, MAX_SNAPSHOT_BYTES));
+        assert!(!fits_budget(1, usize::MAX));
+    }
+
+    #[test]
+    fn outcome_names() {
+        assert_eq!(RestoreOutcome::Restored.as_str(), "restored");
+        assert_eq!(
+            RestoreOutcome::SkippedChangedByOther.as_str(),
+            "skipped_changed_by_other"
+        );
     }
 
     #[test]
@@ -543,7 +680,7 @@ mod tests {
                 pasted = true;
                 Ok(())
             },
-            || {},
+            SETTLE,
         );
         assert!(out.is_err());
         assert!(!pasted);
@@ -555,7 +692,7 @@ mod tests {
         let mut cb = Fake::with(original());
         copy_text(&mut cb, "a").unwrap();
         assert_eq!(cb.content(), text_snapshot("a"));
-        assert_eq!(cb.log(), ["open", "set_text", "close"]);
+        assert_eq!(cb.log(), ["open", "snapshot", "set_text", "close"]);
     }
 
     #[test]
@@ -607,5 +744,15 @@ mod tests {
         for item in &before.0 {
             assert!(after.0.contains(item), "format {} not restored", item.0);
         }
+    }
+
+    #[test]
+    #[ignore = "touches the real clipboard; run manually on a desktop"]
+    fn real_paste_with_restore_restores() {
+        let mut cb = WinClipboard::new().unwrap();
+        // A no-op "paste": nobody else touches the clipboard, so it must be restored, i.e.
+        // closing the clipboard after set_text must not look like a foreign change.
+        let out = paste_with_restore(&mut cb, "v2c test", || Ok(()), SETTLE);
+        assert_eq!(out, Ok(RestoreOutcome::Restored));
     }
 }

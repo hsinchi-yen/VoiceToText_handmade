@@ -324,6 +324,7 @@ pub fn default_app_rules() -> Vec<AppRule> {
         "vmware.exe",       // VMware Workstation
         "vmplayer.exe",     // VMware Workstation Player
         "vmware-view.exe",  // VMware / Omnissa Horizon Client
+        "vmrc.exe",         // VMware Remote Console
         "VirtualBoxVM.exe", // VirtualBox VM window
     ]
     .into_iter()
@@ -418,6 +419,7 @@ mod tests {
                 "vmware.exe",
                 "vmplayer.exe",
                 "vmware-view.exe",
+                "vmrc.exe",
                 "VirtualBoxVM.exe"
             ]
         );
