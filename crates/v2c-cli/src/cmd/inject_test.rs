@@ -35,12 +35,12 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     use std::io::Write;
     use v2c_core::config::default_app_rules;
     use v2c_core::inject_plan::{plan, profile_for, AppProfile};
-    use v2c_platform::windows::{foreground::WinForeground, inject::SendInputInjector};
-    use v2c_platform::{Foreground, Injector};
+    use v2c_platform::windows::foreground::WinForeground;
+    use v2c_platform::windows::inject::{
+        last_restore_outcome, run_with_fallback, FallbackError, SendInputInjector,
+    };
+    use v2c_platform::{Foreground, InjectError};
 
-    if args.paste {
-        anyhow::bail!("--paste is not implemented yet (task T1.2)");
-    }
     let text = unescape_newlines(&args.text);
 
     for remaining in (1..=args.delay).rev() {
@@ -64,7 +64,12 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     }
     println!("profile: {profile:?}");
 
-    let actions = plan(&text, &profile);
+    let actions = if args.paste {
+        println!("--paste: forcing a single clipboard paste");
+        paste_actions(&text)
+    } else {
+        plan(&text, &profile)
+    };
     println!(
         "actions: {} (input {} chars, {} utf16 units)",
         actions.len(),
@@ -76,16 +81,42 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     }
 
     let started = std::time::Instant::now();
-    SendInputInjector
-        .run(&actions)
-        .map_err(|e| anyhow::anyhow!("injection failed: {e}"))?;
+    match run_with_fallback(&SendInputInjector, &actions) {
+        Ok(()) => {}
+        Err(FallbackError {
+            error: InjectError::Elevated,
+            after_partial_typing,
+        }) => {
+            let what = if after_partial_typing {
+                "part of the text was typed; the untyped remainder is on the clipboard"
+            } else {
+                "the text was left on the clipboard"
+            };
+            anyhow::bail!(
+                "foreground window is elevated (administrator); {what}, paste it with Ctrl+V"
+            )
+        }
+        Err(e) => anyhow::bail!("injection failed: {e}"),
+    }
     println!("done in {} ms", started.elapsed().as_millis());
+    if let Some(outcome) = last_restore_outcome() {
+        println!("clipboard: {}", outcome.as_str());
+    }
     Ok(())
+}
+
+/// `--paste`: one clipboard paste of the whole text (empty text: nothing to do).
+fn paste_actions(text: &str) -> Vec<Action> {
+    if text.is_empty() {
+        Vec::new()
+    } else {
+        vec![Action::Paste(text.to_owned())]
+    }
 }
 
 #[cfg(not(windows))]
 pub fn run(args: Args) -> anyhow::Result<()> {
-    let _ = (args, unescape_newlines, describe);
+    let _ = (args, unescape_newlines, describe, paste_actions);
     anyhow::bail!("inject-test is only implemented on Windows so far")
 }
 
@@ -98,6 +129,12 @@ mod tests {
     fn literal_backslash_n_becomes_newline() {
         assert_eq!(unescape_newlines(r"a\nb"), "a\nb");
         assert_eq!(unescape_newlines("no escapes"), "no escapes");
+    }
+
+    #[test]
+    fn paste_flag_gives_one_paste_with_text_unchanged() {
+        assert_eq!(paste_actions("a\nb"), vec![Action::Paste("a\nb".into())]);
+        assert!(paste_actions("").is_empty());
     }
 
     #[test]

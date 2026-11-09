@@ -1,4 +1,4 @@
-//! `v2c-cli bench --asr breeze --model <path> <dir>`: run every fixture and report the recognised
+//! `v2c-cli bench --asr breeze|sensevoice --model <path> <dir>`: run every fixture and report the recognised
 //! text, expected text, CER, ASR time, and audio duration.
 //!
 //! Fixtures are `<name>.txt` files; the matching `<name>.wav` is the recording (git-ignored).
@@ -10,10 +10,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use v2c_asr_local::BreezeOutput;
 use v2c_core::{asr::AsrContext, audio::AudioClip};
 
-use super::transcribe::{describe, load_breeze, load_wav, BreezeArgs};
+use super::transcribe::{load_engine, load_wav, BreezeArgs, EngineOutput};
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -147,13 +146,19 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let breeze = load_breeze(&args.asr, args.model.as_deref(), &args.breeze)?;
+    let engine = load_engine(&args.asr, args.model.as_deref(), &args.breeze)?;
     let ctx = AsrContext::default();
+    if engine.is_sensevoice() {
+        println!(
+            "note: SenseVoice outputs Simplified Chinese; the app converts it with zh_tw, this \
+             bench does not, so the simplified-output check is expected to fail for zh fixtures."
+        );
+    }
 
     // Warm-up so CUDA kernel loading and buffer allocation are not counted in the first fixture.
-    let warm = breeze.transcribe_blocking(&AudioClip::new(vec![0.0; 16_000]), &ctx);
+    let warm = engine.run(&AudioClip::new(vec![0.0; 16_000]), &ctx);
     match warm {
-        Ok(o) => eprintln!("warm-up: {} ms", o.total_ms()),
+        Ok(o) => eprintln!("warm-up: {} ms", o.total_ms),
         Err(e) => eprintln!("warm-up failed: {e}"),
     }
 
@@ -177,7 +182,7 @@ pub fn run(args: Args) -> anyhow::Result<()> {
                     continue;
                 }
             };
-            let out: BreezeOutput = match breeze.transcribe_blocking(&clip, &ctx) {
+            let out: EngineOutput = match engine.run(&clip, &ctx) {
                 Ok(o) => o,
                 Err(e) => {
                     println!("FAIL {}: {e}", f.name);
@@ -188,13 +193,13 @@ pub fn run(args: Args) -> anyhow::Result<()> {
             println!("== {} ({} ms audio)", f.name, clip.duration_ms());
             println!("  got:      {}", out.transcript.text);
             println!("  expected: {expected}");
-            println!("  CER {:.1}% | {}", c * 100.0, describe(&out));
-            let speed_ok = within_latency_target(out.total_ms(), clip.duration_ms());
+            println!("  CER {:.1}% | {}", c * 100.0, out.summary);
+            let speed_ok = within_latency_target(out.total_ms, clip.duration_ms());
             let simplified = has_simplified(&out.transcript.text);
             println!(
                 "  {} speed ({} ms per 10 s of audio, target <= {TARGET_MS_PER_10S}){}",
                 if speed_ok { "PASS" } else { "FAIL" },
-                per_10s(out.total_ms(), clip.duration_ms()),
+                per_10s(out.total_ms, clip.duration_ms()),
                 if simplified {
                     " | FAIL: output contains simplified characters"
                 } else {
@@ -204,7 +209,7 @@ pub fn run(args: Args) -> anyhow::Result<()> {
             rows.push(Row {
                 name: f.name.clone(),
                 audio_ms: clip.duration_ms(),
-                asr_ms: out.total_ms(),
+                asr_ms: out.total_ms,
                 cer: c,
                 speed_ok,
                 simplified,

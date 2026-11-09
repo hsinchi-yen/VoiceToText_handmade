@@ -23,11 +23,16 @@
 ## Phase 1 — Windows MVP
 - [ ] W2 T1.1 最小可用路徑（≤ 1.5 秒、預錄緩衝）
 - [ ] W3 T1.2 剪貼簿貼上＋還原
+  - [x] 程式已合併（2026-11-09）：原生 Win32 備份／還原所有 HGLOBAL 格式、不進 Win+V 歷史、`run_with_fallback`、VM 類 App 預設走貼上
+  - [ ] 🧑 實機剪貼簿測試（見 human-checklist）
 - [ ] W3 T1.3 浮動標籤＋系統列
 - [ ] W3 T1.5 LM Studio 輕度潤飾（含潤飾 ≤ 2.5 秒）
 - [ ] W4 T1.4 雙擊免持模式
 - [ ] W4 T1.7 雲端 providers（≤ 3 秒，失敗退回地端）
 - [ ] W4 T1.10 SenseVoice-Small CPU 備援
+  - [x] 程式已合併（2026-11-09）：`SenseVoiceAsr`（`sensevoice` feature，sherpa-onnx 2.0.1 shared）、`select::pick`；CPU 約 0.4 秒／10 秒音檔（TTS 測試）
+  - [ ] 待 T1.1 合併後：bench 對 SenseVoice 輸出先過 `zh_tw` 再算 CER
+  - [ ] 🧑 真人錄音 bench
 - [ ] W5 T1.6 中翻英
 - [ ] W5 T1.9 輸入紀錄（DPAPI 加密、7 天、不記錄的 App、日誌不含文字）
 - [ ] W5 T1.10b VRAM 管理
