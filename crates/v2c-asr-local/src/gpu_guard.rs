@@ -463,11 +463,15 @@ mod tests {
     const NEED: u64 = BREEZE_Q5_0_VRAM_MB; // 1536
     const RESERVE: u64 = 2048;
     const MARGIN: u64 = 256;
-    /// Smallest free VRAM that loads with defaults: 3840.
+    /// Smallest free VRAM that loads with these test settings: 3840.
     const FITS: u64 = RESERVE + NEED + MARGIN;
 
+    /// Defaults with the reserve pinned to [`RESERVE`], so these tests keep their boundaries
+    /// independent of the configured default (600 MiB since 2026-11-10).
     fn cfg() -> Config {
-        Config::with_defaults()
+        let mut c = Config::with_defaults();
+        c.gpu.vram_reserve_mb = RESERVE;
+        c
     }
 
     fn g() -> GpuGuard {

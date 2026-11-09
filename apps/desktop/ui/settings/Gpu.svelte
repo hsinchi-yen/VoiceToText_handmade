@@ -82,7 +82,7 @@
   <p class="hint">上面的用量是估計值；LM Studio 的部分要在 LM Studio 自己調整。</p>
   <label>
     保留給畫面與其他程式（MB）
-    <input type="number" min="0" max="16384" step="256" value={g.vram_reserve_mb}
+    <input type="number" min="0" max="16384" step="100" value={g.vram_reserve_mb}
       onchange={(e) => saveNumber(e, "gpu_reserve_mb", g.vram_reserve_mb)} />
   </label>
   <label>

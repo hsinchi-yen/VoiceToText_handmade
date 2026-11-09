@@ -145,7 +145,7 @@ mod tests {
         c
     }
 
-    /// A healthy GPU: 4500 MiB free, Breeze needs 1500 MiB; default reserve is 2048 MiB.
+    /// A healthy GPU: 4500 MiB free, Breeze needs 1500 MiB; default reserve is 600 MiB.
     fn good_gpu() -> GpuInfo {
         GpuInfo {
             cuda_available: true,

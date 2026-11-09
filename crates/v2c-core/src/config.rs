@@ -227,7 +227,7 @@ impl Default for GpuConfig {
         Self {
             enabled: true,
             profile: GpuProfile::Balanced,
-            vram_reserve_mb: 2048,
+            vram_reserve_mb: 600,
             keep_loaded: KeepLoaded::Auto,
             idle_unload_minutes: 15,
             yield_on_fullscreen: true,
@@ -396,7 +396,7 @@ mod tests {
         assert_eq!(c.audio.min_clip_ms, 300);
         assert_eq!(c.local.llm_base_url, "http://localhost:1234/v1");
         assert_eq!(c.local.breeze_quant, BreezeQuant::Q5_0);
-        assert_eq!(c.gpu.vram_reserve_mb, 2048);
+        assert_eq!(c.gpu.vram_reserve_mb, 600);
         assert_eq!(c.gpu.idle_unload_minutes, 15);
         assert_eq!(c.gpu.keep_loaded, KeepLoaded::Auto);
         assert_eq!(c.history.retention_days, 7);
@@ -453,7 +453,7 @@ mod tests {
     fn partial_file_keeps_other_defaults() {
         let cfg = Config::from_toml_str("[gpu]\nprofile = \"cpu_only\"\n").unwrap();
         assert_eq!(cfg.gpu.profile, GpuProfile::CpuOnly);
-        assert_eq!(cfg.gpu.vram_reserve_mb, 2048);
+        assert_eq!(cfg.gpu.vram_reserve_mb, 600);
         assert_eq!(cfg.audio.mic_mode, MicMode::AlwaysOn);
     }
 

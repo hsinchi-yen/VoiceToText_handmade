@@ -151,7 +151,7 @@ impl Pipeline {
 
 **你這台電腦的現況**（2026-11-08 以 `nvidia-smi` 查得）：RTX 2060 Max-Q 共 6144 MiB，**正在負責畫面輸出**（2560×1440，display_active = Enabled）；平常桌面程式（Chrome、Teams、Edge、Docker Desktop、Telegram 等）已經用掉約 1.4 GB，剩約 4.5 GB。另有 AMD 內顯與 Trigger 6 USB 顯示卡。
 
-**預算原則**：保留至少 **2 GB** 給畫面輸出與一般程式，v2c 與 LM Studio 合計上限約 **4 GB**。
+**預算原則**：保留約 **600 MiB** 給畫面輸出與一般程式（原訂 2 GB；2026-11-10 實測 Breeze q5_0 約 1.7 GB＋LM Studio 3B 約 2.4 GB 後剩約 860 MiB，保留 2 GB 會讓兩者無法同時在 GPU 上，你決定改為 600 MiB，畫面是否卡頓於 dogfood 觀察），v2c 與 LM Studio 合計上限約 **4 GB**。
 
 | 方案 | Breeze-ASR-25 | LM Studio 語言模型 | 預估 VRAM | 適用情境 |
 |------|---------------|--------------------|-----------|----------|
@@ -162,7 +162,7 @@ impl Pipeline {
 上表的數字是估計值，T0.1 會實測後回填。
 
 **v2c 程式內的保護機制**
-1. **載入前檢查**：用 NVML（`nvml-wrapper` crate【實作前確認】）讀可用 VRAM；可用量扣掉保留額度（`vram_reserve_mb`，預設 2048）後放不下 Breeze，就改用 SenseVoice（CPU），並在浮動標籤提示一次。
+1. **載入前檢查**：用 NVML（`nvml-wrapper` crate【實作前確認】）讀可用 VRAM；可用量扣掉保留額度（`vram_reserve_mb`，預設 600）後放不下 Breeze，就改用 SenseVoice（CPU），並在浮動標籤提示一次。
 2. **執行中監看**：每 5 秒讀一次可用 VRAM；低於保留額度（例如開了遊戲）就卸載 Breeze、改用 CPU，可用量恢復後再載回。
 3. **閒置卸載**：超過 `idle_unload_minutes`（預設 15 分鐘）沒用就卸載；下次按熱鍵時重新載入，第一句會多 1～2 秒。
 4. **重度程式自動讓路**：前景是全螢幕程式，或執行檔在 `heavy_apps` 名單（遊戲、Premiere、Blender…）時，自動切到「不用顯卡」方案。
@@ -175,7 +175,7 @@ impl Pipeline {
 [gpu]
 enabled = true
 profile = "balanced"          # balanced | low_vram | cpu_only
-vram_reserve_mb = 2048        # 保留給畫面輸出與其他程式
+vram_reserve_mb = 600         # 保留給畫面輸出與其他程式
 keep_loaded = "auto"          # always | auto（閒置卸載＋低顯存讓路）| on_demand
 idle_unload_minutes = 15
 yield_on_fullscreen = true

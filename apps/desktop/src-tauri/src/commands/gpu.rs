@@ -91,7 +91,7 @@ mod tests {
             (u.total_mb, u.free_mb, u.used_mb, u.v2c_mb),
             (0, 0, 0, None)
         );
-        assert_eq!(u.reserve_mb, 2048);
+        assert_eq!(u.reserve_mb, 600);
     }
 
     #[test]

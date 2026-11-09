@@ -16,13 +16,15 @@ v2c 預設全部在你自己的電腦上執行：語音辨識用 Breeze-ASR-25�
 
 - `[local] breeze_quant = "q8_0"` 辨識稍準，但多用約 0.6 GB（Breeze 約 2.1 GB）。
 - 「均衡」與「省顯存」對 v2c 本身沒有差別（都用 GPU 跑 Breeze）；差別在你替 LM Studio 選的模型與 GPU offload，見下方 LM Studio 一節。
-- 預算原則：至少保留 **2 GB** 給畫面輸出與其他程式，v2c＋LM Studio 合計約 **4 GB** 以內（以 6 GB 的 RTX 2060 為例）。
+- 預算原則：保留約 **600 MB** 給畫面輸出與其他程式，v2c＋LM Studio 合計約 **4 GB** 以內（以 6 GB 的 RTX 2060 為例；實測 Breeze q5_0 約 1.7 GB、LM Studio 3B（context 8192）約 2.4 GB，兩者同時載入後剩約 860 MB）。
+- 如果拖曳視窗或播影片時畫面卡頓，把 `vram_reserve_mb` 調高（例如 1024）；代價是開著 LM Studio 時 Breeze 可能放不下而改用 CPU。
+- **啟動順序**：先開 v2c（Breeze 先載入）、再在 LM Studio 載入模型，兩者就能同時在 GPU 上。反過來的話，Breeze 載入時要多一段約 256 MB 的緩衝，可能差一點放不下而先用 CPU，直到可用量足夠。
 
 ## v2c 怎麼保護畫面用的顯存
 
 v2c 每 5 秒讀一次顯示卡的可用記憶體（透過 NVIDIA 驅動附的 NVML；沒有 NVIDIA 顯示卡時這些功能自動停用，直接用 CPU）。
 
-1. **載入前檢查**：可用 VRAM 扣掉保留額度（`vram_reserve_mb`，預設 2048 MB）後，要放得下 Breeze 再加約 256 MB 緩衝才會載入，否則改用 SenseVoice（CPU），浮動標籤提示一次。Breeze 實際用多少，v2c 會在每次載入時自己量（載入前後的可用量差），之後以實測值判斷，不只靠上表的估計值。
+1. **載入前檢查**：可用 VRAM 扣掉保留額度（`vram_reserve_mb`，預設 600 MB）後，要放得下 Breeze 再加約 256 MB 緩衝才會載入，否則改用 SenseVoice（CPU），浮動標籤提示一次。Breeze 實際用多少，v2c 會在每次載入時自己量（載入前後的可用量差），之後以實測值判斷，不只靠上表的估計值。
 2. **執行中監看**：Breeze 載入後，連續兩次讀到可用 VRAM 低於保留額度（兩次讀取相隔 5 秒，所以從變低到卸載約 5～10 秒），就卸載 Breeze 改用 CPU；正在辨識的那句話會先做完。偶爾讀不到顯示卡資料不會觸發卸載。可用量恢復並穩定約 20 秒後自動載回；如果剛載回不久又因顯存不足被卸載，等待時間會加倍（最長 10 分鐘），避免反覆載入、卸載。
 3. **閒置卸載**：超過 `idle_unload_minutes`（預設 15 分鐘）沒有使用就卸載；下次按熱鍵時重新載入，第一句會多 1～2 秒。設成 0 表示不因閒置卸載。
 4. **重度程式自動讓路**：前景程式的執行檔在 `heavy_apps` 名單內，或前景是全螢幕程式（包含獨佔全螢幕的遊戲與簡報模式，`yield_on_fullscreen = true` 時），立刻改用 CPU；離開這些程式約 20 秒後恢復。注意：全螢幕看影片（瀏覽器按 F11）也算全螢幕；不想這樣可把 `yield_on_fullscreen` 設成 `false`，只靠 `heavy_apps` 名單。
@@ -42,7 +44,7 @@ v2c 每 5 秒讀一次顯示卡的可用記憶體（透過 NVIDIA 驅動附的 N
 [gpu]
 enabled = true
 profile = "balanced"          # balanced | low_vram | cpu_only
-vram_reserve_mb = 2048        # 保留給畫面輸出與其他程式
+vram_reserve_mb = 600         # 保留給畫面輸出與其他程式
 keep_loaded = "auto"          # always | auto | on_demand
 idle_unload_minutes = 15
 yield_on_fullscreen = true

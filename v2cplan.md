@@ -39,7 +39,7 @@
 | 桌面地端 ASR | Breeze-ASR-25（GPU）為主，SenseVoice-Small（CPU）備援 |
 | 桌面地端 LLM | 使用者自行以 **LM Studio** 起模型；本工具只走 OpenAI 相容 API（預設 `http://localhost:1234/v1`），不代裝任何軟體 |
 | 雲端 | 官方 API（Gemini、OpenAI、Claude）＋ OpenAI 相容自訂端點（可填自架服務）；雲端失敗自動退回地端 |
-| 顯示卡記憶體 | RTX 2060 同時負責畫面輸出：保留 ≥ 2 GB，v2c＋LM Studio 上限約 4 GB；三種方案（均衡／省顯存／不用顯卡），顯存不足或遊戲、剪片時自動改用 CPU |
+| 顯示卡記憶體 | RTX 2060 同時負責畫面輸出：保留約 600 MiB（2026-11-10 實測後你決定：保留 2 GB 時 Breeze 與 LM Studio 3B 無法同時在 GPU 上），v2c＋LM Studio 上限約 4 GB；三種方案（均衡／省顯存／不用顯卡），顯存不足或遊戲、剪片時自動改用 CPU |
 | Android ASR | Android 內建 `SpeechRecognizer`；不可用時改用已串接的雲端 ASR，都沒有則提示安裝 Google 語音服務 |
 | Android 潤飾 | 不做 |
 | Android 中翻英 | 設定雲端/相容端點後才顯示翻譯鍵 |
