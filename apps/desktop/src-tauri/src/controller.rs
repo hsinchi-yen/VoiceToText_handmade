@@ -42,6 +42,8 @@ pub enum StatusEvent {
     },
     /// The recording was cancelled (Esc, or a shortcut such as Ctrl+C).
     Cancelled,
+    /// The microphone is available again after a `mic_*` error; clears that error.
+    MicReady,
     Error {
         code: &'static str,
     },

@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
-use rubato::{Fft, FixedSync, Resampler};
+use rubato::{Fft, FixedSync, Indexing, Resampler};
 use tracing::{debug, info, warn};
 use v2c_core::audio::{AudioClip, SAMPLE_RATE};
 use v2c_core::config::{AudioConfig, MicMode};
@@ -261,6 +261,10 @@ impl Manager {
                     }
                 }
                 Ok(Msg::Finish(reply)) => {
+                    if let Some(a) = active.as_mut() {
+                        let tail = a.resampler.flush();
+                        self.lock().push(&tail);
+                    }
                     let _ = reply.send(self.lock().finish());
                 }
                 Ok(Msg::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -401,6 +405,11 @@ enum To16k {
         resampler: Box<Fft<f32>>,
         pending: Vec<f32>,
         out: Vec<f32>,
+        /// Output rate / input rate.
+        ratio: f64,
+        /// Frames fed in and produced since the last reset.
+        frames_in: u64,
+        frames_out: u64,
     },
 }
 
@@ -421,7 +430,64 @@ impl To16k {
             resampler: Box::new(resampler),
             pending: Vec::new(),
             out: Vec::new(),
+            ratio: f64::from(SAMPLE_RATE) / f64::from(input_rate),
+            frames_in: 0,
+            frames_out: 0,
         })
+    }
+
+    /// Emits everything still inside the resampler (the partial input chunk plus the filter
+    /// delay) by zero-padding, then resets it. Called when a clip ends so its last ~20-40 ms
+    /// are not lost.
+    fn flush(&mut self) -> Vec<f32> {
+        let Self::Fft {
+            resampler,
+            pending,
+            out,
+            ratio,
+            frames_in,
+            frames_out,
+        } = self
+        else {
+            return Vec::new();
+        };
+        // Everything fed in, at the output rate, plus the filter delay (which is leading
+        // silence emitted when the stream started), minus what was already produced.
+        let total_in = *frames_in + pending.len() as u64;
+        let owed = ((total_in as f64 * *ratio).round() as u64 + resampler.output_delay() as u64)
+            .saturating_sub(*frames_out) as usize;
+        let mut result = Vec::with_capacity(owed + RESAMPLE_CHUNK);
+        let mut partial = pending.len();
+        // A few chunks at most: the delay is shorter than one chunk.
+        for _ in 0..4 {
+            if result.len() >= owed {
+                break;
+            }
+            let out_len = resampler.output_frames_next();
+            out.resize(out_len, 0.0);
+            let processed = {
+                let (Ok(inp), Ok(mut outp)) = (
+                    InterleavedSlice::new(&pending[..], 1, partial),
+                    InterleavedSlice::new_mut(&mut out[..], 1, out_len),
+                ) else {
+                    break;
+                };
+                let indexing = Indexing::new().partial_len(partial);
+                resampler.process_into_buffer(&inp, &mut outp, Some(&indexing))
+            };
+            match processed {
+                Ok((_, written)) => result.extend_from_slice(&out[..written]),
+                Err(_) => break,
+            }
+            pending.clear();
+            partial = 0;
+        }
+        result.truncate(owed);
+        pending.clear();
+        resampler.reset();
+        *frames_in = 0;
+        *frames_out = 0;
+        result
     }
 
     /// Feeds input samples; returns whatever 16 kHz output is ready.
@@ -432,6 +498,9 @@ impl To16k {
                 resampler,
                 pending,
                 out,
+                frames_in,
+                frames_out,
+                ..
             } => {
                 pending.extend_from_slice(input);
                 let mut result = Vec::new();
@@ -456,6 +525,8 @@ impl To16k {
                         Ok((used, written)) => {
                             result.extend_from_slice(&out[..written]);
                             pending.drain(..used);
+                            *frames_in += used as u64;
+                            *frames_out += written as u64;
                         }
                         Err(_) => {
                             pending.clear();
@@ -591,6 +662,40 @@ mod tests {
         );
         let level = rms(&out[4_000..]);
         assert!((level - 0.5 / 2f32.sqrt()).abs() < 0.02, "{level}");
+    }
+
+    #[test]
+    fn flush_emits_the_tail_so_duration_is_exact() {
+        for rate in [48_000u32, 44_100] {
+            let mut r = To16k::new(rate).unwrap();
+            let input: Vec<f32> = (0..rate as usize)
+                .map(|i| 0.5 * (i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin())
+                .collect();
+            let mut out = Vec::new();
+            for block in input.chunks(480 + 7) {
+                out.extend(r.push(block));
+            }
+            let before = out.len();
+            out.extend(r.flush());
+            assert!(out.len() > before, "{rate}: flush produced nothing");
+            // One second in -> one second out, plus the filter delay emitted as leading
+            // silence when the stream started.
+            let delay = match &r {
+                To16k::Fft { resampler, .. } => resampler.output_delay(),
+                To16k::Passthrough => 0,
+            };
+            assert!(
+                out.len().abs_diff(16_000 + delay) <= 2,
+                "{rate}: {} (delay {delay})",
+                out.len()
+            );
+            // The end of the clip is real audio, not padding.
+            let tail_level = rms(&out[out.len() - 160..]);
+            assert!(tail_level > 0.2, "{rate}: tail rms {tail_level}");
+            // The resampler is reset and keeps working after a flush.
+            assert!(!r.push(&input).is_empty());
+        }
+        assert!(To16k::new(16_000).unwrap().flush().is_empty());
     }
 
     #[test]

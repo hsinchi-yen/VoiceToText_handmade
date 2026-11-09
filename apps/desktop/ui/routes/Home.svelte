@@ -38,6 +38,8 @@
           : "沒有偵測到語音";
       case "cancelled":
         return "已取消";
+      case "mic_ready":
+        return "麥克風已重新連線";
       case "error":
         return `錯誤：${errorText[s.code] ?? s.code}`;
       default:

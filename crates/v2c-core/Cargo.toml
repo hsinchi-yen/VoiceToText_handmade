@@ -15,7 +15,7 @@ toml.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 # Pure-Rust OpenCC (Simplified -> Taiwan Traditional with Taiwan phrasing); see postprocess/zh_tw.rs.
-ferrous-opencc = { version = "0.4", default-features = false, features = ["s2t-conversion"] }
+ferrous-opencc = { version = "0.4", default-features = false, features = ["s2t-conversion", "t2s-conversion"] }
 
 [dev-dependencies]
 tokio.workspace = true

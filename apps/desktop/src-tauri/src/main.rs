@@ -118,11 +118,23 @@ fn start_background(app: &tauri::AppHandle, config_error: Option<&'static str>) 
     }
 
     let notify_status = state.status.clone();
+    // Only a recovery after an error is announced; in `on_press` mode the stream opens on
+    // every press and must not interrupt the Recording status.
+    let mic_failed = std::sync::atomic::AtomicBool::new(false);
     let recorder = Arc::new(Recorder::start(
         &state.config.audio,
         Arc::new(move |n| {
-            if let RecorderNotice::Unavailable { code } = n {
-                let _ = notify_status.send(StatusEvent::Error { code });
+            use std::sync::atomic::Ordering;
+            match n {
+                RecorderNotice::Unavailable { code } => {
+                    mic_failed.store(true, Ordering::Relaxed);
+                    let _ = notify_status.send(StatusEvent::Error { code });
+                }
+                RecorderNotice::Opened => {
+                    if mic_failed.swap(false, Ordering::Relaxed) {
+                        let _ = notify_status.send(StatusEvent::MicReady);
+                    }
+                }
             }
         }),
     ));
