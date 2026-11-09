@@ -23,38 +23,43 @@
 ## Phase 1 — Windows MVP
 - [ ] W2 T1.1 最小可用路徑（≤ 1.5 秒、預錄緩衝）
   - [x] 程式已合併（2026-11-09）：Tauri v2＋Svelte 5 桌面 App、controller、recorder（0.5 秒預錄、裝置重開）、`Pipeline::run`、zh_tw（ferrous-opencc s2twp，保護已是繁體的文字）、CSP、日誌不含文字的測試
-  - [ ] 整合任務：改用 `run_with_fallback`＋結構化注入錯誤、SenseVoice 自動切換（`select::pick`）、GPU guard 輪詢、LLM 接上、麥克風無聲 watchdog
+  - [x] 整合：`run_with_fallback`＋結構化注入錯誤、SenseVoice 自動切換、GPU guard 輪詢、LLM 接上、麥克風 watchdog、設定熱重載、正常結束（整合，2026-11-09 合併）
   - [ ] 🧑 實機說話測試與延遲（見 human-checklist）
 - [ ] W3 T1.2 剪貼簿貼上＋還原
   - [x] 程式已合併（2026-11-09）：原生 Win32 備份／還原所有 HGLOBAL 格式、不進 Win+V 歷史、`run_with_fallback`、VM 類 App 預設走貼上
   - [ ] 🧑 實機剪貼簿測試（見 human-checklist）
 - [ ] W3 T1.3 浮動標籤＋系統列
   - [x] 程式已合併（2026-11-09）：不搶焦點、滑鼠穿透的浮動標籤（直接以 Win32 顯示）、系統列選單、主視窗關閉改為隱藏
-  - [ ] 整合任務：overlay 載入後重送最後狀態、設定即時生效、結束時收尾
+  - [x] 整合：overlay 載入後重送、設定即時生效、結束時收尾（整合，2026-11-09 合併）
   - [ ] 🧑 實機確認（見 human-checklist；若標籤完全看不見，回報給 agent：WS_EX_LAYERED 問題）
 - [ ] W3 T1.5 LM Studio 輕度潤飾（含潤飾 ≤ 2.5 秒）
   - [x] 程式已合併（2026-11-09）：`OpenAiCompatLlm`、潤飾／翻譯提示詞（逐字稿包標籤防注入）、規則式去贅字；pipeline 已接上
-  - [ ] 整合任務：桌面 App 建立 LLM、LM Studio 存活快取（沒開時不等逾時）、長篇口述的逾時
+  - [x] 整合：桌面建立 LLM、LM Studio 每 10 秒存活檢查（沒開時直接去贅字）、長篇口述逾時依字數放寬（整合，2026-11-09 合併）
   - [ ] 🧑 LM Studio 實測（見 human-checklist）
 - [ ] W4 T1.4 雙擊免持模式
+  - [x] 接上 controller：雙擊開始、單擊結束、上限自動結束並提示、Esc 取消、標籤顯示「免持」（整合，2026-11-09 合併）
+  - [ ] 🧑 口述 1 分鐘以上實測
 - [ ] W4 T1.7 雲端 providers（≤ 3 秒，失敗退回地端）
   - [x] 程式已合併（2026-11-09）：OpenAI／Gemini／相容端點 ASR、Gemini／Claude LLM、`SecretStore`（keyring-core）、`route::resolve`、`test_connection`、不轉址的 `CloudHttp`
-  - [ ] 整合任務：依 route 建立 provider、雲端失敗退回地端、安裝 Windows 金鑰庫 store
+  - [x] 整合：依 route 建立 provider、雲端失敗退回地端、啟動時安裝 Windows 認證管理員 store（整合，2026-11-09 合併）
   - [ ] 🧑 用自己的金鑰實測至少一家（可選）
 - [ ] W4 T1.10 SenseVoice-Small CPU 備援
   - [x] 程式已合併（2026-11-09）：`SenseVoiceAsr`（`sensevoice` feature，sherpa-onnx 2.0.1 shared）、`select::pick`；CPU 約 0.4 秒／10 秒音檔（TTS 測試）
   - [x] bench 對 ASR 輸出先過 `zh_tw` 再算 CER（overlay follow-ups，2026-11-09）
   - [ ] 🧑 真人錄音 bench
 - [ ] W5 T1.6 中翻英
+  - [x] 右 Ctrl+Shift 走 `TranslateZhToEn`；沒有 LLM 時提示「中翻英需要 LM Studio 或雲端服務」（整合，2026-11-09 合併）
+  - [ ] 🧑 實機說 5 句中文確認譯文
 - [x] W5 T1.9 輸入紀錄（DPAPI 加密、7 天、不記錄的 App、日誌不含文字）— 2026-11-09 合併：SQLite＋DPAPI、200 筆、每小時清除、只有主視窗能呼叫、重新輸出只打進先前的視窗
 - [ ] W5 T1.10b VRAM 管理
   - [x] 後端已合併（2026-11-09）：`GpuGuard`（遲滯、實測用量、退避）、NVML `GpuMonitor`、全螢幕偵測、`docs/local-setup.md`
-  - [ ] 接上 controller 與設定頁使用條（整合任務）
+  - [x] 接上 controller（每 5 秒輪詢、讓路／恢復提示）（整合，2026-11-09 合併）
+  - [ ] 設定頁即時使用條（T1.11）
   - [ ] 🧑 實機讓路測試（見 human-checklist）
 - [ ] W6 T1.7b 「新增雲端服務」精靈＋`docs/cloud-setup.md`
 - [ ] W6 T1.8 個人詞庫
   - [x] 程式已合併（2026-11-09）：`Vocab` 檔案、ASR initial prompt（詞彙在前、基本句在後、72 字上限）、潤飾／翻譯 1000 字上限與清理、詞庫頁、CLI `--vocab`
-  - [ ] pipeline 讀入詞庫並監聽 `v2c:vocab-changed`（整合合併後接）
+  - [x] pipeline 讀入詞庫、監聽 `v2c:vocab-changed`（整合，2026-11-09 合併）
   - [ ] 🧑 加入 5 個常用詞實測
 - [ ] W7 T1.11 設定視窗、首次啟動、NSIS 安裝檔、README（Defender 實測）
 - [ ] **檢查點 1**：日常使用一週，問題記在 `dogfood-windows.md`
