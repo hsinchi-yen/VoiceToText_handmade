@@ -3,12 +3,12 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::{broadcast, watch};
+use tokio::sync::broadcast;
 use tracing::{info, warn};
 use v2c_core::config::Config;
 use v2c_core::pipeline::PipelineConfig;
 
-use crate::controller::{RecordingInfo, StatusEvent};
+use crate::controller::StatusEvent;
 use crate::engine::Engine;
 use crate::paths::Paths;
 
@@ -21,8 +21,6 @@ pub struct AppState {
     pub status: broadcast::Sender<StatusEvent>,
     /// Latest status, for UI pages that open after the event was sent.
     pub last_status: Arc<Mutex<Option<StatusEvent>>>,
-    /// Whether a recording is running, hands-free, or translating (for the overlay).
-    pub recording: watch::Receiver<RecordingInfo>,
     pub engine: Arc<Engine>,
     /// Keeps the platform pieces (hook, recorder) alive until exit.
     pub keep_alive: Mutex<Vec<Box<dyn std::any::Any + Send>>>,
@@ -72,12 +70,30 @@ pub fn save_config(path: &Path, cfg: &Config) -> std::io::Result<()> {
     let text = cfg
         .to_toml_string()
         .map_err(|e| std::io::Error::other(e.to_string()))?;
+    save_config_text(path, &text)
+}
+
+/// Atomically replaces `path` with `text`: writes `<path>.tmp`, flushes it to disk
+/// (`sync_all`), then renames it over `path`. On any failure the temporary file is removed and
+/// `path` is left as it was.
+pub fn save_config_text(path: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path)
+    let result = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 pub fn pipeline_config(cfg: &Config) -> PipelineConfig {
@@ -139,6 +155,32 @@ mod tests {
         assert_eq!(read_config(&path), Err("config_invalid"));
         std::fs::write(&path, "[polish]\nenabled = false\n").unwrap();
         assert!(!read_config(&path).unwrap().polish.enabled);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_config_replaces_the_file_and_leaves_no_tmp() {
+        let dir = temp_dir("save");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "old").unwrap();
+        save_config_text(&path, "[polish]\nenabled = false\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[polish]\nenabled = false\n"
+        );
+        assert!(!path.with_extension("toml.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_save_removes_the_tmp_file() {
+        let dir = temp_dir("save-fail");
+        // A non-empty directory where the config file should be: the rename fails.
+        let path = dir.join("config.toml");
+        std::fs::create_dir_all(path.join("blocker")).unwrap();
+        assert!(save_config(&path, &Config::with_defaults()).is_err());
+        assert!(!path.with_extension("toml.tmp").exists());
+        assert!(path.join("blocker").is_dir());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

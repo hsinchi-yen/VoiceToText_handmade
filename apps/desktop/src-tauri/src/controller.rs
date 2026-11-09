@@ -3,8 +3,7 @@
 //!
 //! One utterance is processed at a time; an utterance finished while another is being
 //! processed is queued (at most one). Progress is published as [`StatusEvent`]s on a
-//! `tokio::sync::broadcast` channel (the overlay subscribes to it); whether a recording is
-//! hands-free / translate is published as [`RecordingInfo`] on a `watch` channel.
+//! `tokio::sync::broadcast` channel (the overlay subscribes to it).
 //!
 //! Providers come from a [`Backend`] (the app's `engine::Engine`): it picks the ASR / LLM for
 //! each utterance (local engines, LM Studio, cloud with fallback), so swapping engines never
@@ -33,14 +32,18 @@ use crate::sinks::{OutputContext, SinkRegistry};
 /// Status code shown after a hands-free recording hit `hotkey.hands_free_max_secs` (the clip
 /// is still processed).
 pub const HANDS_FREE_LIMIT: &str = "hands_free_limit";
+/// Translate pressed but no LLM (LM Studio down and no cloud translate service).
+pub const TRANSLATE_UNAVAILABLE: &str = "translate_unavailable";
 
 /// Controller progress, for the overlay and the UI. Carries codes and numbers, never text.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StatusEvent {
     /// Recording; `rms` is the current input level (0.0..=1.0), sent about every 50 ms.
+    /// `hands_free`: double-tap mode (key released; a single tap stops).
     Recording {
         rms: f32,
+        hands_free: bool,
     },
     Transcribing,
     /// The LLM step (polish, or translation in translate mode) started.
@@ -59,18 +62,6 @@ pub enum StatusEvent {
     Error {
         code: &'static str,
     },
-}
-
-/// What kind of recording is running, for the overlay (published on a `watch` channel next to
-/// [`StatusEvent`]; `Recording` events keep their shape).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
-pub struct RecordingInfo {
-    /// A recording is running.
-    pub active: bool,
-    /// Double-tap hands-free mode: the key was released; a single tap stops.
-    pub hands_free: bool,
-    /// Right Ctrl+Shift: Chinese in, English out.
-    pub translate: bool,
 }
 
 /// One utterance's providers, chosen by the [`Backend`].
@@ -103,7 +94,6 @@ pub struct Deps {
     pub foreground: Arc<dyn Foreground + Send + Sync>,
     pub sinks: SinkRegistry,
     pub status: broadcast::Sender<StatusEvent>,
-    pub recording: watch::Sender<RecordingInfo>,
     pub backend: Arc<dyn Backend>,
     /// Live config (hotkey thresholds and app rules are re-read when it changes).
     pub config: watch::Receiver<Arc<Config>>,
@@ -150,7 +140,10 @@ pub async fn run(deps: Deps, mut events: mpsc::UnboundedReceiver<Event>) {
                     if !trigger_down && cmds.is_empty() && recording.is_some() && !hands_free {
                         hands_free = true;
                         info!("hands-free recording");
-                        publish(&deps, recording, hands_free);
+                        emit(
+                            &deps.status,
+                            StatusEvent::Recording { rms: deps.source.level(), hands_free },
+                        );
                     }
                 }
                 match ev {
@@ -166,13 +159,14 @@ pub async fn run(deps: Deps, mut events: mpsc::UnboundedReceiver<Event>) {
                             deps.backend.on_press(mode);
                             recording = Some(mode);
                             hands_free = false;
-                            publish(&deps, recording, hands_free);
-                            emit(&deps.status, StatusEvent::Recording { rms: 0.0 });
+                            emit(
+                                &deps.status,
+                                StatusEvent::Recording { rms: 0.0, hands_free },
+                            );
                         }
                         Command::StopAndProcess | Command::StopAtLimit => {
                             let Some(mode) = recording.take() else { continue };
                             hands_free = false;
-                            publish(&deps, recording, hands_free);
                             let released_at = Instant::now();
                             let clip = deps.source.finish();
                             let at_limit = cmd == Command::StopAtLimit;
@@ -194,7 +188,6 @@ pub async fn run(deps: Deps, mut events: mpsc::UnboundedReceiver<Event>) {
                         Command::Cancel => {
                             if recording.take().is_some() {
                                 hands_free = false;
-                                publish(&deps, recording, hands_free);
                                 deps.source.cancel();
                                 emit(&deps.status, StatusEvent::Cancelled);
                             }
@@ -202,7 +195,10 @@ pub async fn run(deps: Deps, mut events: mpsc::UnboundedReceiver<Event>) {
                     }
                 }
                 if matches!(ev, Event::Tick { .. }) && recording.is_some() {
-                    emit(&deps.status, StatusEvent::Recording { rms: deps.source.level() });
+                    emit(
+                        &deps.status,
+                        StatusEvent::Recording { rms: deps.source.level(), hands_free },
+                    );
                 }
             }
             Some(()) = done_rx.recv() => {
@@ -213,19 +209,6 @@ pub async fn run(deps: Deps, mut events: mpsc::UnboundedReceiver<Event>) {
             }
         }
     }
-}
-
-fn publish(deps: &Deps, recording: Option<Mode>, hands_free: bool) {
-    let info = RecordingInfo {
-        active: recording.is_some(),
-        hands_free,
-        translate: recording == Some(Mode::TranslateZhToEn),
-    };
-    deps.recording.send_if_modified(|cur| {
-        let changed = *cur != info;
-        *cur = info;
-        changed
-    });
 }
 
 fn emit(status: &broadcast::Sender<StatusEvent>, ev: StatusEvent) {
@@ -409,7 +392,7 @@ fn pipeline_error_code(e: &V2cError, mode: Mode) -> &'static str {
             Stage::Inject => "inject_failed",
         },
         // Translate without any LLM (the backend normally catches this first).
-        V2cError::NotConfigured(_) if mode == Mode::TranslateZhToEn => "llm_unavailable",
+        V2cError::NotConfigured(_) if mode == Mode::TranslateZhToEn => TRANSLATE_UNAVAILABLE,
         V2cError::NotConfigured(_) => "not_configured",
         V2cError::Config(_) => "config_invalid",
         V2cError::Storage(_) => "storage_failed",
@@ -567,7 +550,6 @@ mod tests {
     struct Harness {
         events: mpsc::UnboundedSender<Event>,
         status: broadcast::Receiver<StatusEvent>,
-        recording: watch::Receiver<RecordingInfo>,
         injector: Arc<FakeInjector>,
         source: Arc<FakeSource>,
         backend: Arc<FakeBackend>,
@@ -583,7 +565,6 @@ mod tests {
         });
         let backend = Arc::new(backend);
         let (status_tx, status) = broadcast::channel(256);
-        let (rec_tx, recording) = watch::channel(RecordingInfo::default());
         let (config, config_rx) = watch::channel(Arc::new(cfg));
         let deps = Deps {
             source: source.clone(),
@@ -591,7 +572,6 @@ mod tests {
             foreground: Arc::new(FakeForeground),
             sinks: SinkRegistry::with_defaults(),
             status: status_tx,
-            recording: rec_tx,
             backend: backend.clone(),
             config: config_rx,
         };
@@ -600,7 +580,6 @@ mod tests {
         Harness {
             events,
             status,
-            recording,
             injector,
             source,
             backend,
@@ -686,9 +665,21 @@ mod tests {
         let mut h = harness(FakeBackend::ok(), None);
         push_to_talk(&h.events);
         let first = h.status.recv().await.unwrap();
-        assert_eq!(first, StatusEvent::Recording { rms: 0.0 });
+        assert_eq!(
+            first,
+            StatusEvent::Recording {
+                rms: 0.0,
+                hands_free: false
+            }
+        );
         let second = h.status.recv().await.unwrap();
-        assert_eq!(second, StatusEvent::Recording { rms: 0.25 });
+        assert_eq!(
+            second,
+            StatusEvent::Recording {
+                rms: 0.25,
+                hands_free: false
+            }
+        );
         match next_final(&mut h.status).await {
             StatusEvent::Done { chars, .. } => assert_eq!(chars, SENTENCE.chars().count()),
             other => panic!("unexpected {other:?}"),
@@ -775,18 +766,20 @@ mod tests {
         up(e, Key::Trigger, 1_300);
         // Long dictation with the key released.
         ticks(e, 1_350, 60_000);
-        h.recording
-            .wait_for(|r| r.active && r.hands_free)
-            .await
-            .unwrap();
-        assert!(!h.recording.borrow().translate);
+        loop {
+            if let StatusEvent::Recording {
+                hands_free: true, ..
+            } = recv(&mut h.status).await
+            {
+                break;
+            }
+        }
         down(e, Key::Trigger, 60_000);
         up(e, Key::Trigger, 60_050);
         assert!(matches!(
             next_final(&mut h.status).await,
             StatusEvent::Done { .. }
         ));
-        assert_eq!(*h.recording.borrow(), RecordingInfo::default());
         assert_eq!(h.injector.runs.lock().unwrap().len(), 1);
         assert_eq!(*h.source.calls.lock().unwrap(), vec!["begin", "finish"]);
         h.task.abort();
@@ -794,16 +787,20 @@ mod tests {
 
     #[tokio::test]
     async fn auto_repeat_while_holding_is_not_hands_free() {
-        let h = harness(FakeBackend::ok(), None);
+        let mut h = harness(FakeBackend::ok(), None);
         let e = &h.events;
         down(e, Key::Trigger, 1_000);
         down(e, Key::Trigger, 1_030);
         down(e, Key::Trigger, 1_060);
         ticks(e, 1_100, 1_500);
-        let mut rec = h.recording.clone();
-        rec.wait_for(|r| r.active).await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(!h.recording.borrow().hands_free);
+        up(e, Key::Trigger, 1_500);
+        loop {
+            match recv(&mut h.status).await {
+                StatusEvent::Recording { hands_free, .. } => assert!(!hands_free),
+                StatusEvent::Done { .. } => break,
+                _ => {}
+            }
+        }
         h.task.abort();
     }
 
@@ -848,17 +845,16 @@ mod tests {
 
     #[tokio::test]
     async fn translate_mode_flows_through_and_reports_missing_llm() {
-        let mut h = harness(FakeBackend::err("llm_unavailable"), None);
+        let mut h = harness(FakeBackend::err(TRANSLATE_UNAVAILABLE), None);
         let e = &h.events;
         down(e, Key::Shift, 900);
         down(e, Key::Trigger, 1_000);
         ticks(e, 1_050, 2_000);
-        h.recording.wait_for(|r| r.translate).await.unwrap();
         up(e, Key::Trigger, 2_000);
         assert_eq!(
             next_final(&mut h.status).await,
             StatusEvent::Error {
-                code: "llm_unavailable"
+                code: TRANSLATE_UNAVAILABLE
             }
         );
         assert_eq!(
@@ -1003,14 +999,21 @@ mod tests {
                 &V2cError::NotConfigured("translation model"),
                 Mode::TranslateZhToEn
             ),
-            "llm_unavailable"
+            TRANSLATE_UNAVAILABLE
         );
     }
 
     #[test]
     fn status_event_serializes_with_kind_tag() {
-        let v = serde_json::to_value(StatusEvent::Recording { rms: 0.5 }).unwrap();
-        assert_eq!(v, serde_json::json!({ "kind": "recording", "rms": 0.5 }));
+        let v = serde_json::to_value(StatusEvent::Recording {
+            rms: 0.5,
+            hands_free: true,
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({ "kind": "recording", "rms": 0.5, "hands_free": true })
+        );
         let v = serde_json::to_value(StatusEvent::Error {
             code: "model_missing",
         })
@@ -1018,16 +1021,6 @@ mod tests {
         assert_eq!(
             v,
             serde_json::json!({ "kind": "error", "code": "model_missing" })
-        );
-        let v = serde_json::to_value(RecordingInfo {
-            active: true,
-            hands_free: true,
-            translate: false,
-        })
-        .unwrap();
-        assert_eq!(
-            v,
-            serde_json::json!({ "active": true, "hands_free": true, "translate": false })
         );
     }
 

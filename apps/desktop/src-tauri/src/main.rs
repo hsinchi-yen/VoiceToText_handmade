@@ -15,6 +15,7 @@ mod commands;
 mod controller;
 mod engine;
 mod gpu_task;
+mod history_sink;
 mod local_asr;
 mod logging;
 mod overlay;
@@ -29,12 +30,12 @@ mod tray;
 use std::sync::{Arc, Mutex};
 
 use tauri::{Emitter, Listener, Manager};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 use v2c_core::secrets::SecretStore;
 
 use crate::app_state::AppState;
-use crate::controller::{RecordingInfo, StatusEvent};
+use crate::controller::StatusEvent;
 use crate::engine::{Engine, EngineHandle};
 use crate::recorder::{Recorder, RecorderNotice};
 
@@ -54,14 +55,12 @@ fn main() {
     let (config, config_error) = app_state::load_or_create_config(&paths.config_file());
     let secrets = install_keyring();
     let (status, _) = broadcast::channel::<StatusEvent>(256);
-    let (recording_tx, recording) = watch::channel(RecordingInfo::default());
     let engine = Engine::new(paths.clone(), config.clone(), status.clone(), secrets);
     let state = AppState {
         paths,
         config: Arc::new(config),
         status,
         last_status: Arc::new(Mutex::new(None)),
-        recording,
         engine,
         keep_alive: Mutex::new(Vec::new()),
         on_exit: Mutex::new(Vec::new()),
@@ -72,7 +71,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::status::app_info,
             commands::status::last_status,
-            commands::status::recording_info,
+            commands::history::history_list,
+            commands::history::history_copy,
+            commands::history::history_reoutput,
+            commands::history::history_delete,
+            commands::history::history_clear,
         ])
         .on_window_event(|window, event| {
             // A background tool: closing the main window hides it; quit from the tray.
@@ -85,14 +88,15 @@ fn main() {
         })
         .setup(move |app| {
             let handle = app.handle();
-            // Before the background tasks so the overlay sees their first status events.
+            commands::history::init(handle); // before the controller reads the sinks
+                                             // Before the background tasks so the overlay sees their first status events.
             if let Err(e) = overlay::start(handle, &handle.state::<AppState>().status) {
                 error!(error = %e, "overlay window could not be created");
             }
             if let Err(e) = tray::start(handle) {
                 error!(error = %e, "tray icon could not be created");
             }
-            start_background(handle, config_error, recording_tx);
+            start_background(handle, config_error);
             #[cfg(debug_assertions)]
             overlay::start_demo_if_requested(&handle.state::<AppState>().status);
             Ok(())
@@ -148,11 +152,7 @@ fn shutdown(app: &tauri::AppHandle) {
         .clear();
 }
 
-fn start_background(
-    app: &tauri::AppHandle,
-    config_error: Option<&'static str>,
-    recording: watch::Sender<RecordingInfo>,
-) {
+fn start_background(app: &tauri::AppHandle, config_error: Option<&'static str>) {
     let state = app.state::<AppState>();
 
     // Forward status events to the webview and remember the latest one.
@@ -237,15 +237,11 @@ fn start_background(
         }
     }
 
-    start_controller(&state, recorder, recording);
+    start_controller(&state, recorder);
 }
 
 #[cfg(windows)]
-fn start_controller(
-    state: &AppState,
-    recorder: Arc<Recorder>,
-    recording: watch::Sender<RecordingInfo>,
-) {
+fn start_controller(state: &AppState, recorder: Arc<Recorder>) {
     use std::time::Duration;
 
     use v2c_core::trigger::Event;
@@ -295,7 +291,6 @@ fn start_controller(
         foreground: Arc::new(WinForeground),
         sinks: sinks::SinkRegistry::with_defaults(),
         status: state.status.clone(),
-        recording,
         backend: Arc::new(EngineHandle(Arc::clone(&state.engine))),
         config: state.engine.config_watch(),
     };
@@ -304,13 +299,9 @@ fn start_controller(
 }
 
 #[cfg(not(windows))]
-fn start_controller(
-    state: &AppState,
-    recorder: Arc<Recorder>,
-    recording: watch::Sender<RecordingInfo>,
-) {
+fn start_controller(state: &AppState, recorder: Arc<Recorder>) {
     // Linux hotkey and injection arrive in Phase 3.
-    let _ = (recorder, recording, EngineHandle);
+    let _ = (recorder, EngineHandle);
     tracing::warn!("hotkey and text injection are not implemented on this platform yet");
     let _ = state.status.send(StatusEvent::Error {
         code: "platform_unsupported",

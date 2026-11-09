@@ -27,11 +27,15 @@ nvml-wrapper = "0.13"
 # 0.12 with `rustls-tls` = rustls + ring + webpki roots: no OpenSSL and no aws-lc build, so it
 # also compiles for Android.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
+# SQLite for the encrypted history (T1.9); `bundled` compiles SQLite in (desktop and Android).
+rusqlite = { version = "0.41", default-features = false, features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 toml = "0.8"
+# Format-preserving edits of config.toml (keeps the user's comments and unknown keys).
+toml_edit = "0.25"
 tracing = "0.1"
 base64 = "0.22"
 keyring-core = "1"

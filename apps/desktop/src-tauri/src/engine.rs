@@ -220,7 +220,10 @@ impl Engine {
                     "Breeze active"
                 );
                 drop(guard);
-                lock(&self.notices).reset();
+                if lock(&self.notices).reset() {
+                    // Back on the GPU after a yield the user was told about.
+                    self.emit(gpu_task::GPU_RESTORED);
+                }
                 self.local.end_breeze_load(Some(b));
                 true
             }
@@ -432,7 +435,7 @@ impl Engine {
                     return Err(if llm_sel.cloud_missing {
                         providers::CLOUD_NOT_CONFIGURED
                     } else {
-                        "llm_unavailable"
+                        crate::controller::TRANSLATE_UNAVAILABLE
                     });
                 }
                 if llm_sel.cloud_missing {
@@ -704,7 +707,7 @@ mod tests {
         // Translate: no LLM -> error before ASR.
         assert_eq!(
             e.prepare(Mode::TranslateZhToEn).await.err(),
-            Some("llm_unavailable")
+            Some(crate::controller::TRANSLATE_UNAVAILABLE)
         );
         // Dictate: no engine.
         assert_eq!(e.prepare(Mode::Dictate).await.err(), Some("model_missing"));

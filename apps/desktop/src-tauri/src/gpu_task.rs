@@ -5,8 +5,8 @@ use v2c_asr_local::{GuardAction, GuardReason, PickReason};
 
 /// Status code shown once when Breeze yields to a heavy app (`[gpu] heavy_apps`).
 pub const GPU_YIELD_HEAVY_APP: &str = "gpu_yield_heavy_app";
-/// ... to a fullscreen app (`yield_on_fullscreen`).
-pub const GPU_YIELD_FULLSCREEN: &str = "gpu_yield_fullscreen";
+/// Shown when Breeze is back on the GPU after one of the notices above.
+pub const GPU_RESTORED: &str = "gpu_restored";
 /// ... because free VRAM is below `vram_reserve_mb` (+ Breeze's need when loading).
 pub const GPU_LOW_VRAM: &str = "gpu_low_vram";
 
@@ -44,8 +44,8 @@ pub fn guard_step(action: GuardAction, has_cpu: bool, load_blocked: bool) -> Gua
 /// GPU disabled, ...), idle, unknown VRAM and restore-pending are silent (logged only).
 pub fn reason_code(reason: GuardReason) -> Option<&'static str> {
     match reason {
-        GuardReason::HeavyApp => Some(GPU_YIELD_HEAVY_APP),
-        GuardReason::Fullscreen => Some(GPU_YIELD_FULLSCREEN),
+        // A fullscreen game / video counts as a heavy app for the user.
+        GuardReason::HeavyApp | GuardReason::Fullscreen => Some(GPU_YIELD_HEAVY_APP),
         GuardReason::LowVram { .. } | GuardReason::Engine(PickReason::LowVram { .. }) => {
             Some(GPU_LOW_VRAM)
         }
@@ -77,9 +77,10 @@ impl NoticeLatch {
         })
     }
 
-    /// Breeze is loaded again: the next yield is announced again.
-    pub fn reset(&mut self) {
-        self.last = None;
+    /// Breeze is loaded again: the next yield is announced again. Returns whether a yield
+    /// had been announced (then the user should hear it is restored).
+    pub fn reset(&mut self) -> bool {
+        self.last.take().is_some()
     }
 }
 
@@ -145,13 +146,11 @@ mod tests {
             None
         );
         assert_eq!(l.update(GuardAction::Keep), None);
-        assert_eq!(
-            l.update(GuardAction::UseCpu(GuardReason::Fullscreen)),
-            Some(GPU_YIELD_FULLSCREEN)
-        );
+        assert_eq!(l.update(GuardAction::UseCpu(GuardReason::Fullscreen)), None);
         assert_eq!(l.update(GuardAction::UseCpu(LOW)), Some(GPU_LOW_VRAM));
         assert_eq!(l.update(GuardAction::UseCpu(LOW)), None);
-        l.reset();
+        assert!(l.reset());
+        assert!(!l.reset());
         assert_eq!(l.update(GuardAction::Unload(LOW)), Some(GPU_LOW_VRAM));
         // Silent reasons.
         let mut l = NoticeLatch::default();

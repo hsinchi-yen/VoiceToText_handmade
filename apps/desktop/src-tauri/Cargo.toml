@@ -29,6 +29,7 @@ keyring-core.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+toml_edit.workspace = true
 tauri = { version = "2.12", features = ["tray-icon"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
