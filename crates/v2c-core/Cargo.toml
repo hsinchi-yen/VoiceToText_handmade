@@ -14,6 +14,8 @@ toml.workspace = true
 # Polish timeout (`tokio::time::timeout`); also listed in tasks/plan.md section 2.
 tokio.workspace = true
 tracing.workspace = true
+# Encrypted input history (history.rs, T1.9).
+rusqlite.workspace = true
 # Pure-Rust OpenCC (Simplified -> Taiwan Traditional with Taiwan phrasing); see postprocess/zh_tw.rs.
 ferrous-opencc = { version = "0.4", default-features = false, features = ["s2t-conversion", "t2s-conversion"] }
 # Cloud providers (T1.7). rustls instead of OpenSSL so the crate also builds for Android.

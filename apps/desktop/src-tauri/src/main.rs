@@ -10,6 +10,7 @@
 mod app_state;
 mod commands;
 mod controller;
+mod history_sink;
 mod logging;
 mod overlay;
 mod paths;
@@ -56,6 +57,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::status::app_info,
             commands::status::last_status,
+            commands::history::history_list,
+            commands::history::history_copy,
+            commands::history::history_reoutput,
+            commands::history::history_delete,
+            commands::history::history_clear,
         ])
         .on_window_event(|window, event| {
             // A background tool: closing the main window hides it; quit from the tray.
@@ -68,7 +74,8 @@ fn main() {
         })
         .setup(move |app| {
             let handle = app.handle();
-            // Before the background tasks so the overlay sees their first status events.
+            commands::history::init(handle); // before the controller reads the sinks
+                                             // Before the background tasks so the overlay sees their first status events.
             if let Err(e) = overlay::start(handle, &handle.state::<AppState>().status) {
                 error!(error = %e, "overlay window could not be created");
             }

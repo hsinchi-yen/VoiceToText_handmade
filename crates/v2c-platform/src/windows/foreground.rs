@@ -160,6 +160,82 @@ fn covers(window: &RECT, monitor: &RECT) -> bool {
         && window.bottom >= monitor.bottom
 }
 
+/// A top-level window handle that can be kept across threads (T1.9 re-output target).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WindowId(isize);
+
+impl WindowId {
+    fn hwnd(self) -> HWND {
+        self.0 as HWND
+    }
+
+    /// Raw value (for storing in an atomic); `0` is never a valid window.
+    pub fn as_raw(self) -> isize {
+        self.0
+    }
+
+    pub fn from_raw(raw: isize) -> Option<Self> {
+        (raw != 0).then_some(Self(raw))
+    }
+}
+
+/// The foreground window, if any.
+pub fn foreground_window() -> Option<WindowId> {
+    // SAFETY: no arguments; returns null when no window has focus.
+    let hwnd = unsafe { GetForegroundWindow() };
+    WindowId::from_raw(hwnd as isize)
+}
+
+/// A window that can receive typed text: it still exists, belongs to another process, and
+/// is not the desktop, the shell (Progman/WorkerW) or a taskbar.
+pub fn is_text_target(w: WindowId) -> bool {
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::IsWindow;
+
+    // SAFETY: plain FFI calls; an invalid handle makes IsWindow return 0.
+    if unsafe { IsWindow(w.hwnd()) } == 0 {
+        return false;
+    }
+    // SAFETY: plain FFI calls without arguments.
+    if w.hwnd() == unsafe { GetDesktopWindow() } || w.hwnd() == unsafe { GetShellWindow() } {
+        return false;
+    }
+    let mut pid = 0u32;
+    // SAFETY: valid window handle and out pointer.
+    unsafe { GetWindowThreadProcessId(w.hwnd(), &mut pid) };
+    // SAFETY: no arguments.
+    if pid == 0 || pid == unsafe { GetCurrentProcessId() } {
+        return false;
+    }
+    !is_shell_class(&class_name(w).unwrap_or_default())
+}
+
+/// Shell window classes that are never a text target.
+fn is_shell_class(class: &str) -> bool {
+    matches!(
+        class,
+        "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+    )
+}
+
+fn class_name(w: WindowId) -> Option<String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetClassNameW;
+
+    let mut buf = [0u16; 256];
+    // SAFETY: `buf` holds `buf.len()` u16s.
+    let n = unsafe { GetClassNameW(w.hwnd(), buf.as_mut_ptr(), buf.len() as i32) };
+    (n > 0).then(|| String::from_utf16_lossy(&buf[..n as usize]))
+}
+
+/// Asks Windows to bring `w` to the foreground. Only succeeds while this process may set
+/// the foreground (e.g. it owns the current foreground window); check with
+/// [`foreground_window`] afterwards.
+pub fn activate_window(w: WindowId) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+    // SAFETY: plain FFI call; an invalid handle just fails.
+    unsafe { SetForegroundWindow(w.hwnd()) != 0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +268,24 @@ mod tests {
         assert!(!covers(&r(0, 0, 1920, 1040), &mon));
         // Second monitor to the right.
         assert!(covers(&r(1920, 0, 3840, 1080), &r(1920, 0, 3840, 1080)));
+    }
+
+    #[test]
+    fn shell_classes_are_not_targets() {
+        for c in [
+            "Progman",
+            "WorkerW",
+            "Shell_TrayWnd",
+            "Shell_SecondaryTrayWnd",
+        ] {
+            assert!(is_shell_class(c), "{c}");
+        }
+        assert!(!is_shell_class("Notepad"));
+        assert_eq!(WindowId::from_raw(0), None);
+        // SAFETY: plain FFI call without arguments.
+        if let Some(shell) = WindowId::from_raw(unsafe { GetShellWindow() } as isize) {
+            assert!(!is_text_target(shell));
+        }
     }
 
     #[test]
