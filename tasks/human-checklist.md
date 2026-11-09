@@ -72,6 +72,10 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
   2. 各狀態外觀與時間：錄音音量條、辨識中、完成約 0.8 秒消失、錯誤停留 3 秒；不同縮放比例下也看一下
   3. 系統列：設定／輸入紀錄打開對應頁面；潤飾勾選會改 config.toml 的 `polish.enabled`；「全部改用地端」讓 `[route]` 三項變 `"local"`；「切換服務」是灰色；「結束」真的關閉
   4. 主視窗按 ✕ 只是隱藏、背景繼續執行，可從系統列再打開
+- [ ] T1.8 個人詞庫
+  1. `npm run tauri dev` →「詞庫」頁輸入 5 個常用人名或產品名 → 儲存，確認 `%APPDATA%\v2c\vocab.txt` 有內容
+  2. 錄一段含這些詞的音檔（可另存為 `tests/fixtures/audio/vocab-02.wav` 並寫期望文字），比較 CER：
+     `cargo run -p v2c-cli --release --features cuda -- bench --asr breeze --model <breeze.bin> tests/fixtures/audio` 與加上 `--vocab "$env:APPDATA\v2c\vocab.txt"` 的結果
 - [ ] T1.9 輸入紀錄
   1. 說幾句話後，用 DB Browser for SQLite 開 `%APPDATA%\v2c\history.db`：`text_sealed` 是亂碼，搜尋句子找不到
   2. 在 KeePassXC／Bitwarden 的欄位說話 → 紀錄頁沒有新增
