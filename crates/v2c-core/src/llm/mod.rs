@@ -1,6 +1,9 @@
 //! Text model interface used for polishing and Chinese-to-English translation.
 //! Implementations: OpenAI-compatible (LM Studio / self-hosted, T1.5), OpenAI, Gemini, Claude (T1.7).
 
+pub mod claude;
+pub mod gemini;
+
 use async_trait::async_trait;
 
 use crate::Result;
