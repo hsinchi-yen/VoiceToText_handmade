@@ -12,7 +12,9 @@ use v2c_asr_local::{
     sensevoice, BreezeAsr, BreezeOptions, BreezeOutput, DecodeLang, LanguageMode, SenseVoiceAsr,
     SenseVoiceLanguage, SenseVoiceOptions, Transcript,
 };
-use v2c_core::{asr::AsrContext, audio::AudioClip, audio::SAMPLE_RATE};
+use v2c_core::{
+    asr::AsrContext, audio::AudioClip, audio::SAMPLE_RATE, postprocess::zh_tw::to_zh_tw,
+};
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -88,14 +90,31 @@ pub enum Engine {
 }
 
 /// Result of one recognition with a timing/language summary (the summary holds no text).
+/// [`Engine::run`] returns `transcript.text` already converted with `zh_tw`.
 pub struct EngineOutput {
     pub transcript: Transcript,
     pub total_ms: u64,
     pub summary: String,
 }
 
+impl EngineOutput {
+    /// Converts the text to Traditional Chinese (Taiwan) with `zh_tw`, as the app pipeline does
+    /// after ASR (SenseVoice outputs Simplified), and notes it in the summary.
+    pub fn with_zh_tw(mut self) -> Self {
+        self.transcript.text = to_zh_tw(&self.transcript.text);
+        self.summary.push_str(", zh_tw applied");
+        self
+    }
+}
+
 impl Engine {
+    /// Recognises `clip`; the text comes back converted with `zh_tw` (see
+    /// [`EngineOutput::with_zh_tw`]), so CER and the simplified check match the app.
     pub fn run(&self, clip: &AudioClip, ctx: &AsrContext) -> v2c_core::Result<EngineOutput> {
+        self.run_raw(clip, ctx).map(EngineOutput::with_zh_tw)
+    }
+
+    fn run_raw(&self, clip: &AudioClip, ctx: &AsrContext) -> v2c_core::Result<EngineOutput> {
         match self {
             Engine::Breeze(b) => b.transcribe_blocking(clip, ctx).map(|o| EngineOutput {
                 summary: describe(&o),
@@ -111,10 +130,6 @@ impl Engine {
                 transcript: o.transcript,
             }),
         }
-    }
-
-    pub fn is_sensevoice(&self) -> bool {
-        matches!(self, Engine::SenseVoice(_))
     }
 }
 
@@ -275,9 +290,6 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         .run(&clip, &AsrContext::default())
         .context("transcribing")?;
     eprintln!("audio {} ms, {}", clip.duration_ms(), out.summary);
-    if engine.is_sensevoice() {
-        eprintln!("note: SenseVoice output is Simplified; the app converts it with zh_tw.");
-    }
     println!("{}", out.transcript.text);
     Ok(())
 }
@@ -285,6 +297,22 @@ pub fn run(args: Args) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_is_converted_with_zh_tw() {
+        let out = EngineOutput {
+            transcript: Transcript {
+                text: "软件开发 OK".into(),
+                lang: v2c_core::Lang::Mixed,
+            },
+            total_ms: 5,
+            summary: "asr 5 ms (sensevoice, cpu)".into(),
+        }
+        .with_zh_tw();
+        assert_eq!(out.transcript.text, "軟體開發 OK");
+        assert_eq!(out.summary, "asr 5 ms (sensevoice, cpu), zh_tw applied");
+        assert_eq!(out.total_ms, 5);
+    }
 
     #[test]
     fn downmix_averages_channels() {
