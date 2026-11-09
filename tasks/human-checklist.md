@@ -51,6 +51,15 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] 檢查點 0 核准
 
 ## Phase 1
+- [ ] T1.2 剪貼簿貼上＋還原（指令：`cargo run -p v2c-cli -- inject-test --paste "測試\n第二行"`，3 秒內切到目標視窗）
+  1. `cargo test -p v2c-platform -- --ignored real_clipboard_roundtrip`（會短暫改動剪貼簿）
+  2. 小畫家框選並複製 → 對記事本執行指令，出現兩行 → 回小畫家 Ctrl+V，原圖仍在
+  3. 先複製一段文字（再用 Word 帶格式文字試一次）→ 重複 → 原本內容與格式仍在
+  4. 檔案總管複製一個檔案 → 執行 → 回檔案總管 Ctrl+V 能貼出檔案
+  5. LINE 輸入框：換行不送出訊息，事後剪貼簿已還原
+  6. 系統管理員身分開記事本 → 顯示 elevated 錯誤，手動 Ctrl+V 能貼出文字
+  7. Win+V：測試文字不在剪貼簿歷史裡
+  8. （若有 VMware/VirtualBox）不加 `--paste` 也會自動走貼上；確認 150 ms 是否足夠
 - [ ] 在 LM Studio 載入 3B 模型並啟動伺服器（T1.5 前）
 - [ ] 各卡的實機驗收（見各卡「🧑 需人工」）
 - [ ] 檢查點 1：日常使用一週，問題記在 `tasks/dogfood-windows.md`

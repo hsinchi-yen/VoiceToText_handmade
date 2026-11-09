@@ -130,7 +130,7 @@ impl Pipeline {
 1. **等所有修飾鍵放開**（RCtrl、Shift），最多等 500 ms；否則注入的字會變成 Ctrl+字母快捷鍵。這一步是正確性關鍵。
 2. `GetForegroundWindow` → 取得行程執行檔名 → 選 app_profile。
 3. `Text`：`SendInput` + `KEYEVENTF_UNICODE`，以 UTF-16 code unit 送出（surrogate pair 要成對送），每批 ~50 字，批次間不延遲；`SendInput` 回傳值小於送出數 → 判定失敗，改走 Paste。
-4. `Paste`：`arboard` 備份剪貼簿（文字、圖片）→ 設定文字 → 送 Ctrl+V → 等 150 ms → 還原。MVP 只還原文字與圖片；其他格式（HTML、檔案）列為已知限制。
+4. `Paste`：以原生 Win32 剪貼簿 API 備份所有 HGLOBAL 格式（文字、圖片 DIB、HTML、RTF、複製的檔案等；`arboard` 只支援文字與圖片且會重新編碼，T1.2 實作時改用原生 API）→ 設定文字（標記不進 Win+V 歷史與雲端剪貼簿）→ 送 Ctrl+V → 等 150 ms → 還原（期間若剪貼簿被別人改過則不還原）。已知限制：GDI handle 類格式（EMF 等）、OLE 私有格式、超大的延遲渲染格式不還原；還原後剪貼簿擁有者變成 v2c。
 5. 前景視窗是系統管理員權限（UIPI 擋住）→ 浮動標籤提示「無法輸入到系統管理員視窗，已複製到剪貼簿」。
 
 ---
