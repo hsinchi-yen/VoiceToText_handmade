@@ -76,6 +76,13 @@ fn main() {
             commands::history::history_reoutput,
             commands::history::history_delete,
             commands::history::history_clear,
+            commands::cloud::cloud_kinds,
+            commands::cloud::cloud_list,
+            commands::cloud::cloud_models,
+            commands::cloud::cloud_test_connection,
+            commands::cloud::cloud_save,
+            commands::cloud::cloud_remove,
+            commands::cloud::cloud_open_key_page,
             commands::vocab::vocab_get,
             commands::vocab::vocab_set,
         ])

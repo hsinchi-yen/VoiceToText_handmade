@@ -30,6 +30,8 @@ serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 toml_edit.workspace = true
+# Cloud wizard (T1.7b): wipe pasted API keys from memory.
+zeroize.workspace = true
 tauri = { version = "2.12", features = ["tray-icon"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
@@ -54,5 +56,6 @@ version = "0.61"
 features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"]
 
 [dev-dependencies]
+wiremock.workspace = true
 hound.workspace = true
 serde_json = "1"
