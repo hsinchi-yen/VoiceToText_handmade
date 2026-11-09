@@ -20,7 +20,6 @@ use std::{
 
 use anyhow::Context;
 use v2c_core::{
-    asr::AsrContext,
     audio::AudioClip,
     config::LocalConfig,
     llm::{LlmProvider, OpenAiCompatLlm},
@@ -28,7 +27,7 @@ use v2c_core::{
     prompts,
 };
 
-use super::transcribe::{load_engine, load_wav, BreezeArgs, EngineOutput};
+use super::transcribe::{asr_context, load_engine, load_wav, BreezeArgs, EngineOutput};
 
 /// Request timeout for bench polish. Generous on purpose so slow answers are still shown and
 /// judged against the budget; the app itself gives up after `polish.timeout_ms` (1000 ms).
@@ -60,6 +59,10 @@ pub struct Args {
     /// VRAM with nvidia-smi and checking for display stutter).
     #[arg(long, default_value_t = 1)]
     pub repeat: u32,
+    /// Vocabulary file (one entry per line) for the ASR initial prompt; compare CER with and
+    /// without it.
+    #[arg(long)]
+    pub vocab: Option<PathBuf>,
     #[command(flatten)]
     pub breeze: BreezeArgs,
 }
@@ -323,7 +326,7 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     }
 
     let engine = load_engine(&args.asr, args.model.as_deref(), &args.breeze)?;
-    let ctx = AsrContext::default();
+    let ctx = asr_context(args.vocab.as_deref())?;
     if engine.is_sensevoice() {
         println!(
             "note: SenseVoice outputs Simplified Chinese; the app converts it with zh_tw, this \
@@ -639,6 +642,7 @@ mod tests {
             llm_timeout_ms: 2000,
             model: None,
             repeat: 1,
+            vocab: None,
             breeze: BreezeArgs {
                 lang: "detect".into(),
                 cpu: true,

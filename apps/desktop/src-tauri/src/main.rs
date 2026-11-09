@@ -56,6 +56,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::status::app_info,
             commands::status::last_status,
+            commands::vocab::vocab_get,
+            commands::vocab::vocab_set,
         ])
         .on_window_event(|window, event| {
             // A background tool: closing the main window hides it; quit from the tray.
