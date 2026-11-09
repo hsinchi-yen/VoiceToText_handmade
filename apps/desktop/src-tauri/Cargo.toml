@@ -25,11 +25,16 @@ v2c-platform.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-tauri = { version = "2.12", features = [] }
+tauri = { version = "2.12", features = ["tray-icon"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
 cpal = "0.18"
 rubato = "5"
+
+# Overlay window styles (no activation, click-through); see src/overlay.rs.
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"]
 
 [dev-dependencies]
 async-trait.workspace = true

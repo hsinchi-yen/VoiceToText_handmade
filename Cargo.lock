@@ -4941,6 +4941,7 @@ dependencies = [
  "v2c-asr-local",
  "v2c-core",
  "v2c-platform",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -1,7 +1,8 @@
 //! v2c desktop app: hold Right Ctrl, speak, and the text is typed at the cursor.
 //!
-//! Startup: logging -> config -> Tauri. In `setup`: status forwarder, background model load,
-//! recorder, hotkey hook, and the controller task. OS-specific calls go through `v2c-platform`.
+//! Startup: logging -> config -> Tauri. In `setup`: overlay window, tray icon, status forwarder,
+//! background model load, recorder, hotkey hook, and the controller task. OS-specific calls go
+//! through `v2c-platform` (the overlay's window styles are isolated in `overlay::win`).
 
 // No console window in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -10,11 +11,13 @@ mod app_state;
 mod commands;
 mod controller;
 mod logging;
+mod overlay;
 mod paths;
 mod recorder;
 mod sinks;
 #[cfg(test)]
 mod smoke_tests;
+mod tray;
 
 use std::sync::{Arc, Mutex};
 
@@ -54,8 +57,27 @@ fn main() {
             commands::status::app_info,
             commands::status::last_status,
         ])
+        .on_window_event(|window, event| {
+            // A background tool: closing the main window hides it; quit from the tray.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(move |app| {
-            start_background(app.handle(), config_error);
+            let handle = app.handle();
+            // Before the background tasks so the overlay sees their first status events.
+            if let Err(e) = overlay::start(handle, &handle.state::<AppState>().status) {
+                error!(error = %e, "overlay window could not be created");
+            }
+            if let Err(e) = tray::start(handle) {
+                error!(error = %e, "tray icon could not be created");
+            }
+            start_background(handle, config_error);
+            #[cfg(debug_assertions)]
+            overlay::start_demo_if_requested(&handle.state::<AppState>().status);
             Ok(())
         })
         .run(tauri::generate_context!());
