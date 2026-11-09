@@ -24,14 +24,9 @@ impl HistorySink {
     pub fn new(store: Arc<History>) -> Self {
         Self { store }
     }
-}
 
-impl OutputSink for HistorySink {
-    fn name(&self) -> &str {
-        "history"
-    }
-
-    fn on_output(&self, output: &Output, ctx: &OutputContext) {
+    /// Writes one output (blocking: SQLite + DPAPI).
+    pub fn record(&self, output: &Output, ctx: &OutputContext) {
         let entry = NewEntry {
             created_at: now_unix(),
             mode: output.mode,
@@ -47,6 +42,25 @@ impl OutputSink for HistorySink {
                 "history sink"
             ),
             Err(e) => warn!(error = %e, "history write failed"),
+        }
+    }
+}
+
+impl OutputSink for HistorySink {
+    fn name(&self) -> &str {
+        "history"
+    }
+
+    /// On the tokio blocking pool when called from the runtime (the controller), so the
+    /// controller task is not held up; synchronously otherwise.
+    fn on_output(&self, output: &Output, ctx: &OutputContext) {
+        match tokio::runtime::Handle::try_current() {
+            Ok(rt) => {
+                let sink = HistorySink::new(Arc::clone(&self.store));
+                let (output, ctx) = (output.clone(), ctx.clone());
+                rt.spawn_blocking(move || sink.record(&output, &ctx));
+            }
+            Err(_) => self.record(output, ctx),
         }
     }
 }
@@ -147,6 +161,19 @@ mod tests {
         assert_eq!(list[1].lang, Some(Lang::Zh));
         assert_eq!(list[1].total_ms, Some(330));
         assert_eq!(sink.name(), "history");
+    }
+
+    #[tokio::test]
+    async fn inside_the_runtime_the_write_runs_on_the_blocking_pool() {
+        let store = store(Arc::new(XorProtector));
+        HistorySink::new(Arc::clone(&store)).on_output(&output(SENTENCE), &ctx("notepad.exe"));
+        for _ in 0..200 {
+            if store.count().unwrap() == 1 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("entry was not written");
     }
 
     #[test]

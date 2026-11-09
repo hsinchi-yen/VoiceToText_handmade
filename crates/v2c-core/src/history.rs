@@ -179,6 +179,15 @@ impl History {
     ) -> Result<Self> {
         conn.pragma_update(None, "secure_delete", "ON")
             .map_err(db)?;
+        let version: i32 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .map_err(db)?;
+        if version > SCHEMA_VERSION {
+            // Written by a newer v2c; do not touch it.
+            return Err(V2cError::Storage(format!(
+                "history schema {version} is newer than supported {SCHEMA_VERSION}"
+            )));
+        }
         conn.execute_batch(SCHEMA).map_err(db)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)
             .map_err(db)?;
@@ -231,7 +240,7 @@ impl History {
         let trimmed = conn
             .execute(
                 "DELETE FROM entries WHERE id NOT IN
-                     (SELECT id FROM entries ORDER BY created_at DESC, id DESC LIMIT ?1)",
+                     (SELECT id FROM entries ORDER BY id DESC LIMIT ?1)",
                 params![i64::from(self.config.max_entries)],
             )
             .map_err(db)?;
@@ -240,7 +249,7 @@ impl History {
     }
 
     /// Newest first, at most `limit` (and at most `max_entries`), decrypted. Entries that
-    /// cannot be decrypted (e.g. a database copied from another Windows user) are skipped.
+    /// cannot be decrypted (e.g. a database copied from another Windows user) are deleted.
     pub fn list_records(&self, limit: u32) -> Result<Vec<HistoryRecord>> {
         let limit = limit.min(self.config.max_entries);
         let rows: Vec<RawRow> = {
@@ -257,15 +266,24 @@ impl History {
             mapped.collect::<rusqlite::Result<_>>().map_err(db)?
         };
         let mut out = Vec::with_capacity(rows.len());
-        let mut unreadable = 0u32;
+        let mut unreadable = Vec::new();
         for row in rows {
+            let id = row.id;
             match self.open_row(row) {
                 Some(r) => out.push(r),
-                None => unreadable += 1,
+                None => unreadable.push(id),
             }
         }
-        if unreadable > 0 {
-            warn!(unreadable, "history entries could not be decrypted");
+        if !unreadable.is_empty() {
+            let conn = self.lock()?;
+            for id in &unreadable {
+                conn.execute("DELETE FROM entries WHERE id = ?1", params![id])
+                    .map_err(db)?;
+            }
+            warn!(
+                removed = unreadable.len(),
+                "undecryptable history entries removed"
+            );
         }
         Ok(out)
     }
@@ -707,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn undecryptable_entries_are_skipped() {
+    fn undecryptable_entries_are_removed() {
         let (h, _) = store();
         h.add_entry(&entry(1, "a.exe", "good")).unwrap();
         h.lock()
@@ -721,6 +739,46 @@ mod tests {
         let list = h.list_records(10).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].entry.text, "good");
+        assert_eq!(h.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn newer_schema_is_refused() {
+        let dir = std::env::temp_dir().join(format!("v2c-history-schema-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.db");
+        let _ = std::fs::remove_file(&path);
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .unwrap();
+        let r = History::open(
+            &path,
+            Arc::new(FakeProtector::default()),
+            HistoryConfig::default(),
+        );
+        assert!(matches!(r, Err(V2cError::Storage(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cap_keeps_newest_ids_even_with_older_timestamps() {
+        let (h, _) = store_with(HistoryConfig {
+            max_entries: 2,
+            ..HistoryConfig::default()
+        });
+        // Clock went backwards: the last insert still counts as newest.
+        for (at, t) in [(300, "a"), (200, "b"), (100, "c")] {
+            h.add_entry(&entry(at, "x.exe", t)).unwrap();
+        }
+        let mut texts: Vec<_> = h
+            .list_records(10)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.entry.text)
+            .collect();
+        texts.sort();
+        assert_eq!(texts, ["b", "c"]);
     }
 
     #[test]
