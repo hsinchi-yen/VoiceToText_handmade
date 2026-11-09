@@ -38,3 +38,8 @@ tracing = "0.1"
 base64 = "0.22"
 keyring-core = "1"
 wiremock = "0.6"
+# Comment-preserving config.toml edits (desktop cloud wizard, T1.7b).
+toml_edit = "0.25"
+zeroize = "1"
+# Windows Credential Manager store for keyring-core (desktop app installs it).
+windows-native-keyring-store = { version = "1.1", default-features = false }
