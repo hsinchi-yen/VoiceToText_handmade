@@ -126,6 +126,8 @@ v2c 就會自動使用。建議設定與顯示卡記憶體的分配請看 [docs/
 
 ## 從原始碼建置
 
+完整步驟見 [docs/build-guide.md](docs/build-guide.md)（一鍵腳本 `tools\build-installer.ps1`）；模型、安裝檔等不進 git 的大檔怎麼取得，見 [docs/download-guide.md](docs/download-guide.md)。
+
 需要：Visual Studio 2022 Build Tools（C++ 工作負載）、Rust（MSVC 工具鏈）、LLVM（libclang）、Node.js LTS；
 要用顯示卡還需要 NVIDIA CUDA Toolkit。`tools/setup-dev.ps1` 會安裝這些（請先讀過腳本，再自己以系統管理員身分執行）：
 

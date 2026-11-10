@@ -11,6 +11,9 @@ apps/android/local.properties
 tests/fixtures/audio/*.wav
 tests/fixtures/audio/*.m4a
 
+# Throwaway test artifacts (models, generated audio, bench output)
+tests/tmp/
+
 # Model files
 *.gguf
 *.bin
