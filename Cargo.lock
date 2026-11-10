@@ -5908,6 +5908,7 @@ dependencies = [
  "keyring-core",
  "libc",
  "ring",
+ "secret-service",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
@@ -5918,6 +5919,7 @@ dependencies = [
  "wiremock",
  "zbus",
  "zbus-secret-service-keyring-store",
+ "zeroize",
 ]
 
 [[package]]

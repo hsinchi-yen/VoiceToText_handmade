@@ -41,6 +41,11 @@ keyring-core.workspace = true
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
 # T3.6: AES-256-GCM + system RNG for history encryption (already in Cargo.lock via rustls).
 ring = "0.17"
+# T3.6: unlock the default collection before creating the history key (same version the
+# keyring store uses).
+secret-service = { version = "5.2", features = ["crypto-rust"] }
+# T3.6: wipe the history key and decrypted bytes from memory.
+zeroize.workspace = true
 
 # T3.3: Linux LLM/ASR integration and end-to-end simulation tests (tests/linux_*.rs).
 [dev-dependencies]
