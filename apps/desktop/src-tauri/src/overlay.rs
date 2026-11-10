@@ -373,7 +373,10 @@ pub fn start(app: &AppHandle, status: &broadcast::Sender<StatusEvent>) -> tauri:
             .focusable(false)
             .visible(false)
             .build()?;
-    // Click-through (tao adds WS_EX_TRANSPARENT | WS_EX_LAYERED).
+    // Click-through (tao adds WS_EX_TRANSPARENT | WS_EX_LAYERED). Linux: tao unwraps the
+    // GdkWindow, which a never-shown GTK window does not have yet (abort at startup), so
+    // there it is set after each `show()` (see `set_visible`).
+    #[cfg(not(target_os = "linux"))]
     if let Err(e) = window.set_ignore_cursor_events(true) {
         warn!(error = %e, "overlay: could not make the window click-through");
     }
@@ -486,6 +489,10 @@ fn set_visible(app: &AppHandle, window: &WebviewWindow, visible: bool) {
                 let _ = window.set_position(tauri::PhysicalPosition::new(r.x, r.y));
             }
             let _ = window.show();
+            #[cfg(target_os = "linux")]
+            if let Err(e) = window.set_ignore_cursor_events(true) {
+                warn!(error = %e, "overlay: could not make the window click-through");
+            }
         } else {
             let _ = window.hide();
         }
