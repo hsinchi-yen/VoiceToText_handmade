@@ -253,3 +253,50 @@ IBus 只會把文字送進「輸入來源是 v2c、有焦點、而且焦點後�
 
 Wayland 下不顯示浮動標籤，改用桌面通知（同一則通知依序更新：錄音中 → 辨識中 → 潤飾中 → 完成）。錯誤（麥克風、辨識失敗、熱鍵）會另外顯示；潤飾退回、雲端退回等提示只顯示在主視窗。X11 工作階段仍使用浮動標籤，只有 IBus 與「文字沒有輸入」的通知。
 
+
+## 7. 安裝（T3.7）
+
+`bash tools/build-linux.sh` 產生兩種安裝包，放在 repo 的 `releases/`（不進 git），雜湊寫在 `releases/SHA256SUMS.txt`：
+
+| 檔案 | 內容 | 適合 |
+|------|------|------|
+| `v2c_<版本>_amd64.deb` | `/usr/bin/v2c`、SenseVoice 函式庫 `/usr/lib/v2c/*.so`、說明文件 `/usr/lib/v2c/docs/`、**IBus 輸入法元件** `/usr/share/ibus/component/v2c.xml`、選單捷徑 | Ubuntu／Debian，**建議使用** |
+| `v2c_<版本>_amd64.AppImage` | 同一個程式與函式庫，免安裝 | 不能裝 .deb 的發行版；**不含 IBus 元件**（見 7.4） |
+
+這一版只有 CPU 版（沒有 Breeze／CUDA）；語音辨識用遠端服務或 SenseVoice。
+
+### 7.1 安裝 .deb
+
+```sh
+sha256sum -c --ignore-missing SHA256SUMS.txt     # 在 releases/ 資料夾裡執行，確認檔案沒有損壞
+sudo apt install ./v2c_0.1.3_amd64.deb            # 會一併安裝相依套件（ibus、libwebkit2gtk-4.1-0、libayatana-appindicator3-1…）
+ibus restart                                      # 讓 ibus-daemon 讀到新的 v2c 元件（或登出再登入）
+```
+
+要用 `apt install ./檔名`（前面有 `./`），不要用 `dpkg -i`，否則相依套件不會自動安裝。解除安裝：`sudo apt remove v2c`（設定與紀錄在 `~/.config/v2c/`，不會被刪除）。
+
+### 7.2 加入 v2c 輸入來源（GNOME）
+
+1. 「設定」→「鍵盤」→「輸入來源」→「＋」→ 選中文（台灣）語言（元件的語言是 `zh_TW`；GNOME 顯示的名稱依介面語言而定，也可以在搜尋框輸入「v2c」）→「**v2c 語音輸入**」→「新增」。這一步還沒在實機上做過。
+   清單裡沒有 v2c：執行 `ibus restart` 或重新登入後再試；`ibus list-engine | grep v2c` 應該看得到。
+2. 要說話時，用 Super+空白鍵切到 v2c 輸入來源，在輸入框裡按住右 Ctrl 說話（見第 6.2 節）。切到 v2c 時 v2c 還沒執行，ibus-daemon 會自動啟動它（`/usr/bin/v2c --ibus`，不開主視窗）。
+3. 主視窗從應用程式選單的「v2c」打開。
+
+### 7.3 設定兩個遠端服務
+
+1. 先啟動一次 v2c，讓它建立 `~/.config/v2c/config.toml`（Linux 預設 `[gpu] enabled = false`）。
+2. 結束 v2c（系統匣圖示 → 結束），用文字編輯器打開 `~/.config/v2c/config.toml`，照第 4 節的範例加入 `[route]`、`[timeouts]` 與兩個 `[[cloud]]`（語音辨識 `:8002`、文字模型 `:8000`），把 IP 換成你的伺服器。
+   也可以在主視窗「雲端服務」頁用「自訂相容端點」分別設定文字與語音端點。
+3. 伺服器需要金鑰時，在「雲端服務」頁貼上；金鑰存在 GNOME「登入」鑰匙圈，不寫進設定檔。
+4. 重新啟動 v2c（手動改設定檔後一定要重新啟動）。
+
+### 7.4 AppImage
+
+```sh
+chmod +x v2c_0.1.3_amd64.AppImage
+./v2c_0.1.3_amd64.AppImage
+```
+
+- 需要 FUSE 2（Ubuntu 22.04：`sudo apt install libfuse2`；Ubuntu 24.04：`libfuse2t64`）。沒有 FUSE 時可改用 `./v2c_0.1.3_amd64.AppImage --appimage-extract-and-run`。
+- 系統還是要有 ibus、libayatana-appindicator3-1（系統匣）與 gnome-keyring（金鑰庫）。
+- AppImage **不能安裝 IBus 元件**，所以預設走備援熱鍵／輸出（第 6.2 節；GNOME 42 上文字只會保留在紀錄裡）。要用 IBus 請改裝 .deb。若一定要用 AppImage：把 AppImage 放到固定位置（例如 `~/Applications/v2c.AppImage`），複製 repo 的 `tools/ibus/v2c.xml` 到 `/usr/share/ibus/component/v2c.xml`（需要 sudo），把其中的 `<exec>` 改成 `/home/你的帳號/Applications/v2c.AppImage --ibus`，然後 `ibus restart`。這個做法未經測試。
