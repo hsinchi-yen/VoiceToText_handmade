@@ -8,7 +8,7 @@
 //! `ForwardKeyEvent(uuu)` signals. Engines are destroyed with
 //! `org.freedesktop.IBus.Service.Destroy`.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use v2c_core::inject_plan::Action;
@@ -35,6 +35,10 @@ pub const NO_FOCUSED_INPUT: &str =
     "IBus: no focused text field is using the v2c input method; nothing was typed";
 
 type Sink = Box<dyn Fn(Event) + Send + 'static>;
+/// The installed sink. `Core::sink` only guards which sink is installed; delivery clones the
+/// `Arc` out and calls through this per-sink mutex (needed because `Sink` is not `Sync`), so
+/// a sink that calls [`IbusHotkey::stop`] / `start` from inside cannot deadlock.
+type SharedSink = Arc<Mutex<Sink>>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
@@ -44,7 +48,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 #[derive(Default)]
 pub(crate) struct Core {
     state: Mutex<EngineState>,
-    sink: Mutex<Option<Sink>>,
+    sink: Mutex<Option<SharedSink>>,
 }
 
 impl Core {
@@ -52,7 +56,10 @@ impl Core {
         if events.is_empty() {
             return;
         }
-        if let Some(sink) = lock(&self.sink).as_ref() {
+        // Clone the sink out and release `self.sink` before calling it.
+        let sink = lock(&self.sink).clone();
+        if let Some(sink) = sink {
+            let sink = lock(&sink);
             for e in events {
                 sink(e);
             }
@@ -102,7 +109,7 @@ impl Core {
 
     fn set_sink(&self, sink: Option<Sink>) {
         lock(&self.state).reset_keys();
-        *lock(&self.sink) = sink;
+        *lock(&self.sink) = sink.map(|s| Arc::new(Mutex::new(s)));
     }
 }
 
@@ -111,6 +118,15 @@ pub(crate) trait OpSender: Send + Sync {
     fn send(&self, engine_path: &str, op: &EngineOp) -> Result<(), InjectError>;
 }
 
+// zbus 5.19 caveat: ibus-daemon sends input-context signals to *clients* with the sender
+// field set to the well-known name `org.freedesktop.IBus` (`bus_input_context_send_signal`
+// in bus/inputcontext.c). zbus validates the sender as a unique name when it rebuilds a
+// header, and `Message::header()` panics ("Invalid field reconstruction") on such a
+// message. The engine connection is unaffected: it only receives method calls from the
+// daemon's engine/factory proxies (no well-known sender), the replies to our own calls,
+// and bus signals from `org.freedesktop.DBus`, which zbus accepts. Verified by
+// `ibus_real_engine_round_trip`. Only the test client (real_tests.rs) works around it. If a
+// future IBus starts sending such signals to engines, this is where it would break.
 struct DbusSender {
     conn: zbus::blocking::Connection,
 }
@@ -309,6 +325,18 @@ pub fn v2c_component() -> ComponentDesc {
 pub struct IbusEngine {
     conn: zbus::blocking::Connection,
     core: Arc<Core>,
+    link: Arc<Link>,
+}
+
+type DisconnectCallback = Box<dyn FnOnce() + Send + 'static>;
+
+/// Connection liveness, updated by a watcher thread blocked in `Connection::closed()`.
+#[derive(Default)]
+struct Link {
+    connected: AtomicBool,
+    /// Set by [`IbusEngine::close`] so a deliberate close does not fire the callback.
+    closing: AtomicBool,
+    on_disconnect: Mutex<Option<DisconnectCallback>>,
 }
 
 impl IbusEngine {
@@ -344,7 +372,46 @@ impl IbusEngine {
                     .map_err(err("RequestName"))?;
             }
         }
-        Ok(Self { conn, core })
+        let link = Arc::new(Link::default());
+        link.connected.store(true, Ordering::SeqCst);
+        let (watch_conn, watch_link) = (conn.clone(), link.clone());
+        std::thread::Builder::new()
+            .name("v2c-ibus-watch".into())
+            .spawn(move || {
+                watch_conn.closed();
+                drop(watch_conn);
+                watch_link.connected.store(false, Ordering::SeqCst);
+                let cb = lock(&watch_link.on_disconnect).take();
+                if !watch_link.closing.load(Ordering::SeqCst) {
+                    if let Some(cb) = cb {
+                        cb();
+                    }
+                }
+            })
+            .map_err(|e| PlatformError::Ibus(format!("watcher thread: {e}")))?;
+        Ok(Self { conn, core, link })
+    }
+
+    /// `false` once the connection to ibus-daemon is gone (daemon exited or restarted,
+    /// e.g. `ibus restart` or a new GNOME session). The engine is then dead: hotkey events
+    /// stop and the injector fails. Start a new [`IbusEngine`] (re-register) to recover.
+    pub fn is_connected(&self) -> bool {
+        self.link.connected.load(Ordering::SeqCst)
+    }
+
+    /// Calls `callback` once, from a background thread, when the daemon connection is lost
+    /// (not when [`IbusEngine::close`] is called). Replaces an earlier callback. If the
+    /// connection is already gone, `callback` runs right away on the calling thread.
+    pub fn on_disconnect(&self, callback: impl FnOnce() + Send + 'static) {
+        let mut slot = lock(&self.link.on_disconnect);
+        if self.is_connected() {
+            *slot = Some(Box::new(callback));
+        } else {
+            drop(slot);
+            if !self.link.closing.load(Ordering::SeqCst) {
+                callback();
+            }
+        }
     }
 
     /// Hotkey events from key presses in text fields where the v2c engine is active.
@@ -378,6 +445,7 @@ impl IbusEngine {
 
     /// Closes the connection; a dynamically registered component disappears with it.
     pub fn close(self) -> Result<(), PlatformError> {
+        self.link.closing.store(true, Ordering::SeqCst);
         self.conn
             .close()
             .map_err(|e| PlatformError::Ibus(format!("close: {e}")))
@@ -386,6 +454,11 @@ impl IbusEngine {
 
 /// [`Hotkey`] fed by the engine's `ProcessKeyEvent`. Only sees keys while a text field
 /// with the v2c engine has focus; while stopped, every key passes through untouched.
+///
+/// The sink runs synchronously inside `ProcessKeyEvent`, and ibus-daemon waits for that
+/// reply (up to ~25 s) before the key reaches any app — a slow sink freezes typing
+/// system-wide. It must return quickly (e.g. send on a channel). Calling
+/// [`Hotkey::stop`] / [`Hotkey::start`] from inside the sink is allowed.
 pub struct IbusHotkey {
     core: Arc<Core>,
 }
@@ -407,6 +480,10 @@ impl Hotkey for IbusHotkey {
 /// still has focus; otherwise [`Injector::run`] fails with [`NO_FOCUSED_INPUT`] and sends
 /// nothing. (IBus moves the engine to an internal fake context when no text field has
 /// focus and silently drops commits there; key events tell real fields apart.)
+///
+/// On [`NO_FOCUSED_INPUT`] (or any other error) the caller must keep the text: put it in
+/// history and/or on the clipboard and tell the user (notification), since nothing was
+/// typed. `IbusInjector` itself keeps no copy. (T3.6 implements that fallback.)
 pub struct IbusInjector {
     core: Arc<Core>,
     sender: Arc<dyn OpSender>,
@@ -607,6 +684,38 @@ mod tests {
             .run(&[Action::Text("辨識結果".into())])
             .unwrap();
         assert_eq!(lock(&rec.sent).len(), 1);
+    }
+
+    #[test]
+    fn sink_may_stop_the_hotkey_from_inside_without_deadlock() {
+        let core = active_core();
+        let hk = Arc::new(Mutex::new(IbusHotkey { core: core.clone() }));
+        let calls = Arc::new(AtomicU32::new(0));
+        let (hk2, calls2) = (hk.clone(), calls.clone());
+        lock(&hk)
+            .start(Box::new(move |_| {
+                calls2.fetch_add(1, Ordering::SeqCst);
+                // Re-entrant: replaces the installed sink while it is running.
+                IbusHotkey {
+                    core: lock(&hk2).core.clone(),
+                }
+                .stop();
+            }))
+            .unwrap();
+        let c = core.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let handled = c.key(E, KEY_CONTROL_R, 97, 0);
+            let _ = tx.send(handled);
+        });
+        let handled = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("ProcessKeyEvent deadlocked");
+        assert!(handled);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // Stopped: the release now passes through and the sink is not called again.
+        assert!(!core.key(E, KEY_CONTROL_R, 97, IBUS_RELEASE_MASK));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

@@ -435,6 +435,37 @@ fn ibus_real_engine_round_trip() {
 }
 
 #[test]
+#[ignore = "starts a private ibus-daemon; run with --ignored ibus_real"]
+fn ibus_real_daemon_exit_is_detected() {
+    let daemon = PrivateDaemon::start();
+    let engine = IbusEngine::start(&daemon.address, &test_component(), Registration::Dynamic)
+        .expect("RegisterComponent");
+    assert!(engine.is_connected());
+    let (tx, rx) = mpsc::channel();
+    engine.on_disconnect(move || {
+        let _ = tx.send(());
+    });
+    drop(daemon); // kills the private daemon
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("on_disconnect callback");
+    assert!(!engine.is_connected());
+    eprintln!("private daemon killed -> is_connected() = false, callback fired");
+
+    // A deliberate close does not fire the callback.
+    let daemon = PrivateDaemon::start();
+    let engine = IbusEngine::start(&daemon.address, &test_component(), Registration::Dynamic)
+        .expect("RegisterComponent");
+    let (tx, rx) = mpsc::channel::<()>();
+    engine.on_disconnect(move || {
+        let _ = tx.send(());
+    });
+    engine.close().unwrap();
+    assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
+    eprintln!("close() -> no disconnect callback");
+    drop(daemon);
+}
+
+#[test]
 #[ignore = "connects to the user's ibus-daemon (read only); run with --ignored ibus_real"]
 fn ibus_real_user_daemon_read_only() {
     let address = IbusAddress::discover().expect("discover the user's IBus daemon");

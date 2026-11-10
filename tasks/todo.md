@@ -121,6 +121,7 @@
   - [x] mock 測試：轉換表、序列進真正的 `trigger::Trigger`（按住說話、雙擊免持、Ctrl+C 取消、Shift 翻譯、Esc）、一般按鍵放行、`IBusText` 位元組、注入動作序列、沒焦點時報錯不送出、錯誤／Debug 不含文字
   - [x] 本機真實（`-- --ignored ibus_real --test-threads=1`）：在**私人** ibus-daemon（同一個 1.5.26 執行檔，獨立 socket，不連 session bus）上動態註冊 `v2c-test`、測試客戶端 `CreateInputContext` → `FocusIn` → `SetEngine`、右 Ctrl 按住 0.5 秒 → `StartRecording` + `StopAndProcess`、`a` 放行、收到兩筆中文 `CommitText` 與四個 `ForwardKeyEvent`、關閉後引擎消失；使用者的 daemon 只做唯讀查詢。沒在使用者 daemon 上註冊的原因：1.5.26 的動態元件消失時 `bus_ibus_impl_check_global_engine` 可能把焦點輸入框的引擎設成 NULL
   - [x] 發現：IBus 全域引擎模式下，輸入框失焦後引擎會被移到內部 fake context 並再次收到 FocusIn／Enable；因此只有「FocusIn 後收到過按鍵」的引擎才是輸出目標，否則 `IbusInjector` 回報錯誤（不會打到別處）
+  - [x] 審查修正：sink 不在鎖內呼叫（sink 內呼叫 `stop()` 不會卡住 `ProcessKeyEvent`，有測試）；`IbusEngine::is_connected()`／`on_disconnect()`（私人 daemon 被關掉時實測觸發，`close()` 不觸發）；註明 zbus 5.19 `Message::header()` 遇到具名寄件者會 panic、引擎連線為何不受影響；`NO_FOCUSED_INPUT` 時呼叫端必須保留文字（T3.6 做紀錄／剪貼簿＋通知）
   - [ ] `Registration::Launched`（由 ibus-daemon 依 component XML 啟動、RequestName）尚未實測（要先安裝 XML）
   - [ ] 🧑 在 GNOME 設定加入 v2c 輸入來源，在 gedit／Firefox／終端機實機按住右 Ctrl 說話（含：吞掉右 Ctrl 後右 Ctrl+C 是否仍是複製、ForwardKeyEvent 的 Enter／Shift+Enter 在各 App 的效果）
   - [ ] 🧑 核准合併 T3.5
