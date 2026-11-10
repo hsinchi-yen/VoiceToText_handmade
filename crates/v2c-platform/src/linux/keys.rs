@@ -56,8 +56,12 @@ pub trait KeyBackend {
     }
     /// State of the physical modifier keys, polled while waiting for the user to let go.
     fn modifiers(&self) -> Result<ModifierState, InjectError>;
-    /// Presses (`pressed = true`) or releases an evdev key code.
+    /// Presses (`pressed = true`) or releases an evdev key code. Must not open a new
+    /// session: a release has to reach the same session as its press.
     fn key(&self, code: u16, pressed: bool) -> Result<(), InjectError>;
+    /// Called once after every run that reached `prepare`, with the run's error if any.
+    /// The portal backend drops a possibly broken session here (never mid-run).
+    fn finish(&self, _error: Option<&InjectError>) {}
 }
 
 // ---------------------------------------------------------------------------------------
@@ -220,12 +224,12 @@ impl LiveSession {
             // The user unticked the keyboard in the dialog.
             return Err(InjectError::PermissionDenied);
         }
-        self.clipboard_enabled = results
+        let clipboard_enabled = results
             .get("clipboard_enabled")
-            .and_then(|v| bool::try_from(v.clone()).ok())
-            .unwrap_or(false);
-        if want_clipboard && !self.clipboard_enabled {
-            return Err(InjectError::PermissionDenied);
+            .and_then(|v| bool::try_from(v.clone()).ok());
+        self.clipboard_enabled = clipboard_enabled == Some(true);
+        if want_clipboard {
+            clipboard_grant(clipboard_enabled)?;
         }
         Ok(self)
     }
@@ -256,39 +260,85 @@ impl Drop for LiveSession {
     }
 }
 
-/// A lazily opened RemoteDesktop session shared by [`PortalKeys`] and
-/// [`super::clipboard::PortalClipboard`]. Constructing it does nothing on the bus.
-pub struct PortalSession {
-    want_clipboard: bool,
-    live: Mutex<Option<Arc<LiveSession>>>,
+/// Maps `Start`'s `clipboard_enabled` when clipboard access was requested: `false` means
+/// the user (or policy) refused it; a missing key means the portal does not support
+/// clipboard sharing at all (RemoteDesktop before version 2).
+pub(crate) fn clipboard_grant(clipboard_enabled: Option<bool>) -> Result<(), InjectError> {
+    match clipboard_enabled {
+        Some(true) => Ok(()),
+        Some(false) => Err(InjectError::PermissionDenied),
+        None => Err(InjectError::Unsupported(
+            "the RemoteDesktop portal did not report clipboard access (needs version 2)".into(),
+        )),
+    }
 }
 
-impl PortalSession {
+type Opener<S> = Box<dyn Fn() -> Result<S, InjectError> + Send + Sync>;
+
+/// Holds at most one session. Only [`open`](Self::open) (called from the backends'
+/// `prepare`, i.e. at the start of a run) may create one; everything else uses
+/// [`existing`](Self::existing), so a failure in the middle of a run can never pop up a
+/// second consent dialog or send a key release to a different session than the press.
+/// [`discard`](Self::discard) is called after the run (backends' `finish`).
+pub struct SessionSlot<S> {
+    opener: Opener<S>,
+    live: Mutex<Option<Arc<S>>>,
+}
+
+/// The lazily opened RemoteDesktop session shared by [`PortalKeys`] and
+/// [`super::clipboard::PortalClipboard`]. Constructing it does nothing on the bus.
+pub type PortalSession = SessionSlot<LiveSession>;
+
+impl SessionSlot<LiveSession> {
     pub fn new(want_clipboard: bool) -> Arc<Self> {
+        Self::with_opener(Box::new(move || LiveSession::open(want_clipboard)))
+    }
+}
+
+impl<S> SessionSlot<S> {
+    pub(crate) fn with_opener(opener: Opener<S>) -> Arc<Self> {
         Arc::new(Self {
-            want_clipboard,
+            opener,
             live: Mutex::new(None),
         })
     }
 
-    /// The open session, opening it (consent dialog) if needed.
-    pub(crate) fn get(&self) -> Result<Arc<LiveSession>, InjectError> {
-        let mut slot = self
-            .live
+    fn slot(&self) -> Result<std::sync::MutexGuard<'_, Option<Arc<S>>>, InjectError> {
+        self.live
             .lock()
-            .map_err(|_| InjectError::Os("portal session lock poisoned".into()))?;
+            .map_err(|_| InjectError::Os("portal session lock poisoned".into()))
+    }
+
+    /// The open session, opening it (consent dialog) if there is none.
+    pub(crate) fn open(&self) -> Result<Arc<S>, InjectError> {
+        let mut slot = self.slot()?;
         if let Some(live) = slot.as_ref() {
             return Ok(live.clone());
         }
-        let live = Arc::new(LiveSession::open(self.want_clipboard)?);
+        let live = Arc::new((self.opener)()?);
         *slot = Some(live.clone());
         Ok(live)
     }
 
-    /// Forgets the session after an error, so the next injection opens a new one.
-    pub(crate) fn reset(&self) {
+    /// The session [`open`](Self::open) created. Never opens one.
+    pub(crate) fn existing(&self) -> Result<Arc<S>, InjectError> {
+        self.slot()?
+            .clone()
+            .ok_or_else(|| InjectError::Os("portal session is not open".into()))
+    }
+
+    /// Forgets the session, so the next run opens a new one.
+    pub(crate) fn discard(&self) {
         if let Ok(mut slot) = self.live.lock() {
             *slot = None;
+        }
+    }
+
+    /// Drops the session after a run that failed with a D-Bus/OS error (it may be broken).
+    /// Other errors (modifiers held, permission denied before opening) keep it.
+    pub(crate) fn finish(&self, error: Option<&InjectError>) {
+        if matches!(error, Some(InjectError::Os(_))) {
+            self.discard();
         }
     }
 }
@@ -306,7 +356,7 @@ impl PortalKeys {
 
 impl KeyBackend for PortalKeys {
     fn prepare(&self) -> Result<(), InjectError> {
-        self.session.get().map(|_| ())
+        self.session.open().map(|_| ())
     }
 
     fn modifiers(&self) -> Result<ModifierState, InjectError> {
@@ -314,16 +364,17 @@ impl KeyBackend for PortalKeys {
     }
 
     fn key(&self, code: u16, pressed: bool) -> Result<(), InjectError> {
-        let r = self.session.get()?.notify_keycode(code, pressed);
-        if r.is_err() {
-            self.session.reset();
-        }
-        r
+        // Same session as the press, even after an error (no reset mid-run).
+        self.session.existing()?.notify_keycode(code, pressed)
+    }
+
+    fn finish(&self, error: Option<&InjectError>) {
+        self.session.finish(error);
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -364,5 +415,70 @@ mod tests {
         assert!(s.live.lock().unwrap().is_none());
         let _keys = PortalKeys::new(s.clone());
         assert!(s.live.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn clipboard_grant_mapping() {
+        assert_eq!(clipboard_grant(Some(true)), Ok(()));
+        assert_eq!(
+            clipboard_grant(Some(false)),
+            Err(InjectError::PermissionDenied)
+        );
+        assert!(matches!(
+            clipboard_grant(None),
+            Err(InjectError::Unsupported(_))
+        ));
+    }
+
+    use std::sync::atomic::AtomicUsize;
+
+    /// A slot whose opener counts calls and yields numbered fake sessions.
+    pub(crate) fn counting_slot<S: 'static>(
+        make: fn(usize) -> Result<S, InjectError>,
+    ) -> (Arc<SessionSlot<S>>, Arc<AtomicUsize>) {
+        let opens = Arc::new(AtomicUsize::new(0));
+        let o = opens.clone();
+        let slot =
+            SessionSlot::with_opener(Box::new(move || make(o.fetch_add(1, Ordering::SeqCst) + 1)));
+        (slot, opens)
+    }
+
+    /// Stands in for the consent dialog being cancelled (a real session needs D-Bus).
+    pub(crate) fn denied(_: usize) -> Result<LiveSession, InjectError> {
+        Err(InjectError::PermissionDenied)
+    }
+
+    #[test]
+    fn only_open_creates_a_session() {
+        let (slot, opens) = counting_slot::<usize>(Ok);
+        assert!(slot.existing().is_err());
+        assert_eq!(opens.load(Ordering::SeqCst), 0);
+        assert_eq!(*slot.open().unwrap(), 1);
+        assert_eq!(*slot.open().unwrap(), 1);
+        assert_eq!(*slot.existing().unwrap(), 1);
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+
+        // Non-OS errors keep the session; OS errors drop it, and nothing but `open`
+        // brings a new one.
+        slot.finish(Some(&InjectError::ModifiersHeld));
+        slot.finish(None);
+        assert_eq!(*slot.existing().unwrap(), 1);
+        slot.finish(Some(&InjectError::Os("bus gone".into())));
+        assert!(slot.existing().is_err());
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+        assert_eq!(*slot.open().unwrap(), 2);
+    }
+
+    #[test]
+    fn portal_keys_never_open_a_session_outside_prepare() {
+        let (slot, opens) = counting_slot(denied);
+        let keys = PortalKeys::new(slot.clone());
+        // A release after a failure must not trigger a (second) consent dialog.
+        assert!(keys.key(KEY_LEFTCTRL, false).is_err());
+        assert_eq!(opens.load(Ordering::SeqCst), 0);
+        assert_eq!(keys.prepare(), Err(InjectError::PermissionDenied));
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+        assert!(keys.key(KEY_LEFTCTRL, false).is_err());
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
     }
 }

@@ -18,6 +18,10 @@
 //! Limits: only text formats are backed up and restored (images and other MIME types are
 //! not); an empty or unreadable clipboard is left holding the pasted text, because the
 //! portal has no documented "clear" call. Contents are never logged or put in errors.
+//!
+//! The signal thread of a session ends at the first clipboard signal after that session
+//! was dropped; with no further signal it stays parked (one idle thread per session, and a
+//! new session is only opened after a run failed with a D-Bus error).
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -26,6 +30,7 @@ use std::thread;
 use std::time::Duration;
 
 use zbus::blocking::{MessageIterator, Proxy};
+use zbus::message::Sequence;
 use zbus::zvariant::{OwnedFd, OwnedObjectPath, OwnedValue, Value};
 
 use super::caps::{CLIPBOARD_IFACE, PORTAL_DEST, PORTAL_PATH};
@@ -65,6 +70,7 @@ impl std::fmt::Debug for ClipContent {
 /// Clipboard primitives. Methods take `&self` because [`crate::Injector::run`] does.
 pub trait ClipboardBackend {
     /// Gets ready (the portal backend opens its session here, which may show a dialog).
+    /// The only method that may open a session.
     fn prepare(&self) -> Result<(), InjectError> {
         Ok(())
     }
@@ -77,49 +83,118 @@ pub trait ClipboardBackend {
     fn still_ours(&self) -> Result<bool, InjectError>;
     /// Puts a backup back. An empty backup may leave the clipboard unchanged.
     fn restore(&self, content: &ClipContent) -> Result<(), InjectError>;
+    /// Called once after every run that reached `prepare`, with the run's error if any.
+    fn finish(&self, _error: Option<&InjectError>) {}
 }
 
-/// What the signal thread knows about the selection.
-#[derive(Default)]
-struct SelectionState {
-    /// We own the selection; what we serve on `SelectionTransfer`.
+/// What the signal thread knows about the selection of one session. `P` is the receive
+/// position of a message on the connection ([`Sequence`]; plain numbers in tests), used to
+/// drop `SelectionOwnerChanged` signals that were sent before our own `SetSelection`
+/// returned but processed after it.
+struct SelectionState<P> {
+    /// What we serve on `SelectionTransfer` while we own the selection.
     offered: Option<ClipContent>,
     is_owner: bool,
     /// MIME types of the current selection (from the last `SelectionOwnerChanged`).
     mime_types: Vec<String>,
+    /// Receive position of our last successful `SetSelection` reply.
+    owned_since: Option<P>,
+    /// A `SetSelection` call is in flight: owner signals are queued, not applied.
+    offering: bool,
+    queued: Vec<(P, bool)>,
+}
+
+impl<P> Default for SelectionState<P> {
+    fn default() -> Self {
+        Self {
+            offered: None,
+            is_owner: false,
+            mime_types: Vec::new(),
+            owned_since: None,
+            offering: false,
+            queued: Vec::new(),
+        }
+    }
+}
+
+impl<P: Ord + Copy> SelectionState<P> {
+    fn on_owner_changed(&mut self, at: P, ours: bool, mime_types: Vec<String>) {
+        self.mime_types = mime_types;
+        if self.offering {
+            self.queued.push((at, ours));
+        } else {
+            self.apply(at, ours);
+        }
+    }
+
+    fn apply(&mut self, at: P, ours: bool) {
+        if self.owned_since.is_some_and(|since| at < since) {
+            return; // sent before our SetSelection took effect
+        }
+        self.is_owner = ours;
+        if !ours {
+            // Don't keep dictated text in memory longer than needed.
+            self.offered = None;
+            self.owned_since = None;
+        }
+    }
+
+    fn begin_offer(&mut self, content: ClipContent) {
+        self.offered = Some(content);
+        self.offering = true;
+        self.queued.clear();
+    }
+
+    /// `reply_at`: receive position of the `SetSelection` reply, `None` if it failed.
+    fn end_offer(&mut self, reply_at: Option<P>) {
+        self.offering = false;
+        let queued = std::mem::take(&mut self.queued);
+        match reply_at {
+            Some(at) => {
+                self.owned_since = Some(at);
+                self.is_owner = true;
+                for (p, ours) in queued {
+                    self.apply(p, ours);
+                }
+            }
+            None => {
+                self.offered = None;
+                self.is_owner = false;
+                self.owned_since = None;
+            }
+        }
+    }
+}
+
+type SharedState = Arc<Mutex<SelectionState<Sequence>>>;
+
+fn lock_err<T>(_: T) -> InjectError {
+    InjectError::Os("clipboard lock poisoned".into())
 }
 
 /// [`ClipboardBackend`] over the Clipboard portal. Constructing it does nothing on the bus.
 pub struct PortalClipboard {
     session: Arc<PortalSession>,
-    state: Arc<Mutex<SelectionState>>,
-    /// Session the signal thread was started for.
-    listening: Mutex<Option<OwnedObjectPath>>,
+    /// The session the signal thread runs for, and that session's own fresh state.
+    current: Mutex<Option<(OwnedObjectPath, SharedState)>>,
 }
 
 impl PortalClipboard {
     pub fn new(session: Arc<PortalSession>) -> Self {
         Self {
             session,
-            state: Arc::default(),
-            listening: Mutex::new(None),
+            current: Mutex::new(None),
         }
     }
 
-    fn live(&self) -> Result<Arc<LiveSession>, InjectError> {
-        let live = self.session.get()?;
-        if !live.clipboard_enabled {
-            return Err(InjectError::PermissionDenied);
+    /// The session opened by `prepare` and its selection state. Never opens a session.
+    fn live(&self) -> Result<(Arc<LiveSession>, SharedState), InjectError> {
+        let live = self.session.existing()?;
+        let current = self.current.lock().map_err(lock_err)?;
+        match current.as_ref() {
+            Some((path, state)) if *path == live.session => Ok((live, state.clone())),
+            _ => Err(InjectError::Os("clipboard listener is not running".into())),
         }
-        let mut listening = self
-            .listening
-            .lock()
-            .map_err(|_| InjectError::Os("clipboard lock poisoned".into()))?;
-        if listening.as_ref() != Some(&live.session) {
-            spawn_listener(&live, self.state.clone())?;
-            *listening = Some(live.session.clone());
-        }
-        Ok(live)
     }
 
     fn proxy(live: &LiveSession) -> Result<Proxy<'_>, InjectError> {
@@ -128,42 +203,42 @@ impl PortalClipboard {
     }
 
     fn offer(&self, content: ClipContent) -> Result<(), InjectError> {
-        let live = self.live()?;
+        let (live, state) = self.live()?;
         let mime_types: Vec<String> = content.0.iter().map(|(m, _)| m.clone()).collect();
-        {
-            let mut st = self
-                .state
-                .lock()
-                .map_err(|_| InjectError::Os("clipboard lock poisoned".into()))?;
-            st.offered = Some(content);
-            st.is_owner = true;
-        }
+        state.lock().map_err(lock_err)?.begin_offer(content);
         let mut opts: HashMap<&str, Value<'_>> = HashMap::new();
         opts.insert("mime_types", Value::from(mime_types));
-        let r = Self::proxy(&live)?
+        let reply = Self::proxy(&live)?
             .call_method("SetSelection", &(&live.session, opts))
-            .map(|_| ())
             .map_err(dbus_err("SetSelection"));
-        if r.is_err() {
-            if let Ok(mut st) = self.state.lock() {
-                st.offered = None;
-                st.is_owner = false;
-            }
-            self.session.reset();
-        }
-        r
+        // No session reset here: a later restore in this run must use this same session.
+        state
+            .lock()
+            .map_err(lock_err)?
+            .end_offer(reply.as_ref().ok().map(|m| m.recv_position()));
+        reply.map(|_| ())
     }
 }
 
 impl ClipboardBackend for PortalClipboard {
     fn prepare(&self) -> Result<(), InjectError> {
-        self.live().map(|_| ())
+        let live = self.session.open()?;
+        if !live.clipboard_enabled {
+            return Err(InjectError::PermissionDenied);
+        }
+        let mut current = self.current.lock().map_err(lock_err)?;
+        if current.as_ref().map(|(p, _)| p) != Some(&live.session) {
+            // New session: start from a clean state (nothing offered, not owner).
+            let state = SharedState::default();
+            spawn_listener(&live, state.clone())?;
+            *current = Some((live.session.clone(), state));
+        }
+        Ok(())
     }
 
     fn backup(&self) -> Result<ClipContent, InjectError> {
-        let live = self.live()?;
-        let available = self
-            .state
+        let (live, state) = self.live()?;
+        let available = state
             .lock()
             .map(|st| st.mime_types.clone())
             .unwrap_or_default();
@@ -204,12 +279,9 @@ impl ClipboardBackend for PortalClipboard {
     }
 
     fn still_ours(&self) -> Result<bool, InjectError> {
-        // A stale "not owner" signal can only make this false, which keeps the other
-        // content (the safe direction).
-        self.state
-            .lock()
-            .map(|st| st.is_owner)
-            .map_err(|_| InjectError::Os("clipboard lock poisoned".into()))
+        let (_, state) = self.live()?;
+        let st = state.lock().map_err(lock_err)?;
+        Ok(st.is_owner)
     }
 
     fn restore(&self, content: &ClipContent) -> Result<(), InjectError> {
@@ -217,6 +289,10 @@ impl ClipboardBackend for PortalClipboard {
             return Ok(());
         }
         self.offer(content.clone())
+    }
+
+    fn finish(&self, error: Option<&InjectError>) {
+        self.session.finish(error);
     }
 }
 
@@ -245,12 +321,11 @@ fn read_with_timeout(fd: OwnedFd, timeout: Duration) -> Option<Vec<u8>> {
 }
 
 /// Follows `SelectionOwnerChanged` and serves `SelectionTransfer` for one session.
-fn spawn_listener(
-    live: &Arc<LiveSession>,
-    state: Arc<Mutex<SelectionState>>,
-) -> Result<(), InjectError> {
+fn spawn_listener(live: &Arc<LiveSession>, state: SharedState) -> Result<(), InjectError> {
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
+        .sender(PORTAL_DEST)
+        .map_err(dbus_err("match rule"))?
         .interface(CLIPBOARD_IFACE)
         .map_err(dbus_err("match rule"))?
         .build();
@@ -284,12 +359,7 @@ fn spawn_listener(
                             .and_then(|v| Vec::<String>::try_from(v.clone()).ok())
                             .unwrap_or_default();
                         if let Ok(mut st) = state.lock() {
-                            st.is_owner = ours;
-                            st.mime_types = mimes;
-                            if !ours {
-                                // Don't keep dictated text in memory longer than needed.
-                                st.offered = None;
-                            }
+                            st.on_owner_changed(msg.recv_position(), ours, mimes);
                         }
                     }
                     Some("SelectionTransfer") => {
@@ -336,6 +406,8 @@ fn serve_transfer(live: &LiveSession, serial: u32, data: Option<Vec<u8>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::linux::keys::tests::{counting_slot, denied};
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn content_debug_hides_bytes() {
@@ -373,6 +445,70 @@ mod tests {
     fn constructing_touches_nothing() {
         let s = PortalSession::new(true);
         let cb = PortalClipboard::new(s);
-        assert!(cb.listening.lock().unwrap().is_none());
+        assert!(cb.current.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn only_prepare_may_open_the_session() {
+        let (slot, opens) = counting_slot(denied);
+        let cb = PortalClipboard::new(slot);
+        // Restore / set / backup after a failure must never pop up a new dialog.
+        assert!(cb
+            .restore(&ClipContent(vec![("text/plain".into(), vec![1])]))
+            .is_err());
+        assert!(cb.set_text("x").is_err());
+        assert!(cb.backup().is_err());
+        assert!(cb.still_ours().is_err());
+        assert_eq!(opens.load(Ordering::SeqCst), 0);
+        assert_eq!(cb.prepare(), Err(InjectError::PermissionDenied));
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+        assert!(cb
+            .restore(&ClipContent(vec![("text/plain".into(), vec![1])]))
+            .is_err());
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+    }
+
+    fn text(t: &str) -> ClipContent {
+        ClipContent(vec![("text/plain".into(), t.as_bytes().to_vec())])
+    }
+
+    #[test]
+    fn stale_owner_signal_is_ignored() {
+        let mut st = SelectionState::<u64>::default();
+        st.begin_offer(text("ours"));
+        // Another app's copy, sent before our SetSelection took effect, arrives meanwhile.
+        st.on_owner_changed(5, false, vec!["text/plain".into()]);
+        st.end_offer(Some(7));
+        assert!(st.is_owner);
+        assert!(st.offered.is_some());
+        // Same stale signal processed after the reply: still ignored.
+        st.on_owner_changed(6, false, vec![]);
+        assert!(st.is_owner);
+        // Our own ownership confirmation, then a real later copy.
+        st.on_owner_changed(8, true, vec![]);
+        assert!(st.is_owner);
+        st.on_owner_changed(9, false, vec!["text/plain".into()]);
+        assert!(!st.is_owner);
+        assert!(st.offered.is_none(), "dictated text must not linger");
+    }
+
+    #[test]
+    fn copy_after_our_reply_while_queued_wins() {
+        let mut st = SelectionState::<u64>::default();
+        st.begin_offer(text("ours"));
+        st.on_owner_changed(9, false, vec![]);
+        st.end_offer(Some(7));
+        assert!(!st.is_owner);
+        assert!(st.offered.is_none());
+    }
+
+    #[test]
+    fn failed_offer_clears_state() {
+        let mut st = SelectionState::<u64>::default();
+        st.begin_offer(text("ours"));
+        st.end_offer(None);
+        assert!(!st.is_owner);
+        assert!(st.offered.is_none());
+        assert!(st.owned_since.is_none());
     }
 }

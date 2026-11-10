@@ -95,7 +95,8 @@
   - [x] `linux::inject::{LinuxInjector<C, K>, InjectConfig, select_injector(), portal_injector()}`、`linux::clipboard::{ClipboardBackend, PortalClipboard}`、`linux::keys::{KeyBackend, ModifierState, PortalKeys, PortalSession}`；`InjectError::{PermissionDenied, Unsupported}`；`Text`／`Paste` 一律貼上，換行以 keycode 送；mock 測試涵蓋多行、Shift+Enter、修飾鍵逾時、權限拒絕、剪貼簿設定失敗、Ctrl+V 送一半仍放開、還原與被別人改過不還原
   - [x] 本機唯讀實測（`-- --ignored linux_real_select_injector`）：GNOME 42 判定 `Unsupported`（沒有 Clipboard portal、RemoteDesktop 只有 v1）
   - [ ] 修飾鍵狀態：portal 無法讀實體按鍵（`ModifierState::Unknown` → 不等待）；之後可改由 evdev 提供
-  - [ ] `apps/desktop` 的 `inject_error_code` 需補上兩個新變體（不在 T3.2 允許路徑內）
+  - [x] `apps/desktop` 的 `inject_error_code` 補上兩個新變體（a0ee91d）
+  - [x] 審查修正：工作階段只在 `prepare` 開啟、執行結束後才丟棄（不會在中途再跳對話框）；中途失敗盡力還原；權限/不支援錯誤保留種類；剪貼簿訊號限定 portal 送出者並忽略過期的擁有者變更
   - [ ] 🧑 在 GNOME ≥ 45 實機測貼上到 gedit／Firefox／終端機；RemoteDesktop 同意對話框按「取消」的提示
   - [ ] 🧑 核准合併 T3.2
 - [ ] W14 T3.4 通知提示＋打包

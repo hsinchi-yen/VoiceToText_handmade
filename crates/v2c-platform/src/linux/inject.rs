@@ -23,7 +23,7 @@ use v2c_core::config::NewlineKey;
 use v2c_core::inject_plan::Action;
 
 use super::caps::{LinuxCaps, Portal};
-use super::clipboard::{ClipboardBackend, PortalClipboard};
+use super::clipboard::{ClipContent, ClipboardBackend, PortalClipboard};
 use super::keys::{
     KeyBackend, ModifierState, PortalKeys, PortalSession, KEY_ENTER, KEY_LEFTCTRL, KEY_LEFTSHIFT,
     KEY_V,
@@ -145,60 +145,31 @@ impl<C: ClipboardBackend, K: KeyBackend> LinuxInjector<C, K> {
         self.wait_for_modifiers_released()?;
 
         let pastes = actions.iter().any(|a| !matches!(a, Action::NewLine(_)));
-        let mut backup = if pastes {
-            Some(self.clipboard.backup()?)
-        } else {
-            None
+        let mut run = PasteRun {
+            backup: if pastes {
+                Some(self.clipboard.backup()?)
+            } else {
+                None
+            },
+            have_set: false,
+            leave_text: false,
         };
-        let mut have_set = false;
-        // A key release that failed after the paste went through: reported at the end.
-        let mut late_error = None;
-
-        for action in actions {
-            let text = match action {
-                Action::NewLine(key) => {
-                    self.newline(*key)?;
-                    continue;
-                }
-                Action::Text(t) | Action::Paste(t) => t,
-            };
-            if text.is_empty() {
-                continue;
-            }
-            if have_set && !self.clipboard.still_ours()? {
-                // Someone copied something between our pastes: theirs is now what to put back.
-                backup = Some(self.clipboard.backup()?);
-            }
-            if let Err(e) = self.clipboard.set_text(text) {
-                if let Some(b) = backup.as_ref() {
-                    let _ = self.clipboard.restore(b);
+        let late_error = match self.paste_all(actions, &mut run) {
+            Ok(late) => late,
+            Err(e) => {
+                if run.have_set && !run.leave_text {
+                    self.restore_best_effort(run.backup.as_ref());
                 }
                 return Err(e);
             }
-            have_set = true;
-            let (pasted, r) = self.chord(&[KEY_LEFTCTRL], KEY_V);
-            if !pasted {
-                // Text deliberately left on the clipboard so the user can paste by hand.
-                return Err(InjectError::Os(format!(
-                    "Ctrl+V not sent ({}); text left on the clipboard",
-                    r.err().map_or_else(String::new, |e| e.to_string())
-                )));
-            }
-            if let Err(e) = r {
-                // V went down, so the app pasted; retrying would paste twice.
-                late_error.get_or_insert(InjectError::Os(format!(
-                    "pasted, but releasing keys failed: {e}"
-                )));
-            }
-            std::thread::sleep(self.config.settle);
-        }
+        };
 
-        let outcome = match (have_set, backup) {
+        let outcome = match (run.have_set, run.backup) {
             (true, Some(b)) => {
                 if self.clipboard.still_ours()? {
-                    self.clipboard.restore(&b).map_err(|e| {
-                        InjectError::Os(format!("pasted, but restoring the clipboard failed: {e}"))
-                    })?;
+                    self.clipboard
+                        .restore(&b)
+                        .map_err(|e| pasted_but("restoring the clipboard failed", e))?;
                     Some(RestoreOutcome::Restored)
                 } else {
                     Some(RestoreOutcome::SkippedChangedByOther)
@@ -211,6 +182,86 @@ impl<C: ClipboardBackend, K: KeyBackend> LinuxInjector<C, K> {
             None => Ok(outcome),
         }
     }
+
+    /// Runs the actions after the backup. `Ok(Some(e))`: everything was pasted but a key
+    /// release failed (reported after the restore).
+    fn paste_all(
+        &self,
+        actions: &[Action],
+        run: &mut PasteRun,
+    ) -> Result<Option<InjectError>, InjectError> {
+        let mut late_error = None;
+        for action in actions {
+            let text = match action {
+                Action::NewLine(key) => {
+                    self.newline(*key)?;
+                    continue;
+                }
+                Action::Text(t) | Action::Paste(t) => t,
+            };
+            if text.is_empty() {
+                continue;
+            }
+            if run.have_set && !self.clipboard.still_ours()? {
+                // Someone copied something between our pastes: theirs is now what to put back.
+                run.backup = Some(self.clipboard.backup()?);
+            }
+            if let Err(e) = self.clipboard.set_text(text) {
+                if !run.have_set {
+                    // Nothing of ours went through; don't lose the user's clipboard.
+                    if let Some(b) = run.backup.as_ref() {
+                        let _ = self.clipboard.restore(b);
+                    }
+                }
+                return Err(e);
+            }
+            run.have_set = true;
+            let (pasted, r) = self.chord(&[KEY_LEFTCTRL], KEY_V);
+            if !pasted {
+                // Text deliberately left on the clipboard so the user can paste by hand.
+                run.leave_text = true;
+                let e = r.err().unwrap_or_else(|| InjectError::Os("unknown".into()));
+                return Err(match e {
+                    InjectError::PermissionDenied | InjectError::Unsupported(_) => e,
+                    e => InjectError::Os(format!(
+                        "Ctrl+V not sent ({e}); text left on the clipboard"
+                    )),
+                });
+            }
+            if let Err(e) = r {
+                // V went down, so the app pasted; retrying would paste twice.
+                late_error.get_or_insert(pasted_but("releasing keys failed", e));
+            }
+            std::thread::sleep(self.config.settle);
+        }
+        Ok(late_error)
+    }
+
+    /// After a mid-run failure: put the backup back if the clipboard still holds our text.
+    /// If that cannot be checked, the clipboard is left alone (it may be someone else's).
+    fn restore_best_effort(&self, backup: Option<&ClipContent>) {
+        if let (Some(b), Ok(true)) = (backup, self.clipboard.still_ours()) {
+            let _ = self.clipboard.restore(b);
+        }
+    }
+}
+
+/// State of one run's clipboard handling.
+struct PasteRun {
+    backup: Option<ClipContent>,
+    /// At least one `set_text` succeeded.
+    have_set: bool,
+    /// Ctrl+V did not go through: the text stays on the clipboard for a manual paste.
+    leave_text: bool,
+}
+
+/// An error after the text was delivered. Callers must not retry; permission and
+/// support errors keep their kind.
+fn pasted_but(what: &str, e: InjectError) -> InjectError {
+    match e {
+        InjectError::PermissionDenied | InjectError::Unsupported(_) => e,
+        e => InjectError::Os(format!("pasted, but {what}: {e}")),
+    }
 }
 
 impl<C: ClipboardBackend, K: KeyBackend> Injector for LinuxInjector<C, K> {
@@ -221,7 +272,12 @@ impl<C: ClipboardBackend, K: KeyBackend> Injector for LinuxInjector<C, K> {
         if actions.is_empty() {
             return Ok(());
         }
-        let outcome = self.run_inner(actions)?;
+        let result = self.run_inner(actions);
+        // Sessions are only dropped here, never in the middle of a run.
+        let error = result.as_ref().err();
+        self.clipboard.finish(error);
+        self.keys.finish(error);
+        let outcome = result?;
         if let Ok(mut g) = self.last_restore.lock() {
             *g = outcome;
         }
@@ -295,7 +351,6 @@ pub fn portal_injector(
 mod tests {
     use super::*;
     use crate::linux::caps::{DeviceAccess, EvdevCaps, SessionType};
-    use crate::linux::clipboard::ClipContent;
     use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
     use std::rc::Rc;
@@ -325,6 +380,12 @@ mod tests {
         /// Fail the n-th `set_text` (0-based).
         fail_set: Option<usize>,
         sets: Cell<usize>,
+        /// Fail the n-th `backup` / `still_ours` call (0-based).
+        fail_backup: Option<usize>,
+        backups: Cell<usize>,
+        fail_still_ours: Option<usize>,
+        checks: Cell<usize>,
+        finished: RefCell<Vec<Option<InjectError>>>,
     }
 
     impl MockClipboard {
@@ -336,6 +397,11 @@ mod tests {
                 fail_prepare: None,
                 fail_set: None,
                 sets: Cell::new(0),
+                fail_backup: None,
+                backups: Cell::new(0),
+                fail_still_ours: None,
+                checks: Cell::new(0),
+                finished: RefCell::default(),
             }
         }
     }
@@ -359,6 +425,11 @@ mod tests {
         }
         fn backup(&self) -> Result<ClipContent, InjectError> {
             self.log.borrow_mut().push(Backup);
+            let n = self.backups.get();
+            self.backups.set(n + 1);
+            if self.fail_backup == Some(n) {
+                return Err(InjectError::Os("read failed".into()));
+            }
             Ok(self.content.borrow().clone())
         }
         fn set_text(&self, text: &str) -> Result<(), InjectError> {
@@ -373,6 +444,11 @@ mod tests {
         }
         fn still_ours(&self) -> Result<bool, InjectError> {
             self.log.borrow_mut().push(StillOurs);
+            let n = self.checks.get();
+            self.checks.set(n + 1);
+            if self.fail_still_ours == Some(n) {
+                return Err(InjectError::Os("owner unknown".into()));
+            }
             let ours = self.still_ours.borrow_mut().pop_front().unwrap_or(true);
             if !ours {
                 // Model another app's copy that happened just before this check.
@@ -385,6 +461,9 @@ mod tests {
             *self.content.borrow_mut() = c.clone();
             Ok(())
         }
+        fn finish(&self, error: Option<&InjectError>) {
+            self.finished.borrow_mut().push(error.cloned());
+        }
     }
 
     struct MockKeys {
@@ -394,7 +473,10 @@ mod tests {
         fail_prepare: Option<InjectError>,
         /// Fail the n-th key event (0-based, counting presses and releases).
         fail_event: Option<usize>,
+        /// Error returned by the failing key event.
+        fail_with: InjectError,
         events: Cell<usize>,
+        finished: RefCell<Vec<Option<InjectError>>>,
     }
 
     impl MockKeys {
@@ -405,7 +487,9 @@ mod tests {
                 default_modifiers: ModifierState::Released,
                 fail_prepare: None,
                 fail_event: None,
+                fail_with: InjectError::Os("portal call failed".into()),
                 events: Cell::new(0),
+                finished: RefCell::default(),
             }
         }
     }
@@ -427,12 +511,15 @@ mod tests {
             let n = self.events.get();
             self.events.set(n + 1);
             if self.fail_event == Some(n) {
-                return Err(InjectError::Os("portal call failed".into()));
+                return Err(self.fail_with.clone());
             }
             self.log
                 .borrow_mut()
                 .push(if pressed { Down(code) } else { Up(code) });
             Ok(())
+        }
+        fn finish(&self, error: Option<&InjectError>) {
+            self.finished.borrow_mut().push(error.cloned());
         }
     }
 
@@ -735,6 +822,146 @@ mod tests {
                 assert!(!msg.contains("secret") && !msg.contains("機密"), "{msg}");
             }
         }
+    }
+
+    #[test]
+    fn finish_is_called_once_per_run_with_its_error() {
+        let (_log, cb, keys) = setup();
+        let inj = injector(cb, keys);
+        assert_eq!(inj.run(&[t("x")]), Ok(()));
+        assert_eq!(*inj.clipboard.finished.borrow(), vec![None]);
+        assert_eq!(*inj.keys.finished.borrow(), vec![None]);
+
+        let (_log, cb, mut keys) = setup();
+        keys.default_modifiers = ModifierState::Held;
+        let inj = injector(cb, keys);
+        assert_eq!(inj.run(&[t("x")]), Err(InjectError::ModifiersHeld));
+        assert_eq!(
+            *inj.clipboard.finished.borrow(),
+            vec![Some(InjectError::ModifiersHeld)]
+        );
+        assert_eq!(
+            *inj.keys.finished.borrow(),
+            vec![Some(InjectError::ModifiersHeld)]
+        );
+
+        // Mid-run failure: finish (where the portal drops its session) only after the
+        // releases and the restore, never in between.
+        let (log, cb, mut keys) = setup();
+        keys.fail_event = Some(1);
+        let inj = injector(cb, keys);
+        assert!(inj.run(&[t("x")]).is_err());
+        assert!(log.borrow().contains(&Up(KEY_LEFTCTRL)));
+        assert_eq!(inj.keys.finished.borrow().len(), 1);
+        assert!(matches!(
+            inj.keys.finished.borrow()[0],
+            Some(InjectError::Os(_))
+        ));
+
+        let (_log, cb, keys) = setup();
+        let inj = injector(cb, keys);
+        assert_eq!(inj.run(&[]), Ok(()));
+        assert!(inj.keys.finished.borrow().is_empty());
+    }
+
+    #[test]
+    fn newline_failure_after_a_paste_restores() {
+        let (log, cb, mut keys) = setup();
+        keys.fail_event = Some(4); // Enter down, after the four Ctrl+V events
+        let inj = injector(cb, keys);
+        let actions = [t("a"), Action::NewLine(NewlineKey::Enter), t("b")];
+        assert_eq!(
+            inj.run(&actions),
+            Err(InjectError::Os("portal call failed".into()))
+        );
+        let l = log.borrow();
+        assert!(!l.contains(&Set("b".into())));
+        assert_eq!(l[l.len() - 2..], [StillOurs, Restore(original())]);
+        assert_all_released(&l);
+        assert_eq!(*inj.clipboard.content.borrow(), original());
+        assert_eq!(inj.last_restore_outcome(), None);
+    }
+
+    #[test]
+    fn still_ours_failure_mid_run_restores_best_effort() {
+        let (log, mut cb, keys) = setup();
+        cb.fail_still_ours = Some(0); // the check before the second paste
+        let inj = injector(cb, keys);
+        let actions = [t("a"), Action::NewLine(NewlineKey::Enter), t("b")];
+        assert_eq!(
+            inj.run(&actions),
+            Err(InjectError::Os("owner unknown".into()))
+        );
+        let l = log.borrow();
+        assert!(!l.contains(&Set("b".into())));
+        assert_eq!(l[l.len() - 2..], [StillOurs, Restore(original())]);
+        assert_eq!(*inj.clipboard.content.borrow(), original());
+    }
+
+    #[test]
+    fn backup_failure_mid_run_keeps_their_copy() {
+        let (log, mut cb, keys) = setup();
+        cb.still_ours.borrow_mut().extend([false, false]);
+        cb.fail_backup = Some(1); // the re-backup after their copy
+        let inj = injector(cb, keys);
+        let actions = [t("a"), Action::NewLine(NewlineKey::Enter), t("b")];
+        assert_eq!(
+            inj.run(&actions),
+            Err(InjectError::Os("read failed".into()))
+        );
+        let l = log.borrow();
+        assert!(!l.contains(&Set("b".into())));
+        // Best-effort restore checked ownership, found their copy, and left it.
+        assert_eq!(l.last(), Some(&StillOurs));
+        assert!(!l.iter().any(|c| matches!(c, Restore(_))));
+        assert_eq!(*inj.clipboard.content.borrow(), theirs());
+    }
+
+    #[test]
+    fn later_set_failure_restores_only_if_still_ours() {
+        let (log, mut cb, keys) = setup();
+        cb.fail_set = Some(1);
+        let inj = injector(cb, keys);
+        let actions = [t("a"), Action::NewLine(NewlineKey::Enter), t("b")];
+        assert_eq!(inj.run(&actions), Err(InjectError::Os("set failed".into())));
+        let l = log.borrow();
+        assert_eq!(
+            l[l.len() - 3..],
+            [Set("b".into()), StillOurs, Restore(original())]
+        );
+    }
+
+    #[test]
+    fn key_permission_errors_keep_their_kind() {
+        // Ctrl down refused: nothing pasted, text left on the clipboard.
+        let (log, cb, mut keys) = setup();
+        keys.fail_event = Some(0);
+        keys.fail_with = InjectError::PermissionDenied;
+        let inj = injector(cb, keys);
+        assert_eq!(inj.run(&[t("x")]), Err(InjectError::PermissionDenied));
+        assert!(!log.borrow().iter().any(|c| matches!(c, Restore(_))));
+
+        // V release refused after the paste went through: restored, kind kept.
+        let (log, cb, mut keys) = setup();
+        keys.fail_event = Some(2);
+        keys.fail_with = InjectError::Unsupported("gone".into());
+        let inj = injector(cb, keys);
+        assert_eq!(
+            inj.run(&[t("x")]),
+            Err(InjectError::Unsupported("gone".into()))
+        );
+        assert!(log.borrow().contains(&Restore(original())));
+        assert!(log.borrow().contains(&Up(KEY_LEFTCTRL)));
+
+        // Newline refused.
+        let (_log, cb, mut keys) = setup();
+        keys.fail_event = Some(0);
+        keys.fail_with = InjectError::PermissionDenied;
+        let inj = injector(cb, keys);
+        assert_eq!(
+            inj.run(&[Action::NewLine(NewlineKey::ShiftEnter)]),
+            Err(InjectError::PermissionDenied)
+        );
     }
 
     fn caps(rd: Portal, cb: Portal) -> LinuxCaps {
