@@ -119,21 +119,30 @@ fn open_store(data_dir: &Path, cfg: &HistoryConfig) -> Option<Arc<History>> {
 }
 
 /// T3.6: AES-256-GCM with a key kept in the Secret Service (`linux::protect`). The key is
-/// read lazily on the first write/read, so a locked keyring only fails those calls.
+/// read lazily on the first write/read (off the UI thread: it may wait on an unlock prompt).
+/// The source starts as `MustExist` and only allows creating a key once the database is
+/// known to be empty, so a hidden or unreadable key never gets replaced while encrypted rows
+/// exist.
 #[cfg(target_os = "linux")]
 fn open_store(data_dir: &Path, cfg: &HistoryConfig) -> Option<Arc<History>> {
-    use v2c_platform::linux::protect::SecretServiceProtector;
+    use v2c_platform::linux::protect::{AeadProtector, KeyPolicy, SecretServiceKeySource};
 
     if let Err(e) = std::fs::create_dir_all(data_dir) {
         warn!(error = %e, "history: data directory unavailable");
         return None;
     }
+    let source = Arc::new(SecretServiceKeySource::new(KeyPolicy::MustExist));
     match History::open(
         &data_dir.join("history.db"),
-        Arc::new(SecretServiceProtector::new()),
+        Arc::new(AeadProtector::with_source(Arc::clone(&source))),
         cfg.clone(),
     ) {
         Ok(h) => {
+            match h.count() {
+                Ok(0) => source.set_policy(KeyPolicy::CreateIfMissing),
+                Ok(_) => {}
+                Err(e) => warn!(error = %e, "history: row count failed; key must exist"),
+            }
             info!(enabled = cfg.enabled, "history opened");
             Some(Arc::new(h))
         }
