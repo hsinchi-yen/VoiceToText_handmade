@@ -154,6 +154,12 @@ impl Pipeline {
 - 選擇邏輯：只有 `asr = "tea_asr"` 才用；GPU 不允許、無 CUDA、模型不存在時改用 SenseVoice。`auto` 不變。VRAM 管理規則與 Breeze 相同（5.1）。
 - 作者自測 MER（%，CommonVoice zh-TW／ASCEND 中英夾雜）：TEA-ASR-1.1 3.58／9.60，Breeze-ASR-25 8.03／17.53。尚未在本機實測。
 
+**同一時間只載入一個辨識模型**（2026-11-11 你決定；T1.12 一併實作）
+- 引擎只有一個「目前模型」槽位：Breeze、TEA-ASR、SenseVoice 三者同時最多一個在記憶體。
+- 切換（設定變更、自動判斷、讓路、恢復）一律先卸載舊模型、確認釋放後再載入新模型；切換期間按熱鍵的那段錄音等新模型載入完再辨識（浮動標籤顯示「切換模型中」），不得用舊模型與新模型並行。
+- GPU 模型因顯存不足、全螢幕或 `heavy_apps` 讓路而卸載後，載入 SenseVoice（CPU）暫代；GPU 恢復後卸載 SenseVoice、載回使用者選的 GPU 模型。
+- `asr = "auto"` 保留，只決定要載入哪一個；不再為了備援預先常駐 SenseVoice。
+
 ### 5.1 顯示卡記憶體（VRAM）管理
 
 **你這台電腦的現況**（2026-11-08 以 `nvidia-smi` 查得）：RTX 2060 Max-Q 共 6144 MiB，**正在負責畫面輸出**（2560×1440，display_active = Enabled）；平常桌面程式（Chrome、Teams、Edge、Docker Desktop、Telegram 等）已經用掉約 1.4 GB，剩約 4.5 GB。另有 AMD 內顯與 Trigger 6 USB 顯示卡。
