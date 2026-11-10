@@ -48,6 +48,9 @@ pub enum NotifyStatus {
     Done,
     /// Text could not be pasted automatically; it is on the clipboard for the user.
     CopiedToClipboard,
+    /// Nothing was typed (e.g. no text field uses the v2c input method); the text is kept in
+    /// v2c's input history page for the user to copy (T3.6).
+    TextKept,
     Error(NotifyErrorKind),
 }
 
@@ -64,6 +67,10 @@ pub enum NotifyErrorKind {
     InputGroupRequired,
     /// Speech recognition failed (provider error, timeout, empty audio).
     RecognitionFailed,
+    /// The connection to ibus-daemon was lost (daemon restarted); v2c is reconnecting.
+    ImeDisconnected,
+    /// The v2c IBus engine could not be started; the fallback hotkey / injection is used.
+    ImeUnavailable,
     /// No usable microphone.
     MicrophoneUnavailable,
     /// Anything else.
@@ -129,6 +136,12 @@ pub fn notification_for(status: NotifyStatus) -> Notification {
             "edit-paste",
             8000,
         ),
+        NotifyStatus::TextKept => lasting(
+            "文字沒有輸入",
+            "沒有使用 v2c 輸入法的輸入框；文字已保留在 v2c 主視窗的「輸入紀錄」",
+            "document-save",
+            8000,
+        ),
         NotifyStatus::Error(kind) => {
             let (summary, body) = match kind {
                 NotifyErrorKind::InjectPermissionDenied => {
@@ -146,6 +159,13 @@ pub fn notification_for(status: NotifyStatus) -> Notification {
                     ("熱鍵權限不足", "請把使用者加入 input 群組後重新登入")
                 }
                 NotifyErrorKind::RecognitionFailed => ("辨識失敗", "請再試一次"),
+                NotifyErrorKind::ImeDisconnected => {
+                    ("輸入法連線中斷", "v2c 與 IBus 的連線中斷，正在重新連線")
+                }
+                NotifyErrorKind::ImeUnavailable => (
+                    "v2c 輸入法無法啟動",
+                    "改用備援熱鍵與輸入方式，請參考 Linux 設定說明",
+                ),
                 NotifyErrorKind::MicrophoneUnavailable => {
                     ("找不到麥克風", "請確認麥克風已連接並允許使用")
                 }
@@ -310,12 +330,15 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    const ALL: [NotifyStatus; 12] = [
+    const ALL: [NotifyStatus; 15] = [
         NotifyStatus::Recording,
         NotifyStatus::Recognizing,
         NotifyStatus::Polishing,
         NotifyStatus::Done,
         NotifyStatus::CopiedToClipboard,
+        NotifyStatus::TextKept,
+        NotifyStatus::Error(NotifyErrorKind::ImeDisconnected),
+        NotifyStatus::Error(NotifyErrorKind::ImeUnavailable),
         NotifyStatus::Error(NotifyErrorKind::InjectPermissionDenied),
         NotifyStatus::Error(NotifyErrorKind::ClipboardUnsupported),
         NotifyStatus::Error(NotifyErrorKind::HotkeyUnavailable),
@@ -356,6 +379,9 @@ mod tests {
             notification_for(NotifyStatus::Error(NotifyErrorKind::HotkeyUnavailable)).summary,
             "熱鍵無法使用"
         );
+        // Kept text must tell the user where it is, and must stay on screen.
+        let kept = notification_for(NotifyStatus::TextKept);
+        assert!(kept.body.contains("輸入紀錄") && !kept.transient);
     }
 
     #[test]
