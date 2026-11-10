@@ -135,12 +135,12 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 
 > mock 測試通過只代表模擬流程正確，**不代表**真實 GNOME Wayland 端到端可用。檢查點 2（手機）尚未通過。
 
-- [ ] 核准 T3.0：`tasks/plan.md` 第 9 節與 `tasks/cards/T3.*.md`
-- [ ] 決定本機的輸出路線（GNOME 42 沒有 Clipboard portal，背景程式無法設定剪貼簿、也無法逐字送中文）：
+- [x] 核准 T3.0（2026-11-10）：`tasks/plan.md` 第 9 節與 `tasks/cards/T3.*.md`
+- [x] 決定本機的輸出路線（2026-11-10：Linux 改做 IBus 引擎）（GNOME 42 沒有 Clipboard portal，背景程式無法設定剪貼簿、也無法逐字送中文）：
   1. 升級到 Ubuntu 24.04（GNOME 46：Clipboard portal＋可記住同意的 RemoteDesktop），熱鍵仍用 evdev；或 GNOME 48 以上（Ubuntu 25.04 起）才有 GlobalShortcuts
   2. 維持 22.04，只做「辨識後複製到剪貼簿＋通知」，由你手動 Ctrl+V
   3. 改用 IBus 引擎輸出文字（與 `v2cplan.md`「非輸入法框架」的決策衝突，要先改決策）
-- [ ] 核准是否在 `v2c-core` 新增「LLM 額外請求欄位」設定（給 llama.cpp 的 `chat_template_kwargs.enable_thinking=false`；開著思考一句約 2.7 秒，會超過潤飾 1 秒的逾時而退回規則式去贅字）
+- [x] （2026-11-10 決定不做：0.1.3 已關閉思考）核准是否在 `v2c-core` 新增「LLM 額外請求欄位」設定（給 llama.cpp 的 `chat_template_kwargs.enable_thinking=false`；開著思考一句約 2.7 秒，會超過潤飾 1 秒的逾時而退回規則式去贅字）
 - [ ] evdev 熱鍵：`sudo usermod -aG input $USER`，登出再登入（這會讓同一使用者的程式都能讀鍵盤，請自行評估）
   - 本機目前**沒有接任何實體鍵盤**（`/proc/bus/input/devices` 只有電源鍵等），加入群組後還要接上實體鍵盤才能實測按住右 Ctrl
 - [ ] 接上麥克風（本機目前沒有任何擷取裝置），之後才能做實機語音輸入
@@ -152,4 +152,6 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] T3.3 中文語音辨識：把一段自己錄的中文 WAV 放到 `tests/tmp/`，依 `docs/linux-setup.md` 第 5 節執行 `asr_real`（目前只用英文合成句驗證過）
 - [ ] T3.4：依 `bash tools/build-linux.sh --check` 安裝缺少的套件後執行 `bash tools/build-linux.sh`；`apps/desktop` 尚未支援 Linux（金鑰庫只接 Windows、`build.rs` 只放 Windows DLL、controller 未接通知），預期會有編譯錯誤，需另開卡並核准 `tauri.conf.json` 的 Linux 設定
 - [ ] T3.4 通知實機：`cargo test -p v2c-platform -- --ignored linux_real_notify`（會在桌面跳出幾則測試通知）
-- [ ] 核准合併 `t3-linux-integration` 到 `main`（含 T3.0～T3.4；本機只合併到整合分支，沒有 push）
+- [x] 核准合併 `t3-linux-integration` 到 `main`（2026-11-10，本機 fast-forward，未 push）（含 T3.0～T3.4；本機只合併到整合分支，沒有 push）
+- [ ] T3.5：同意 agent 在你的 ibus-daemon 上動態註冊暫時的 `v2c-test` 引擎做實測（不改 GNOME 輸入來源設定，測完移除）
+- [ ] T3.5 之後：「設定 → 鍵盤 → 輸入來源」加入 v2c，按 Super+Space 切換，實機按住右 Ctrl 說話

@@ -335,11 +335,22 @@ Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫�
 - **ASR**：本機無 NVIDIA、無麥克風。Phase 3 流程以 mock ASR 驗證；可行方案為 SenseVoice CPU（需 sherpa-onnx 共享庫與約 160 MB 模型，未下載）或遠端相容 ASR 端點（目前的 LLM 主機不支援）。
 - **建議**：Ubuntu 24.04（GNOME 46）才有 Clipboard portal 與可記住同意的 RemoteDesktop v2；GNOME 48 以上（Ubuntu 25.04 起）才有 GlobalShortcuts。本機維持 22.04 時，只能「evdev 熱鍵＋僅複製到剪貼簿」或改用 IBus 引擎輸出（與 `v2cplan.md`「非輸入法框架」的決策衝突，需你決定）。
 
+### 9.2a IBus 引擎（2026-11-10 你決定 Linux 改走 IBus，取代 9.2 的「剪貼簿＋Ctrl+V」為主要路線）
+
+- **為什麼**：本機 IBus 1.5.26 由 GNOME 啟動（`ibus-daemon --panel disable`）；GNOME 在 Wayland 下透過 IBus 處理所有輸入框。IBus 引擎可直接 `CommitText` 任意 Unicode（中文、emoji），不需要剪貼簿、RemoteDesktop 同意對話框，也不需要 `input` 群組。
+- **熱鍵**：引擎啟用時，焦點輸入框的每個按鍵都會先經過引擎的 `ProcessKeyEvent(keyval, keycode, state)`，包含放開（`IBUS_RELEASE_MASK`）；右 Ctrl（`Control_R`）、Shift、Esc 轉成 `trigger::Event`，其他鍵原樣放行（回傳 false）。限制：只在「v2c 輸入來源啟用且有輸入框焦點」時有效。
+- **注入**：`Action::Text` → `CommitText`；`NewLine` → `ForwardKeyEvent`（Return，ShiftEnter 帶 Shift）；`Paste` 也改為 `CommitText`。
+- **註冊**：.deb 安裝 `/usr/share/ibus/component/v2c.xml`；開發時用 IBus 的 `RegisterComponent` 動態註冊（是否會出現在 GNOME 設定的清單需實測）。使用者要在「設定 → 鍵盤 → 輸入來源」加入 v2c。
+- **與中文輸入法並存**：v2c 引擎啟用時，一般打字只送英文（按鍵放行）；要用注音等輸入法時以 Super+Space 切換。
+- **9.2 的 portal 熱鍵與剪貼簿注入**（T3.1、T3.2）保留為「引擎未啟用時」的備援，不再是主要路線。
+- 【實作前確認】IBus D-Bus 介面（`org.freedesktop.IBus`、`org.freedesktop.IBus.Factory`、`org.freedesktop.IBus.Engine`）與 `IBusText` 的序列化格式，對照 ibus 1.5.26 原始碼。
+
 ### 9.3 來源（2026-11-10 查證）
 
 - GNOME 48 開發者新功能（GlobalShortcuts portal）：https://release.gnome.org/48/developers/
 - xdg-desktop-portal-gnome GlobalShortcuts 需求追蹤：https://gitlab.gnome.org/GNOME/xdg-desktop-portal-gnome/-/issues/85
 - xdg-desktop-portal-gnome 45.beta NEWS（Clipboard 後端、還原遠端桌面工作階段）：https://download.gnome.org/sources/xdg-desktop-portal-gnome/45/xdg-desktop-portal-gnome-45.beta.news
+- IBus Component（`/usr/share/ibus/component`、`IBUS_COMPONENT_PATH`）：https://ibus.github.io/docs/ibus-1.5/IBusComponent.html ；ibus(1)：https://man.archlinux.org/man/extra/ibus/ibus.1.en
 - RemoteDesktop portal 規格（`persist_mode` 自 version 2）：https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.impl.portal.RemoteDesktop.html
 - Wayland 下 RemoteDesktop 無法注入任意 Unicode：https://discourse.gnome.org/t/injecting-arbitrary-unicode-characters/24799 ；mutter issue 2111：https://gitlab.gnome.org/GNOME/mutter/-/issues/2111
 - ashpd（0.13.x，`global_shortcuts`／`remote_desktop`／`clipboard` feature）：https://docs.rs/crate/ashpd/latest/features

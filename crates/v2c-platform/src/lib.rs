@@ -29,6 +29,10 @@ pub enum PlatformError {
     /// Linux: no global hotkey backend works on this system; the text says why.
     #[error("no global hotkey backend available: {0}")]
     HotkeyUnavailable(String),
+    /// Linux: the IBus daemon could not be found or talked to; the text says which step
+    /// failed (never contains typed text).
+    #[error("IBus: {0}")]
+    Ibus(String),
 }
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
