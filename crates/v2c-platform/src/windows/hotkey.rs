@@ -21,9 +21,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_ESCAPE, VK_LSHIFT, VK_RCONTROL, VK_RSHIFT, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
-    SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
+    CallNextHookEx, DispatchMessageW, GetMessageW, KillTimer, PeekMessageW, PostThreadMessageW,
+    SetTimer, SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE,
+    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_USER,
 };
 
 use crate::{Hotkey, PlatformError};
@@ -55,11 +55,53 @@ pub(crate) fn classify(vk: u32) -> Key {
 /// Shift keys into one `Key::Shift` press.
 pub(crate) struct KeyTracker {
     down: [bool; 256],
+    /// Consecutive [`KeyTracker::release_stale`] polls that found a tracked key not held.
+    misses: [u8; 256],
 }
+
+/// Keys whose missed key-up would leave the trigger stuck (recording until Esc).
+const WATCHED: [u16; 4] = [VK_RCONTROL, VK_LSHIFT, VK_RSHIFT, VK_SHIFT];
+
+/// Polls in a row that must report a watched key as released before a key-up is synthesized,
+/// so one odd reading cannot stop a recording early.
+const RELEASE_POLLS: u8 = 2;
+
+/// How often the hook thread checks for missed key-ups.
+const POLL_MS: u32 = 50;
 
 impl KeyTracker {
     pub(crate) fn new() -> Self {
-        Self { down: [false; 256] }
+        Self {
+            down: [false; 256],
+            misses: [0; 256],
+        }
+    }
+
+    /// Synthesizes key-ups the hook never saw. Windows skips a low-level hook (and may
+    /// remove it) when the callback is slow, e.g. under memory pressure; a lost Right Ctrl
+    /// key-up would otherwise keep the recording running until Esc. `is_held` reports the
+    /// OS key state (`GetAsyncKeyState`) outside the hook callback.
+    pub(crate) fn release_stale(
+        &mut self,
+        at_ms: u64,
+        is_held: impl Fn(u32) -> bool,
+    ) -> Vec<Event> {
+        let mut out = Vec::new();
+        for vk in WATCHED.map(u32::from) {
+            let idx = vk as usize;
+            if !self.down[idx] {
+                continue;
+            }
+            if is_held(vk) {
+                self.misses[idx] = 0;
+                continue;
+            }
+            self.misses[idx] = self.misses[idx].saturating_add(1);
+            if self.misses[idx] >= RELEASE_POLLS {
+                out.extend(self.key_up(vk, at_ms));
+            }
+        }
+        out
     }
 
     fn any_shift_down(&self) -> bool {
@@ -85,6 +127,7 @@ impl KeyTracker {
         self.down[idx] = false; // a stale flag for this key must not count as "other Shift"
         let shift_was_down = self.any_shift_down();
         self.down[idx] = true;
+        self.misses[idx] = 0;
         if key == Key::Shift && shift_was_down {
             return None; // second Shift key while the first is held
         }
@@ -95,6 +138,7 @@ impl KeyTracker {
     pub(crate) fn key_up(&mut self, vk: u32, at_ms: u64) -> Option<Event> {
         let key = classify(vk);
         self.down[(vk & 0xff) as usize] = false;
+        self.misses[(vk & 0xff) as usize] = 0;
         if key == Key::Shift && self.any_shift_down() {
             return None; // the other Shift key is still held
         }
@@ -154,6 +198,25 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
 }
 
+/// Runs on the hook thread between hook callbacks, so the OS key state is current here.
+fn poll_missed_key_ups() {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        HOOK_STATE.with(|cell| {
+            let Ok(mut guard) = cell.try_borrow_mut() else {
+                return;
+            };
+            let Some(state) = guard.as_mut() else {
+                return;
+            };
+            // SAFETY: plain Win32 call with a valid virtual-key code.
+            let held = |vk: u32| unsafe { GetAsyncKeyState(vk as i32) } as u16 & 0x8000 != 0;
+            for event in state.keys.release_stale(monotonic_ms(), held) {
+                (state.sink)(event);
+            }
+        });
+    }));
+}
+
 fn hook_thread(sink: Sink, ready: mpsc::Sender<Result<u32, String>>) {
     // SAFETY: plain Win32 calls on this thread; `msg` is a valid out-pointer.
     unsafe {
@@ -177,15 +240,24 @@ fn hook_thread(sink: Sink, ready: mpsc::Sender<Result<u32, String>>) {
             return;
         }
         let _ = ready.send(Ok(thread_id));
+        // Thread timer (no window): posts WM_TIMER to this queue for missed key-up checks.
+        let timer = SetTimer(null_mut(), 0, POLL_MS, None);
 
         loop {
             let r = GetMessageW(&mut msg, null_mut(), 0, 0);
             if r == 0 || r == -1 {
                 break; // WM_QUIT or error
             }
+            if msg.message == WM_TIMER && msg.hwnd.is_null() {
+                poll_missed_key_ups();
+                continue;
+            }
             DispatchMessageW(&msg);
         }
 
+        if timer != 0 {
+            KillTimer(null_mut(), timer);
+        }
         UnhookWindowsHookEx(hook);
         HOOK_STATE.with(|cell| *cell.borrow_mut() = None);
     }
@@ -296,6 +368,61 @@ mod tests {
         t.key_down(rc, 1, || true);
         // Key-up never reached the hook; the OS reports the key as not held.
         assert!(t.key_down(rc, 50, || false).is_some());
+    }
+
+    #[test]
+    fn missed_trigger_key_up_is_synthesized_after_two_polls() {
+        let mut t = KeyTracker::new();
+        let rc = vk(VK_RCONTROL);
+        t.key_down(rc, 1, || true);
+        // Still held: nothing.
+        assert!(t.release_stale(50, |_| true).is_empty());
+        // One "released" reading is not enough.
+        assert!(t.release_stale(100, |_| false).is_empty());
+        assert_eq!(
+            t.release_stale(150, |_| false),
+            vec![Event::KeyUp {
+                key: Key::Trigger,
+                at_ms: 150
+            }]
+        );
+        // Already released: no second key-up, and the next press is a fresh key-down.
+        assert!(t.release_stale(200, |_| false).is_empty());
+        assert!(t.key_down(rc, 250, || true).is_some());
+    }
+
+    #[test]
+    fn held_reading_resets_the_release_count() {
+        let mut t = KeyTracker::new();
+        let rc = vk(VK_RCONTROL);
+        t.key_down(rc, 1, || true);
+        assert!(t.release_stale(50, |_| false).is_empty());
+        assert!(t.release_stale(100, |_| true).is_empty());
+        assert!(t.release_stale(150, |_| false).is_empty());
+    }
+
+    #[test]
+    fn idle_keys_and_other_keys_are_not_polled() {
+        let mut t = KeyTracker::new();
+        t.key_down(VK_C, 1, || true);
+        t.key_down(VK_LCONTROL, 1, || true);
+        for at in [50, 100, 150] {
+            assert!(t.release_stale(at, |_| false).is_empty());
+        }
+    }
+
+    #[test]
+    fn missed_shift_key_up_keeps_translate_mode_from_sticking() {
+        let mut t = KeyTracker::new();
+        t.key_down(vk(VK_LSHIFT), 1, || true);
+        t.release_stale(50, |_| false);
+        assert_eq!(
+            t.release_stale(100, |_| false),
+            vec![Event::KeyUp {
+                key: Key::Shift,
+                at_ms: 100
+            }]
+        );
     }
 
     #[test]
