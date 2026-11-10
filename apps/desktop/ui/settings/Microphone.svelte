@@ -6,6 +6,7 @@
   let { view, save } = $props();
 
   const cfg = $derived(view.config);
+  const dirty = (field) => view.dirty?.has(field);
   let devices = $state([]);
 
   $effect(() => {
@@ -20,7 +21,7 @@
 
 <section class="settings-section">
   <h2>麥克風</h2>
-  <label>
+  <label class:dirty={dirty("mic_device")}>
     裝置：
     <select value={cfg.audio.device ?? ""}
       onchange={(e) => save([{ field: "mic_device", value: e.currentTarget.value || null }])}>
@@ -30,12 +31,12 @@
       {/each}
     </select>
   </label>
-  <label>
+  <label class:dirty={dirty("mic_mode") && cfg.audio.mic_mode === "always_on"}>
     <input type="radio" name="mic_mode" value="always_on" checked={cfg.audio.mic_mode === "always_on"}
       onchange={() => save([{ field: "mic_mode", value: "always_on" }])} />
     常開（預設）：只在記憶體保留最近 0.5 秒，按下熱鍵時不吃第一個字；不存檔
   </label>
-  <label>
+  <label class:dirty={dirty("mic_mode") && cfg.audio.mic_mode === "on_press"}>
     <input type="radio" name="mic_mode" value="on_press" checked={cfg.audio.mic_mode === "on_press"}
       onchange={() => save([{ field: "mic_mode", value: "on_press" }])} />
     按下才開：按住熱鍵時才開麥克風（第一個字可能被吃掉）

@@ -17,14 +17,15 @@ const errorText = {
   config_unreadable: "無法讀取設定檔",
   config_save_failed: "無法儲存設定檔",
   autostart_failed: "無法變更開機自動啟動",
-  unreachable: "連不到 LM Studio：請確認已啟動並開啟 Local Server",
-  timeout: "LM Studio 沒有回應（逾時）",
-  http_error: "LM Studio 回應錯誤：網址是否少了 /v1？",
-  bad_response: "回應格式不是 OpenAI 相容的 /models",
   mic_not_found: "找不到麥克風",
   mic_open_failed: "麥克風無法開啟（可能被其他程式獨占，或 Windows 隱私權設定不允許）",
   mic_format_unsupported: "這個麥克風的格式不支援測試",
   already_running: "正在進行中",
+  busy: "正在聽寫中，請說完再測試",
+  asr_loading: "語音模型還在載入，請稍後再試",
+  model_missing: "沒有安裝地端語音模型，請到「初次設定」下載或匯入",
+  model_load_failed: "語音模型無法載入（原因見記錄檔）",
+  sensevoice_not_available: "SenseVoice 無法載入（原因見記錄檔）",
   internal_error: "內部錯誤",
 };
 
@@ -38,7 +39,10 @@ export const apply = (changes) => invoke("settings_apply", { changes });
 export const set = (field, value) => apply([{ field, value }]);
 export const setAutostart = (enabled) => invoke("settings_set_autostart", { enabled });
 export const inputDevices = () => invoke("settings_input_devices");
-export const testLm = (baseUrl) => invoke("settings_test_lm", { baseUrl });
+/** Validates a draft without saving; returns `{ settings, unchanged }`. */
+export const preview = (changes) => invoke("settings_preview", { changes });
+export const runtimeStatus = () => invoke("settings_runtime_status");
+export const testLocalAsr = () => invoke("settings_test_local_asr");
 export const gpuUsage = () => invoke("gpu_usage");
 export const micTestStart = (device) => invoke("mic_test_start", { device: device ?? null });
 export const micTestStop = () => invoke("mic_test_stop");
@@ -50,6 +54,35 @@ export const kindLabels = {
   claude: "Claude",
   open_ai_compat: "自訂端點",
 };
+
+/**
+ * Local speech engines, shared by the 潤飾與用途 and 地端語音模型 menus (same value, same
+ * text). The suffix says when the engine cannot run in this install.
+ */
+export function localAsrOptions(view) {
+  const breezeInstalled = view.config.local.breeze_quant === "q8_0" ? view.breeze_q8_0 : view.breeze_q5_0;
+  const breezeNote = !breezeInstalled ? "（未安裝）" : !view.cuda_build ? "（此版本無 CUDA）" : "";
+  return [
+    {
+      value: "auto",
+      label: "自動（有 NVIDIA 顯示卡用 Breeze，否則 SenseVoice）" +
+        (!breezeInstalled && !view.sensevoice ? "（未安裝）" : ""),
+    },
+    { value: "breeze", label: "Breeze-ASR-25（NVIDIA 顯示卡）" + breezeNote },
+    { value: "sense_voice", label: "SenseVoice-Small（CPU）" + (view.sensevoice ? "" : "（未安裝）") },
+  ];
+}
+
+/** Changes for a 語音辨識 menu value: `local:<engine>` or a cloud service id. */
+export function asrChoiceChanges(value) {
+  if (value.startsWith("local:")) {
+    return [
+      { field: "route_asr", value: "local" },
+      { field: "local_asr", value: value.slice("local:".length) },
+    ];
+  }
+  return [{ field: "route_asr", value }];
+}
 
 /** Parses a one-per-line / comma separated list of executables. */
 export function parseExeList(text) {

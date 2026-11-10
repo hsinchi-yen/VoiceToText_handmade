@@ -70,6 +70,11 @@ impl LocalEngines {
         read(&self.breeze).is_some()
     }
 
+    /// Whether the loaded Breeze runs on the GPU; `None` when Breeze is not loaded.
+    pub fn breeze_on_gpu(&self) -> Option<bool> {
+        read(&self.breeze).map(|b| b.options().use_gpu && v2c_asr_local::breeze::cuda_enabled())
+    }
+
     pub fn sensevoice_loaded(&self) -> bool {
         read(&self.sensevoice).is_some()
     }
