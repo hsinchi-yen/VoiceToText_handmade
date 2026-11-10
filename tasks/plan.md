@@ -298,13 +298,50 @@ Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫�
 
 ---
 
-## 9. Linux（Phase 3，摘要）
+## 9. Linux（Phase 3）
 
-- 熱鍵：`ashpd`（XDG portal）GlobalShortcuts 的 Activated/Deactivated 做按住說話；GNOME 版本不支援時退回 `evdev`（需將使用者加入 `input` 群組）。**【實作前確認】** 你的 Ubuntu 版本的 GNOME 是否支援此 portal。
-- 注入：以剪貼簿＋Ctrl+V 為主（RemoteDesktop portal 送 Ctrl+V）。**【實作前確認】** GNOME Wayland 下背景程式設定剪貼簿的方式（GNOME 不支援 wlr-data-control）。
-- 浮動標籤：Wayland 不允許 App 自訂視窗位置與置頂，可能改用系統通知或 GNOME 擴充；Phase 3 再決定。
+> T3.0 查證日期 2026-11-10。Linux 開發機：使用者指定「目前執行 agent 的這台電腦」（查證指令與結果見 `cards/T3.0-linux-planning.md`）。檢查點 2 尚未通過，是使用者授權提前進行 Phase 3。
 
----
+### 9.1 本機實測能力（唯讀查證）
+
+| 項目 | 結果 | 影響 |
+|------|------|------|
+| OS／桌面 | Ubuntu 22.04.5、核心 6.8、GNOME Shell 42.9、Wayland（`XDG_SESSION_TYPE=wayland`） | 原計畫假設的 portal 多數不存在 |
+| xdg-desktop-portal | 1.14.4；後端 xdg-desktop-portal-gnome 42.1 | — |
+| GlobalShortcuts portal | **沒有**（GNOME 48 才加入） | 熱鍵只能退回 evdev |
+| Clipboard portal | **沒有**（xdg-desktop-portal-gnome 45 才加入） | 背景程式無法設定剪貼簿 |
+| RemoteDesktop portal | 有，**version 1**，AvailableDeviceTypes=7 | 可送按鍵，但沒有 `persist_mode`，每次建立工作階段都會跳出同意對話框；Wayland 下 mutter 的 `NotifyKeyboardKeysym` 不送不在鍵盤配置裡的字元（中文無法逐字輸入） |
+| evdev | `/dev/input/event*` 屬 `root:input` 0660；使用者**不在** `input` 群組；`/dev/uinput` 為 root 0600 | evdev 熱鍵需要人工把使用者加入 `input` 群組 |
+| 音訊 | PulseAudio 伺服器；**沒有任何擷取裝置**（`arecord -l` 為空，唯一 source 是 HDMI monitor） | 無法實機錄音；ASR 只能用 mock 或 WAV |
+| GPU | Intel Iris Xe，**沒有 NVIDIA** | 不用 CUDA／Breeze；第 5.1 節 VRAM 管理在 Linux 上停用（`gpu.enabled=false`） |
+| 工具鏈 | rustc／cargo 1.99.1、clippy、rustfmt、gcc、Node；**沒有 cmake、clang、libclang、gtk／webkit2gtk-4.1／libsoup-3 開發檔** | `whisper-rs-sys` 編不過 → `v2c-asr-local`、`v2c-cli`、Tauri 桌面 App 在本機無法建置；`v2c-core`、`v2c-platform` 可以 |
+| 既有 LLM | `http://10.20.30.23:8000/v1`：llama.cpp（build b10752）、模型 `Qwen3.8-27B-UD-Q6_K_L`、n_ctx 65536、不需金鑰；`/health` ok；`modalities.audio=false`；`/v1/audio/transcriptions` 回 501 | 只用於潤飾／翻譯，**不能做 ASR**；預設開啟思考，一句約 2.7 秒，關閉思考（`chat_template_kwargs.enable_thinking=false`）約 0.23 秒 |
+
+### 9.2 設計（依查證結果調整）
+
+- **能力偵測先行**（T3.1）：啟動時以 D-Bus 讀 portal 介面與 `version`，結果是純資料結構 `LinuxCaps`；後端選擇是純函式，可單元測試。
+- **熱鍵**（T3.1）：
+  1. GlobalShortcuts portal（GNOME ≥ 48）：`Activated`／`Deactivated` 對應 `KeyDown`／`KeyUp`，可做按住說話。
+  2. 否則 evdev：讀鍵盤裝置，KEY_RIGHTCTRL／Shift／Esc 對應狀態機事件；`EACCES` 時回報「需要加入 input 群組」，不自動提權。
+  3. 都沒有：明確回報不可用（不得默默失效）。
+- **注入**（T3.2）：中文不能靠 keysym 逐字輸入，Linux 一律走「剪貼簿＋Ctrl+V」：
+  - 按鍵：RemoteDesktop portal `NotifyKeyboardKeycode`（Ctrl=29、V=47、Shift+Enter 換行）；使用者在對話框按取消 → `InjectError::PermissionDenied`，改為只把文字留在剪貼簿並提示。
+  - 剪貼簿：Clipboard portal（GNOME ≥ 45）；本機（GNOME 42）沒有可用的背景剪貼簿方法 → 回報 `Unsupported`，不假裝成功。
+  - 等修飾鍵放開、備份／還原剪貼簿（被別人改過就不還原）的邏輯與 Windows 相同，寫成可注入 mock 後端的純流程。
+- **既有 LLM 串接與端到端模擬**（T3.3）：用現有 `OpenAiCompatLlm`，以設定指定 endpoint／model／timeout（`[[cloud]]` 自訂端點或 `[local] llm_base_url`）；mock 測試涵蓋連線失敗、逾時、HTTP 錯誤、`reasoning_content` 與 `<think>` 回應解析；可用時以合成文字做最小真實連線。關閉思考需要在請求中加入額外欄位，屬於 `v2c-core` 公開介面變更，**須你核准**後另外處理。
+- **提示與打包**（T3.4）：Wayland 不能自訂置頂視窗位置，提示改用 `org.freedesktop.Notifications`（D-Bus）；打包為 .deb／AppImage，需要 Tauri 的 Linux 開發套件（本機沒有，由你安裝後執行）。
+- **ASR**：本機無 NVIDIA、無麥克風。Phase 3 流程以 mock ASR 驗證；可行方案為 SenseVoice CPU（需 sherpa-onnx 共享庫與約 160 MB 模型，未下載）或遠端相容 ASR 端點（目前的 LLM 主機不支援）。
+- **建議**：Ubuntu 24.04（GNOME 46）才有 Clipboard portal 與可記住同意的 RemoteDesktop v2；GNOME 48 以上（Ubuntu 25.04 起）才有 GlobalShortcuts。本機維持 22.04 時，只能「evdev 熱鍵＋僅複製到剪貼簿」或改用 IBus 引擎輸出（與 `v2cplan.md`「非輸入法框架」的決策衝突，需你決定）。
+
+### 9.3 來源（2026-11-10 查證）
+
+- GNOME 48 開發者新功能（GlobalShortcuts portal）：https://release.gnome.org/48/developers/
+- xdg-desktop-portal-gnome GlobalShortcuts 需求追蹤：https://gitlab.gnome.org/GNOME/xdg-desktop-portal-gnome/-/issues/85
+- xdg-desktop-portal-gnome 45.beta NEWS（Clipboard 後端、還原遠端桌面工作階段）：https://download.gnome.org/sources/xdg-desktop-portal-gnome/45/xdg-desktop-portal-gnome-45.beta.news
+- RemoteDesktop portal 規格（`persist_mode` 自 version 2）：https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.impl.portal.RemoteDesktop.html
+- Wayland 下 RemoteDesktop 無法注入任意 Unicode：https://discourse.gnome.org/t/injecting-arbitrary-unicode-characters/24799 ；mutter issue 2111：https://gitlab.gnome.org/GNOME/mutter/-/issues/2111
+- ashpd（0.13.x，`global_shortcuts`／`remote_desktop`／`clipboard` feature）：https://docs.rs/crate/ashpd/latest/features
+- 本機能力：`gdbus introspect`、`pactl`、`arecord -l`、`lspci`、`pkg-config`、`curl` 唯讀查詢（指令見 `cards/T3.0-linux-planning.md`）
 
 ## 10. 依賴圖
 
@@ -385,7 +422,7 @@ v2c-platform/linux → apps/desktop              ← Phase 3
 
 ### Phase 3 — Linux
 
-T3.1 portal 熱鍵 → T3.2 剪貼簿注入 → T3.3 浮動提示 → T3.4 AppImage/.deb。Phase 2 結束後，先重新驗證第 9 節的【實作前確認】項目，再細化任務。
+（T3.0 於 2026-11-10 重新查證後改為）T3.1 能力偵測＋熱鍵 → T3.2 剪貼簿注入（依賴 T3.1）；T3.3 既有 LLM 串接＋端到端模擬（可與 T3.1 平行，最後接上 T3.2）→ T3.4 通知提示＋打包。卡片見 `cards/T3.*.md`。
 
 ---
 

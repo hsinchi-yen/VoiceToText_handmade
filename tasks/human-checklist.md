@@ -130,3 +130,19 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] 側載 APK 到手機實測；回報手機型號與 Android 版本
 - [ ] 檢查點 2：手機日常使用一週
 - [ ] 決定 Linux 用哪台電腦（同一台雙系統或另一台），並提供規格
+
+## Phase 3（Linux：目前執行 agent 的這台電腦，Ubuntu 22.04／GNOME 42 Wayland）
+
+> mock 測試通過只代表模擬流程正確，**不代表**真實 GNOME Wayland 端到端可用。檢查點 2（手機）尚未通過。
+
+- [ ] 核准 T3.0：`tasks/plan.md` 第 9 節與 `tasks/cards/T3.*.md`
+- [ ] 決定本機的輸出路線（GNOME 42 沒有 Clipboard portal，背景程式無法設定剪貼簿、也無法逐字送中文）：
+  1. 升級到 Ubuntu 24.04（GNOME 46：Clipboard portal＋可記住同意的 RemoteDesktop），熱鍵仍用 evdev；或 GNOME 48 以上（Ubuntu 25.04 起）才有 GlobalShortcuts
+  2. 維持 22.04，只做「辨識後複製到剪貼簿＋通知」，由你手動 Ctrl+V
+  3. 改用 IBus 引擎輸出文字（與 `v2cplan.md`「非輸入法框架」的決策衝突，要先改決策）
+- [ ] 核准是否在 `v2c-core` 新增「LLM 額外請求欄位」設定（給 llama.cpp 的 `chat_template_kwargs.enable_thinking=false`；開著思考一句約 2.7 秒，會超過潤飾 1 秒的逾時而退回規則式去贅字）
+- [ ] evdev 熱鍵：`sudo usermod -aG input $USER`，登出再登入（這會讓同一使用者的程式都能讀鍵盤，請自行評估）
+- [ ] 接上麥克風（本機目前沒有任何擷取裝置），之後才能做實機語音輸入
+- [ ] Linux 建置依賴（本機缺少；Tauri 桌面 App 與 whisper-rs 需要）：`sudo apt install cmake clang libclang-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev`（Ubuntu 22.04 是否提供 `libwebkit2gtk-4.1-dev` 請在安裝時確認）
+- [ ] ASR：決定 Linux 用 SenseVoice CPU（需下載 sherpa-onnx 共享庫與約 160 MB 模型）或遠端相容 ASR 端點（現有 10.20.30.23:8000 不支援 `/audio/transcriptions`）
+- [ ] 檢查點 3：實機 GNOME Wayland 按住說話 → 文字出現在 gedit／Firefox／終端機

@@ -81,4 +81,16 @@
 
 ## Phase 3 — Linux（Ubuntu GNOME Wayland）
 - [ ] W11 T3.0 重新查證並拆出 T3.1～T3.4 任務卡
+  - [x] 2026-11-10：Linux 主機改為目前執行 agent 的電腦（使用者決定）；檢查點 2 **尚未通過**，使用者授權提前進行
+  - [x] 唯讀查證本機（Ubuntu 22.04／GNOME 42 Wayland：沒有 GlobalShortcuts、Clipboard portal，RemoteDesktop v1；沒有麥克風、NVIDIA、cmake、webkit2gtk-4.1）與既有 LLM（llama.cpp Qwen3.8-27B，10.20.30.23:8000，不支援音訊），更新 plan.md 第 9 節並拆出 T3.1～T3.4
+  - [ ] 🧑 核准 T3.0（卡片＋第 9 節）
+- [ ] W12 T3.1 能力偵測＋熱鍵（portal → evdev → 不可用）
+  - [x] `linux::caps::{LinuxCaps, probe()}`（唯讀：環境變數、portal Introspect＋`version`、`/proc/bus/input/devices`、試開裝置）；`linux::hotkey::{HotkeyBackend, select_backend(), LinuxHotkey}`；evdev／portal 事件轉換＋mock 測試（自動重複、權限拒絕、後端順序、SYN_DROPPED、接上 `trigger` 跑按住說話／雙擊免持／Ctrl+C／Shift 翻譯／Esc）
+  - [x] 本機唯讀實測（`-- --ignored linux_real`）：沒有 GlobalShortcuts、RemoteDesktop v1、沒有 Clipboard；`/dev/input/event0` 為 EACCES；本機**沒有接任何鍵盤裝置**（只有電源鈕／HDMI），後端判定為不可用
+  - [ ] 🧑 把使用者加入 `input` 群組（`sudo usermod -aG input $USER`，重新登入）並接上實體鍵盤後實機按鍵
+  - [ ] 🧑 在 GNOME ≥ 48 的機器測 GlobalShortcuts（綁定對話框、按住／放開事件）
+  - [ ] 🧑 核准合併 T3.1
+- [ ] W12 T3.3 既有 LLM 串接＋端到端模擬
+- [ ] W13 T3.2 剪貼簿注入（RemoteDesktop＋Clipboard portal）
+- [ ] W14 T3.4 通知提示＋打包
 - [ ] **檢查點 3**：第一版交付
