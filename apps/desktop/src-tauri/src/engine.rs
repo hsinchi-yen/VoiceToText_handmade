@@ -30,7 +30,7 @@ use v2c_asr_local::{
 };
 use v2c_core::asr::wav::probe_clip;
 use v2c_core::asr::{AsrContext, AsrProvider};
-use v2c_core::config::Config;
+use v2c_core::config::{Config, KeepLoaded, LocalAsr};
 use v2c_core::llm::LlmProvider;
 use v2c_core::pipeline::Pipeline;
 use v2c_core::route::{CloudHttp, Purpose, Target};
@@ -45,8 +45,13 @@ use crate::local_asr::{self, LocalEngines, Startup};
 use crate::paths::Paths;
 use crate::providers::{self, select, wrap_asr, wrap_llm, LmHealth, Providers};
 
-/// How long an utterance waits for the local engine that is still loading.
+/// How long the settings test waits for startup to finish.
 const ASR_LOAD_WAIT: Duration = Duration::from_secs(30);
+/// Upper bound for loading one model (TEA-ASR takes about 10 s, Breeze about 3 s).
+const MODEL_LOAD_WAIT: Duration = Duration::from_secs(60);
+/// How long an utterance waits for the local model: a switch first waits up to
+/// `local_asr::RELEASE_WAIT` for the old model to be released, then loads the new one.
+const ASR_SWITCH_WAIT: Duration = local_asr::RELEASE_WAIT.saturating_add(MODEL_LOAD_WAIT);
 /// After a failed GPU engine load, the guard does not retry for this long.
 const GPU_RETRY_AFTER: Duration = Duration::from_secs(300);
 
@@ -535,21 +540,30 @@ impl Engine {
         }
     }
 
-    /// Hotkey pressed with no model loaded (idle / on demand): load one in the background.
-    /// The GPU model when the guard allows it now, otherwise SenseVoice. The utterance waits
-    /// for it (`local_asr`).
+    /// Hotkey pressed: when the slot is empty (idle / on demand), or holds SenseVoice while the
+    /// configured GPU model could run and `keep_loaded = "on_demand"` (the guard never restores
+    /// there), load in the background. The utterance waits for it (`local_asr`).
     fn on_press(self: &Arc<Self>) {
         *lock(&self.last_use) = Instant::now();
-        if self.local.current().is_some() || self.local.switching() {
+        if self.local.switching() || self.local.startup() == Startup::Loading {
             return;
         }
-        if self.local.startup() == Startup::Loading {
+        let cfg = self.config();
+        let on_demand = cfg.gpu.keep_loaded == KeepLoaded::OnDemand;
+        let stand_in = self.local.current() == Some(LocalAsrKind::SenseVoice)
+            && cfg.local.asr != LocalAsr::SenseVoice;
+        if self.local.current().is_some() && !(on_demand && stand_in) {
             return;
         }
         let p = self.providers();
         if p.purpose(Purpose::Asr).target != Target::Local && p.cloud_asr.is_some() {
             return;
         }
+        self.spawn_ensure("hotkey", on_demand);
+    }
+
+    /// Runs [`Engine::ensure_model`] on a background thread (one at a time).
+    fn spawn_ensure(self: &Arc<Self>, why: &'static str, upgrade: bool) {
         if self.press_loading.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -557,7 +571,7 @@ impl Engine {
         let spawned = std::thread::Builder::new()
             .name("v2c-asr-load".into())
             .spawn(move || {
-                me.load_on_demand();
+                me.ensure_model(why, upgrade);
                 me.press_loading.store(false, Ordering::SeqCst);
             });
         if spawned.is_err() {
@@ -565,25 +579,24 @@ impl Engine {
         }
     }
 
-    fn load_on_demand(&self) {
-        self.load_when_empty("hotkey");
-    }
-
-    /// Loads a model into the empty slot (idle / on demand / settings test): the GPU model when
-    /// the guard allows it now, otherwise SenseVoice. Returns the load time (if something was
-    /// loaded) and why the GPU model is not used (if it is not). Blocking.
-    fn load_when_empty(&self, why: &'static str) -> (Option<u64>, Option<CpuReason>) {
-        if self.local.current().is_some() {
+    /// Makes sure a model is loaded, outside the guard's poll (hotkey, settings change, settings
+    /// test), by [`gpu_task::press_target`]: fills an empty slot with the GPU model when allowed
+    /// now, otherwise SenseVoice; with `upgrade`, also replaces a SenseVoice stand-in by the GPU
+    /// model when allowed. Returns the load time (if something was loaded) and why the GPU
+    /// model is not used (if it is not). Blocking.
+    fn ensure_model(&self, why: &'static str, upgrade: bool) -> (Option<u64>, Option<CpuReason>) {
+        let cfg = self.config();
+        let gpu = gpu_engine(&cfg);
+        let current = self.local.current();
+        if current == Some(gpu) {
             return (None, None);
         }
-        let cfg = self.config();
         let has_cpu = local_asr::sensevoice_model(&self.paths).is_some();
-        let gpu_present = local_asr::gpu_model(&cfg, &self.paths).is_some();
         let fg = Self::foreground();
         let input = GuardInput {
             gpu: self.monitor.snapshot(),
             cuda_available: self.cuda_available(&cfg),
-            breeze_model_present: gpu_present,
+            breeze_model_present: local_asr::gpu_model(&cfg, &self.paths).is_some(),
             breeze_vram_mb: gpu_vram_estimate_mb(&cfg),
             foreground: fg.as_ref().map(|(exe, fullscreen)| ForegroundInfo {
                 exe,
@@ -601,20 +614,37 @@ impl Engine {
             Ok(()) => None,
             Err(r) => Some(CpuReason::Guard(r)),
         };
+        let target =
+            gpu_task::press_target(current, gpu, upgrade, allowed.is_ok(), gpu_blocked, has_cpu);
         let t = Instant::now();
-        if reason.is_none() {
-            if self.switch_to(Some(gpu_engine(&cfg)), why).is_ok() {
-                return (Some(t.elapsed().as_millis() as u64), None);
+        let ms = || Some(t.elapsed().as_millis() as u64);
+        match target {
+            SlotTarget::Keep => {
+                if current.is_none() {
+                    debug!(?reason, "no local model to load");
+                }
+                if reason.is_some() {
+                    *lock(&self.cpu_reason) = reason;
+                }
+                return (None, reason.or(*lock(&self.cpu_reason)));
             }
-            if self.local.current().is_some() {
-                // Another path loaded a model meanwhile.
-                return (None, *lock(&self.cpu_reason));
+            SlotTarget::Unload => {
+                *lock(&self.cpu_reason) = reason;
+                let _ = self.switch_to(None, why);
+                return (None, reason);
             }
-            reason = Some(CpuReason::LoadFailed);
+            SlotTarget::Load(kind) if kind == gpu => match self.switch_to(Some(gpu), why) {
+                Ok(()) => return (ms(), None),
+                // Another switch is running, or the config changed: that path decides.
+                Err("switch_running" | "model_busy" | "model_stale") => {
+                    return (None, *lock(&self.cpu_reason));
+                }
+                // `switch_to` recorded `LoadFailed`; SenseVoice stands in below.
+                Err(_) => reason = Some(CpuReason::LoadFailed),
+            },
+            SlotTarget::Load(_) => *lock(&self.cpu_reason) = reason,
         }
-        *lock(&self.cpu_reason) = reason;
-        if !has_cpu {
-            debug!(?reason, "no local model to load");
+        if !has_cpu || self.local.current().is_some() {
             return (None, reason);
         }
         let t = Instant::now();
@@ -627,7 +657,7 @@ impl Engine {
     /// The local engine, waiting while it is still loading or switching. Tells the user once
     /// per utterance when it waits for a switch ("切換模型中").
     async fn local_asr(&self, wait: bool) -> Result<Arc<dyn AsrProvider>, &'static str> {
-        let deadline = Instant::now() + ASR_LOAD_WAIT;
+        let deadline = Instant::now() + ASR_SWITCH_WAIT;
         let mut told = false;
         loop {
             match self.local.active() {
@@ -741,7 +771,7 @@ impl Engine {
 
         let me = Arc::clone(self);
         let (load_ms, reason) =
-            tauri::async_runtime::spawn_blocking(move || me.load_when_empty("test"))
+            tauri::async_runtime::spawn_blocking(move || me.ensure_model("test", false))
                 .await
                 .map_err(|_| "internal_error")?;
         if self.local.switching() {
@@ -822,7 +852,7 @@ impl Engine {
 
     // ---- per utterance -------------------------------------------------------------------
 
-    async fn prepare(&self, mode: Mode) -> Result<Prepared, &'static str> {
+    async fn prepare(self: &Arc<Self>, mode: Mode) -> Result<Prepared, &'static str> {
         let cfg = self.config();
         let p = self.providers();
         let fell_back = Arc::new(AtomicBool::new(false));
@@ -888,7 +918,22 @@ impl Engine {
             || (p.cloud_asr.is_none() && asr_plan.fallback_to_local);
         let local = self.local_asr(local_is_primary).await;
         let local_err = local.as_ref().err().copied();
-        let asr_sel = select(&asr_plan, p.cloud_asr.clone(), local.ok());
+        // Cloud first with local fallback, but no local model loaded right now (idle / on
+        // demand unload): the fallback loads it only if the cloud call fails.
+        let local = match local {
+            Err(_)
+                if !local_is_primary
+                    && asr_plan.fallback_to_local
+                    && self.local.startup() != Startup::Loading =>
+            {
+                Some(Arc::new(LazyLocalAsr {
+                    engine: Arc::clone(self),
+                    name: gpu_engine(&cfg).provider_name(),
+                }) as Arc<dyn AsrProvider>)
+            }
+            other => other.ok(),
+        };
+        let asr_sel = select(&asr_plan, p.cloud_asr.clone(), local);
         let Some(asr) = wrap_asr(&asr_sel, &fell_back) else {
             return Err(if asr_sel.cloud_missing {
                 providers::CLOUD_NOT_CONFIGURED
@@ -941,6 +986,15 @@ impl Engine {
         }
         // ASR choice, GPU settings, or a model that was just downloaded: decide now.
         self.poll_now.store(true, Ordering::SeqCst);
+        // `on_demand` polls never load the GPU model: apply SenseVoice -> GPU engine here.
+        if diff.local_asr
+            && new.gpu.keep_loaded == KeepLoaded::OnDemand
+            && new.local.asr != LocalAsr::SenseVoice
+            && self.local.current() == Some(LocalAsrKind::SenseVoice)
+            && self.local.startup() != Startup::Loading
+        {
+            self.spawn_ensure("config", true);
+        }
         if diff.audio {
             warn!("audio settings change: restart required");
         }
@@ -1028,6 +1082,39 @@ impl ConfigDiff {
 
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
+    }
+}
+
+/// Local fallback for a cloud ASR route while no local model is loaded: loads one (same rules
+/// as a hotkey press) only when it is actually needed, and waits for it.
+struct LazyLocalAsr {
+    engine: Arc<Engine>,
+    name: &'static str,
+}
+
+#[async_trait]
+impl AsrProvider for LazyLocalAsr {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    async fn transcribe(
+        &self,
+        clip: &v2c_core::audio::AudioClip,
+        ctx: &AsrContext,
+    ) -> v2c_core::Result<v2c_core::asr::Transcript> {
+        if self.engine.local.current().is_none() {
+            self.engine.spawn_ensure("fallback", false);
+        }
+        let asr = self.engine.local_asr(true).await.map_err(|code| {
+            warn!(code, "local fallback ASR unavailable");
+            v2c_core::V2cError::Provider {
+                stage: v2c_core::error::Stage::Asr,
+                provider: self.name.into(),
+                kind: v2c_core::error::ProviderErrorKind::Unreachable,
+            }
+        })?;
+        asr.transcribe(clip, ctx).await
     }
 }
 

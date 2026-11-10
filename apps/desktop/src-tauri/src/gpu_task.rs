@@ -81,6 +81,40 @@ pub fn target(
     }
 }
 
+/// What a hotkey press (or a settings change / the settings 「測試」) does to the slot, outside
+/// the guard's poll. `allowed`: `GpuGuard::can_load` says the GPU model may load now (config,
+/// CUDA, model file, foreground, VRAM; no restore delay). `upgrade`: replace a SenseVoice that
+/// is loaded by the GPU model when allowed — on a press only with `keep_loaded = "on_demand"`
+/// (where the guard never restores), always after a settings change. `gpu_blocked`: a GPU load
+/// failed recently.
+///
+/// - The GPU model is loaded -> keep it.
+/// - SenseVoice is loaded -> the GPU model when `upgrade && allowed && !gpu_blocked`, else keep.
+/// - A GPU model of the wrong kind -> the right one when allowed, else SenseVoice / unload.
+/// - Empty -> the GPU model when allowed and not blocked, else SenseVoice (if installed).
+pub fn press_target(
+    current: Option<LocalAsrKind>,
+    gpu: LocalAsrKind,
+    upgrade: bool,
+    allowed: bool,
+    gpu_blocked: bool,
+    has_cpu_model: bool,
+) -> Target {
+    use LocalAsrKind::SenseVoice;
+    let gpu_ok = allowed && !gpu_blocked;
+    match current {
+        Some(k) if k == gpu => Target::Keep,
+        Some(SenseVoice) if upgrade && gpu_ok => Target::Load(gpu),
+        Some(SenseVoice) => Target::Keep,
+        Some(_) if gpu_ok => Target::Load(gpu),
+        Some(_) if has_cpu_model => Target::Load(SenseVoice),
+        Some(_) => Target::Unload,
+        None if gpu_ok => Target::Load(gpu),
+        None if has_cpu_model => Target::Load(SenseVoice),
+        None => Target::Keep,
+    }
+}
+
 /// Status code for a reason the user should hear about, if any. Config reasons (no model,
 /// GPU disabled, ...), idle, unknown VRAM and restore-pending are silent (logged only).
 pub fn reason_code(reason: GuardReason) -> Option<&'static str> {
@@ -318,6 +352,195 @@ mod tests {
             assert_eq!(census.max(), 1, "{asr:?}");
             assert_eq!(census.live(), 1);
         }
+    }
+
+    #[test]
+    fn press_targets() {
+        let t = |cur, up, ok, blocked, cpu| press_target(cur, TeaAsr, up, ok, blocked, cpu);
+        assert_eq!(t(Some(TeaAsr), true, true, false, true), Target::Keep);
+        // Stand-in SenseVoice: upgraded only when asked and allowed.
+        assert_eq!(
+            t(Some(SenseVoice), true, true, false, true),
+            Target::Load(TeaAsr)
+        );
+        assert_eq!(t(Some(SenseVoice), false, true, false, true), Target::Keep);
+        assert_eq!(t(Some(SenseVoice), true, false, false, true), Target::Keep);
+        assert_eq!(t(Some(SenseVoice), true, true, true, true), Target::Keep);
+        // Wrong GPU engine.
+        assert_eq!(
+            t(Some(Breeze), false, true, false, true),
+            Target::Load(TeaAsr)
+        );
+        assert_eq!(
+            t(Some(Breeze), false, false, false, true),
+            Target::Load(SenseVoice)
+        );
+        assert_eq!(t(Some(Breeze), false, false, false, false), Target::Unload);
+        // Empty slot.
+        assert_eq!(t(None, false, true, false, true), Target::Load(TeaAsr));
+        assert_eq!(t(None, false, true, true, true), Target::Load(SenseVoice));
+        assert_eq!(t(None, false, false, false, false), Target::Keep);
+    }
+
+    fn apply(slot: &LocalEngines, census: &Arc<Census>, t: Target) {
+        match t {
+            Target::Keep => {}
+            Target::Load(kind) => slot
+                .switch_model(Some(kind), false, Duration::ZERO, || FakeAsr::load(census))
+                .unwrap(),
+            Target::Unload => slot
+                .switch_model(None, false, Duration::ZERO, || unreachable!())
+                .unwrap(),
+        }
+        assert!(census.live() <= 1);
+    }
+
+    /// `keep_loaded = "on_demand"`: the guard never restores, so the next hotkey press must bring
+    /// the GPU model back after a yield, and a settings change SenseVoice -> GPU engine must take
+    /// effect. One model at a time throughout.
+    #[test]
+    fn on_demand_yield_recover_and_settings_switch() {
+        use v2c_core::config::KeepLoaded;
+        for (asr, gpu) in [(LocalAsr::Breeze, Breeze), (LocalAsr::TeaAsr, TeaAsr)] {
+            let census = Arc::new(Census::default());
+            let slot = LocalEngines::default();
+            let mut guard = GpuGuard::default();
+            let mut cfg = Config::with_defaults();
+            cfg.local.asr = asr;
+            cfg.gpu.keep_loaded = KeepLoaded::OnDemand;
+            let t0 = Instant::now();
+            let input = |secs: u64, fg: Option<ForegroundInfo<'static>>, loaded: bool| GuardInput {
+                gpu: Some(GpuSnapshot {
+                    free_mb: 5000,
+                    total_mb: 6144,
+                    used_by_us_mb: None,
+                }),
+                cuda_available: true,
+                breeze_model_present: true,
+                breeze_vram_mb: 1500,
+                foreground: fg,
+                breeze_loaded: loaded,
+                busy: false,
+                idle: Duration::ZERO,
+                now: t0 + Duration::from_secs(secs),
+            };
+            let game = Some(ForegroundInfo {
+                exe: "game.exe",
+                fullscreen: true,
+            });
+            let on_demand = cfg.gpu.keep_loaded == KeepLoaded::OnDemand;
+            // Press with an empty slot: the GPU model loads.
+            let allowed = guard.can_load(&cfg, &input(0, None, false)).is_ok();
+            apply(
+                &slot,
+                &census,
+                press_target(slot.current(), gpu, on_demand, allowed, false, true),
+            );
+            assert_eq!(slot.current(), Some(gpu), "{asr:?}");
+            // A fullscreen game: the guard swaps in SenseVoice.
+            let a = guard.decide(&cfg, &input(5, game, true));
+            apply(&slot, &census, target(a, slot.current(), gpu, true, false));
+            assert_eq!(slot.current(), Some(SenseVoice), "{asr:?}: yield");
+            // Game closed: on_demand polls never restore ...
+            for secs in [30, 60, 120] {
+                let a = guard.decide(&cfg, &input(secs, None, false));
+                apply(&slot, &census, target(a, slot.current(), gpu, true, false));
+                assert_eq!(slot.current(), Some(SenseVoice), "{asr:?}: poll at {secs}");
+            }
+            // ... the next press does.
+            let allowed = guard.can_load(&cfg, &input(121, None, false)).is_ok();
+            apply(
+                &slot,
+                &census,
+                press_target(slot.current(), gpu, on_demand, allowed, false, true),
+            );
+            assert_eq!(slot.current(), Some(gpu), "{asr:?}: recovered on press");
+
+            // Settings: SenseVoice, then back to the GPU engine (applied on the settings change).
+            cfg.local.asr = LocalAsr::SenseVoice;
+            let a = guard.decide(&cfg, &input(130, None, true));
+            apply(&slot, &census, target(a, slot.current(), gpu, true, false));
+            assert_eq!(
+                slot.current(),
+                Some(SenseVoice),
+                "{asr:?}: configured SenseVoice"
+            );
+            cfg.local.asr = asr;
+            let allowed = guard.can_load(&cfg, &input(131, None, false)).is_ok();
+            apply(
+                &slot,
+                &census,
+                press_target(slot.current(), gpu, true, allowed, false, true),
+            );
+            assert_eq!(
+                slot.current(),
+                Some(gpu),
+                "{asr:?}: settings change took effect"
+            );
+
+            // A failed GPU load leaves SenseVoice; once the retry window passes, a press retries.
+            apply(&slot, &census, Target::Load(SenseVoice));
+            apply(
+                &slot,
+                &census,
+                press_target(slot.current(), gpu, on_demand, true, true, true),
+            );
+            assert_eq!(
+                slot.current(),
+                Some(SenseVoice),
+                "{asr:?}: blocked after a failure"
+            );
+            apply(
+                &slot,
+                &census,
+                press_target(slot.current(), gpu, on_demand, true, false, true),
+            );
+            assert_eq!(slot.current(), Some(gpu), "{asr:?}: retried");
+            assert_eq!(census.max(), 1, "{asr:?}");
+        }
+    }
+
+    /// `auto`: after SenseVoice -> TEA-ASR in settings, the guard's next poll (triggered right
+    /// away by the reload) loads TEA-ASR; SenseVoice is unloaded first.
+    #[test]
+    fn auto_settings_switch_from_sensevoice_to_tea() {
+        let census = Arc::new(Census::default());
+        let slot = LocalEngines::default();
+        let mut guard = GpuGuard::default();
+        let mut cfg = Config::with_defaults();
+        cfg.local.asr = LocalAsr::SenseVoice;
+        let t0 = Instant::now();
+        let input = |secs: u64, loaded: bool| GuardInput {
+            gpu: Some(GpuSnapshot {
+                free_mb: 5000,
+                total_mb: 6144,
+                used_by_us_mb: None,
+            }),
+            cuda_available: true,
+            breeze_model_present: true,
+            breeze_vram_mb: 2600,
+            foreground: None,
+            breeze_loaded: loaded,
+            busy: false,
+            idle: Duration::ZERO,
+            now: t0 + Duration::from_secs(secs),
+        };
+        let a = guard.decide(&cfg, &input(0, false));
+        apply(
+            &slot,
+            &census,
+            target(a, slot.current(), TeaAsr, true, false),
+        );
+        assert_eq!(slot.current(), Some(SenseVoice));
+        cfg.local.asr = LocalAsr::TeaAsr;
+        let a = guard.decide(&cfg, &input(1, false));
+        apply(
+            &slot,
+            &census,
+            target(a, slot.current(), TeaAsr, true, false),
+        );
+        assert_eq!(slot.current(), Some(TeaAsr));
+        assert_eq!(census.max(), 1);
     }
 
     #[test]

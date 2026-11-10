@@ -63,8 +63,9 @@ pub const fn tea_enabled() -> bool {
 /// Load-time settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TeaOptions {
-    /// Require the CUDA backend. `false` lets transcribe.cpp pick (CPU in practice); only for
-    /// tests and benchmarks, the app always runs TEA-ASR on the GPU.
+    /// Require the CUDA backend; loading fails if the model does not end up on CUDA. `false`
+    /// runs on the CPU (strict `Backend::Cpu`); only for tests and benchmarks (`v2c-cli --cpu`),
+    /// the app always runs TEA-ASR on the GPU.
     pub use_gpu: bool,
 }
 
@@ -137,6 +138,13 @@ pub fn chunk_ranges(samples: &[f32], max_secs: usize, search_secs: usize) -> Vec
     out
 }
 
+/// transcribe.cpp's `Model::backend()` names a CUDA device (`CUDA0`, `cuda`, ...).
+pub fn is_cuda_backend(backend: &str) -> bool {
+    backend
+        .get(..4)
+        .is_some_and(|p| p.eq_ignore_ascii_case("cuda"))
+}
+
 /// `Lang` of a TEA-ASR transcript from its character classes; no letters at all -> `Zh`.
 pub fn tea_lang(text: &str) -> Lang {
     transcript_lang(DecodeLang::Zh, text)
@@ -197,13 +205,21 @@ mod engine {
                 backend: if opts.use_gpu {
                     Backend::Cuda
                 } else {
-                    Backend::Auto
+                    Backend::Cpu
                 },
                 ..ModelOptions::default()
             };
             // Load errors carry paths, backend and format details only.
             let model = Model::load_with(model, &options)
                 .map_err(|e| V2cError::Config(format!("cannot load TEA-ASR model: {e}")))?;
+            // No silent CPU fallback: a GPU request must really be on CUDA. The backend string
+            // is the device name, e.g. `CUDA0`.
+            let backend = model.backend();
+            if opts.use_gpu && !is_cuda_backend(&backend) {
+                return Err(V2cError::Config(format!(
+                    "TEA-ASR model is on backend `{backend}`, not CUDA"
+                )));
+            }
             let vocabulary = model.supports(Feature::Vocabulary);
             let session = model
                 .session()
@@ -467,6 +483,15 @@ mod tests {
         let mut clip = AudioClip::new(vec![0.0; 10]);
         clip.sample_rate = 8000;
         assert!(matches!(check_clip(&clip), Err(V2cError::Audio(_))));
+    }
+
+    #[test]
+    fn cuda_backend_names() {
+        assert!(is_cuda_backend("CUDA0"));
+        assert!(is_cuda_backend("cuda"));
+        assert!(!is_cuda_backend("cpu"));
+        assert!(!is_cuda_backend("Vulkan0"));
+        assert!(!is_cuda_backend(""));
     }
 
     #[test]
