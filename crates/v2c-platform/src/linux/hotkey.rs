@@ -11,11 +11,12 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read};
+use std::os::fd::AsRawFd;
 use std::os::raw::c_long;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use v2c_core::trigger::{Event, Key};
@@ -114,6 +115,7 @@ pub fn select_backend(caps: &LinuxCaps) -> HotkeyBackend {
 
 const EV_SYN: u16 = 0;
 const EV_KEY: u16 = 1;
+const SYN_REPORT: u16 = 0;
 const SYN_DROPPED: u16 = 3;
 /// `KEY_MAX` + 1.
 const KEY_CNT: usize = 0x300;
@@ -152,17 +154,21 @@ pub(crate) fn classify(code: u16) -> Key {
 }
 
 /// Turns raw evdev events into trigger [`Event`]s: drops auto-repeat (value 2) and repeated
-/// presses, folds both Shift keys into one `Key::Shift`, and releases every held key after
-/// `SYN_DROPPED` (the kernel buffer overflowed, so key-ups may have been lost).
+/// presses, folds both Shift keys into one `Key::Shift`, and on `SYN_DROPPED` (the kernel
+/// buffer overflowed, so key-ups may have been lost) releases every held key and discards
+/// the incomplete packet up to the next `SYN_REPORT`, as the evdev protocol requires.
 /// Shared by all keyboards, so a key held on one and released on another still pairs up.
 pub(crate) struct EvdevTracker {
     down: Box<[bool; KEY_CNT]>,
+    /// Set by `SYN_DROPPED`; events are discarded until the next `SYN_REPORT`.
+    dropping: bool,
 }
 
 impl EvdevTracker {
     pub(crate) fn new() -> Self {
         Self {
             down: Box::new([false; KEY_CNT]),
+            dropping: false,
         }
     }
 
@@ -171,8 +177,17 @@ impl EvdevTracker {
     }
 
     pub(crate) fn feed(&mut self, ev: RawEvent, at_ms: u64) -> Vec<Event> {
+        if self.dropping {
+            if (ev.type_, ev.code) == (EV_SYN, SYN_REPORT) {
+                self.dropping = false;
+            }
+            return Vec::new();
+        }
         match (ev.type_, ev.code) {
-            (EV_SYN, SYN_DROPPED) => self.release_all(at_ms),
+            (EV_SYN, SYN_DROPPED) => {
+                self.dropping = true;
+                self.release_all(at_ms)
+            }
             (EV_KEY, code) if usize::from(code) < KEY_CNT => match ev.value {
                 1 => self.key_down(code, at_ms).into_iter().collect(),
                 0 => self.key_up(code, at_ms).into_iter().collect(),
@@ -241,6 +256,9 @@ pub(crate) fn open_error(path: &Path, e: &io::Error) -> PlatformError {
 /// "Trigger + other key" (Ctrl+C cancel) cannot be detected with this backend.
 pub const SHORTCUT_DICTATE: &str = "dictate";
 pub const SHORTCUT_TRANSLATE: &str = "translate";
+/// Whatever key the user binds to `cancel` is grabbed by the compositor system-wide while
+/// the session is open (other programs no longer receive it), so the UI must not suggest
+/// Esc; recommend an otherwise unused combination.
 pub const SHORTCUT_CANCEL: &str = "cancel";
 
 /// `Activated` / `Deactivated` signals of `org.freedesktop.portal.GlobalShortcuts`.
@@ -276,10 +294,54 @@ pub struct LinuxHotkey {
     running: Option<Running>,
 }
 
+/// A started backend. [`Running::shutdown`] is the only way to end it.
 struct Running {
+    shared: Arc<Mutex<Shared>>,
     stop: Arc<AtomicBool>,
+    /// evdev reader threads; each exits within [`POLL_TIMEOUT_MS`] of `stop`, so they are joined.
+    threads: Vec<JoinHandle<()>>,
     /// GlobalShortcuts session to close on stop.
-    portal: Option<(zbus::blocking::Connection, String)>,
+    portal: Option<PortalSession>,
+}
+
+struct PortalSession {
+    conn: zbus::blocking::Connection,
+    session: String,
+}
+
+impl Running {
+    fn new(sink: Sink) -> Self {
+        Self {
+            shared: Arc::new(Mutex::new(Shared {
+                tracker: EvdevTracker::new(),
+                sink: Some(sink),
+            })),
+            stop: Arc::new(AtomicBool::new(false)),
+            threads: Vec::new(),
+            portal: None,
+        }
+    }
+
+    /// Drops the sink under the lock (so no thread can call it after this returns), closes
+    /// the portal session, and joins the evdev readers (closing their device files).
+    fn shutdown(self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let sink = self
+            .shared
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .sink
+            .take();
+        drop(sink);
+        if let Some(p) = self.portal {
+            close_session(&p.conn, &p.session);
+            // Ends the signal stream so the portal thread wakes up and exits.
+            let _ = p.conn.close();
+        }
+        for t in self.threads {
+            let _ = t.join();
+        }
+    }
 }
 
 impl LinuxHotkey {
@@ -309,37 +371,24 @@ impl Hotkey for LinuxHotkey {
         if self.running.is_some() {
             return Err(PlatformError::Os("hotkey already started".into()));
         }
-        let stop = Arc::new(AtomicBool::new(false));
-        let portal = match &self.backend {
+        let running = match &self.backend {
             HotkeyBackend::Unavailable(reasons) => {
                 let text: Vec<String> = reasons.iter().map(ToString::to_string).collect();
                 return Err(PlatformError::HotkeyUnavailable(text.join("; ")));
             }
-            HotkeyBackend::Evdev { devices } => {
-                start_evdev(devices, sink, stop.clone())?;
-                None
-            }
-            HotkeyBackend::GlobalShortcuts { .. } => Some(start_portal(sink, stop.clone())?),
+            HotkeyBackend::Evdev { devices } => spawn_readers(open_all(devices)?, sink)?,
+            HotkeyBackend::GlobalShortcuts { .. } => start_portal(sink)?,
         };
-        self.running = Some(Running { stop, portal });
+        self.running = Some(running);
         Ok(())
     }
 
-    /// Stops delivering events. Reader threads blocked in `read()` are left to exit on their
-    /// next event; they never call the sink after this returns.
+    /// Stops delivering events: once this returns the sink is never called again, and the
+    /// evdev threads have exited (at most ~[`POLL_TIMEOUT_MS`] later than the call). Must
+    /// not be called from inside the sink.
     fn stop(&mut self) {
         if let Some(running) = self.running.take() {
-            running.stop.store(true, Ordering::SeqCst);
-            if let Some((conn, session)) = running.portal {
-                if let Ok(p) = zbus::blocking::Proxy::new(
-                    &conn,
-                    PORTAL_DEST,
-                    session.as_str(),
-                    "org.freedesktop.portal.Session",
-                ) {
-                    let _ = p.call_method("Close", &());
-                }
-            }
+            running.shutdown();
         }
     }
 }
@@ -350,16 +399,63 @@ impl Drop for LinuxHotkey {
     }
 }
 
+/// State shared by the reader threads. The sink is only called while the lock is held,
+/// and `stop()` takes it out under the same lock.
 struct Shared {
     tracker: EvdevTracker,
-    sink: Sink,
+    sink: Option<Sink>,
 }
 
-fn start_evdev(
-    devices: &[PathBuf],
-    sink: Sink,
-    stop: Arc<AtomicBool>,
-) -> Result<(), PlatformError> {
+/// Runs `convert` and passes its events to the sink. Returns `false` once stopped.
+fn deliver(shared: &Mutex<Shared>, convert: impl FnOnce(&mut EvdevTracker) -> Vec<Event>) -> bool {
+    let Ok(mut guard) = shared.lock() else {
+        return false;
+    };
+    let Shared { tracker, sink } = &mut *guard;
+    let Some(sink) = sink.as_ref() else {
+        return false;
+    };
+    for event in convert(tracker) {
+        sink(event);
+    }
+    true
+}
+
+/// How long a reader waits for input before re-checking the stop flag.
+const POLL_TIMEOUT_MS: i32 = 100;
+
+/// A source of raw evdev events; `File` in production, a channel in tests.
+pub(crate) trait EventSource: Send + 'static {
+    /// Waits up to `timeout_ms` for one event; `Ok(None)` on timeout.
+    fn next_event(&mut self, timeout_ms: i32) -> io::Result<Option<RawEvent>>;
+}
+
+impl EventSource for File {
+    fn next_event(&mut self, timeout_ms: i32) -> io::Result<Option<RawEvent>> {
+        let mut pfd = libc::pollfd {
+            fd: self.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid `pollfd` for a file descriptor owned by `self`.
+        let n = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+        if n < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if n == 0 {
+            return Ok(None);
+        }
+        if pfd.revents & libc::POLLIN == 0 {
+            // POLLERR / POLLHUP / POLLNVAL: the device went away.
+            return Err(io::Error::from(io::ErrorKind::BrokenPipe));
+        }
+        let mut buf = [0u8; INPUT_EVENT_SIZE];
+        self.read_exact(&mut buf)?;
+        Ok(Some(RawEvent::decode(&buf)))
+    }
+}
+
+fn open_all(devices: &[PathBuf]) -> Result<Vec<File>, PlatformError> {
     let mut files = Vec::new();
     let mut first_err = None;
     for path in devices {
@@ -375,37 +471,39 @@ fn start_evdev(
             UnavailableReason::NoKeyboard.to_string(),
         )));
     }
-    let shared = Arc::new(Mutex::new(Shared {
-        tracker: EvdevTracker::new(),
-        sink,
-    }));
-    for (i, file) in files.into_iter().enumerate() {
-        let shared = shared.clone();
-        let stop = stop.clone();
-        thread::Builder::new()
-            .name(format!("v2c-evdev-{i}"))
-            .spawn(move || read_device(file, &shared, &stop))
-            .map_err(|e| PlatformError::Os(format!("spawn evdev thread: {e}")))?;
-    }
-    Ok(())
+    Ok(files)
 }
 
-fn read_device(mut file: File, shared: &Mutex<Shared>, stop: &AtomicBool) {
-    let mut buf = [0u8; INPUT_EVENT_SIZE];
-    loop {
-        match file.read_exact(&mut buf) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+fn spawn_readers<S: EventSource>(sources: Vec<S>, sink: Sink) -> Result<Running, PlatformError> {
+    let mut running = Running::new(sink);
+    for (i, source) in sources.into_iter().enumerate() {
+        let shared = running.shared.clone();
+        let stop = running.stop.clone();
+        match thread::Builder::new()
+            .name(format!("v2c-evdev-{i}"))
+            .spawn(move || read_loop(source, &shared, &stop))
+        {
+            Ok(handle) => running.threads.push(handle),
+            Err(e) => {
+                running.shutdown();
+                return Err(PlatformError::Os(format!("spawn evdev thread: {e}")));
+            }
+        }
+    }
+    Ok(running)
+}
+
+fn read_loop(mut source: impl EventSource, shared: &Mutex<Shared>, stop: &AtomicBool) {
+    while !stop.load(Ordering::SeqCst) {
+        match source.next_event(POLL_TIMEOUT_MS) {
+            Ok(Some(ev)) => {
+                if !deliver(shared, |t| t.feed(ev, monotonic_ms())) {
+                    return;
+                }
+            }
+            Ok(None) => {}
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
             Err(_) => return, // device unplugged (ENODEV) or closed
-        }
-        if stop.load(Ordering::SeqCst) {
-            return;
-        }
-        let ev = RawEvent::decode(&buf);
-        let Ok(mut guard) = shared.lock() else { return };
-        let events = guard.tracker.feed(ev, monotonic_ms());
-        for event in events {
-            (guard.sink)(event);
         }
     }
 }
@@ -427,6 +525,15 @@ fn new_token() -> String {
 
 fn dbus_err(what: &str) -> impl Fn(zbus::Error) -> PlatformError + '_ {
     move |e| PlatformError::Os(format!("{what}: {e}"))
+}
+
+const SESSION_IFACE: &str = "org.freedesktop.portal.Session";
+
+/// Calls `org.freedesktop.portal.Session.Close` (best effort).
+fn close_session(conn: &zbus::blocking::Connection, session: &str) {
+    if let Ok(p) = zbus::blocking::Proxy::new(conn, PORTAL_DEST, session, SESSION_IFACE) {
+        let _ = p.call_method("Close", &());
+    }
 }
 
 /// Calls a portal method that returns a Request handle and waits for its `Response`.
@@ -473,12 +580,10 @@ fn portal_request(
 }
 
 /// Creates a GlobalShortcuts session, binds the v2c shortcuts, and forwards
-/// `Activated`/`Deactivated` on a thread. Not exercised on the T3.0 host (GNOME 42 has no
+/// `Activated`/`Deactivated` on a thread, which exits when the session is closed (by
+/// `stop()` or by the portal). Not exercised on the T3.0 host (GNOME 42 has no
 /// GlobalShortcuts portal); see the 🧑 items of task card T3.1.
-fn start_portal(
-    sink: Sink,
-    stop: Arc<AtomicBool>,
-) -> Result<(zbus::blocking::Connection, String), PlatformError> {
+fn start_portal(sink: Sink) -> Result<Running, PlatformError> {
     use zbus::blocking::{Connection, MessageIterator, Proxy};
     use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
@@ -486,10 +591,12 @@ fn start_portal(
     let gs = Proxy::new(&conn, PORTAL_DEST, PORTAL_PATH, GLOBAL_SHORTCUTS_IFACE)
         .map_err(dbus_err("GlobalShortcuts proxy"))?;
 
-    // Subscribe to the shortcut signals before binding so no early press is lost.
+    // Subscribe before binding so no early press is lost. Only the portal's own signals are
+    // accepted (the bus resolves the well-known sender name); the interface is checked
+    // below so `Session.Closed` is seen too.
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
-        .interface(GLOBAL_SHORTCUTS_IFACE)
+        .sender(PORTAL_DEST)
         .map_err(dbus_err("match rule"))?
         .build();
     let signals = MessageIterator::for_match_rule(rule, &conn, None)
@@ -513,8 +620,13 @@ fn start_portal(
             })
         })
         .ok_or_else(|| PlatformError::Os("CreateSession: no session_handle".into()))?;
-    let session_path = OwnedObjectPath::try_from(session.as_str())
-        .map_err(|e| PlatformError::Os(format!("session handle: {e}")))?;
+    let session_path = match OwnedObjectPath::try_from(session.as_str()) {
+        Ok(p) => p,
+        Err(e) => {
+            close_session(&conn, &session);
+            return Err(PlatformError::Os(format!("session handle: {e}")));
+        }
+    };
 
     let shortcuts: Vec<(&str, HashMap<&str, Value<'_>>)> = [
         (SHORTCUT_DICTATE, "v2c: hold to dictate"),
@@ -534,21 +646,41 @@ fn start_portal(
     let bind_token = new_token();
     let mut bind_opts: HashMap<&str, Value<'_>> = HashMap::new();
     bind_opts.insert("handle_token", Value::from(bind_token.as_str()));
-    portal_request(&conn, "BindShortcuts", &bind_token, || {
+    if let Err(e) = portal_request(&conn, "BindShortcuts", &bind_token, || {
         gs.call_method("BindShortcuts", &(&session_path, shortcuts, "", bind_opts))
-    })?;
+    }) {
+        // Includes the user pressing Cancel in the dialog.
+        close_session(&conn, &session);
+        return Err(e);
+    }
 
+    let mut running = Running::new(sink);
+    let shared = running.shared.clone();
+    let stop = running.stop.clone();
     let session_for_thread = session.clone();
-    thread::Builder::new()
+    let spawned = thread::Builder::new()
         .name("v2c-global-shortcuts".into())
         .spawn(move || {
             for msg in signals {
                 if stop.load(Ordering::SeqCst) {
                     return;
                 }
-                let Ok(msg) = msg else { continue };
+                let Ok(msg) = msg else {
+                    return; // connection closed
+                };
                 let header = msg.header();
-                let signal = match header.member().map(|m| m.as_str()) {
+                let iface = header.interface().map(|i| i.as_str());
+                let member = header.member().map(|m| m.as_str());
+                if iface == Some(SESSION_IFACE)
+                    && member == Some("Closed")
+                    && header.path().map(|p| p.as_str()) == Some(session_for_thread.as_str())
+                {
+                    return;
+                }
+                if iface != Some(GLOBAL_SHORTCUTS_IFACE) {
+                    continue;
+                }
+                let signal = match member {
                     Some("Activated") => PortalSignal::Activated,
                     Some("Deactivated") => PortalSignal::Deactivated,
                     _ => continue,
@@ -560,13 +692,19 @@ fn start_portal(
                 if sess.as_str() != session_for_thread {
                     continue;
                 }
-                for event in portal_events(&id, signal, monotonic_ms()) {
-                    sink(event);
+                if !deliver(&shared, |_| portal_events(&id, signal, monotonic_ms())) {
+                    return;
                 }
             }
-        })
-        .map_err(|e| PlatformError::Os(format!("spawn shortcuts thread: {e}")))?;
-    Ok((conn, session))
+        });
+    running.portal = Some(PortalSession { conn, session });
+    if let Err(e) = spawned {
+        running.shutdown();
+        return Err(PlatformError::Os(format!("spawn shortcuts thread: {e}")));
+    }
+    // The portal thread is not joined: it may sit in the blocking signal iterator until the
+    // closed connection wakes it, but it can no longer reach the sink.
+    Ok(running)
 }
 
 #[cfg(test)]
@@ -574,6 +712,9 @@ mod tests {
     use super::*;
     use crate::linux::caps::EvdevCaps;
     use crate::linux::caps::SessionType;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc;
+    use std::time::Duration;
     use v2c_core::trigger::{Command, Trigger, TriggerConfig};
     use v2c_core::Mode;
 
@@ -729,8 +870,152 @@ mod tests {
                 },
             ]
         );
+        assert!(t.feed(syn_report(), 55).is_empty());
         // The real (late) release is then dropped instead of emitted twice.
         assert!(t.feed(key(KEY_RIGHTCTRL, 0), 60).is_empty());
+    }
+
+    fn syn_report() -> RawEvent {
+        RawEvent {
+            type_: EV_SYN,
+            code: SYN_REPORT,
+            value: 0,
+        }
+    }
+
+    #[test]
+    fn syn_dropped_discards_until_syn_report() {
+        let mut t = EvdevTracker::new();
+        let dropped = RawEvent {
+            type_: EV_SYN,
+            code: SYN_DROPPED,
+            value: 0,
+        };
+        // Nothing is held, so there is nothing to release.
+        assert!(t.feed(dropped, 0).is_empty());
+        // The rest of the broken packet is ignored, including a fresh press.
+        assert!(t.feed(key(KEY_RIGHTCTRL, 1), 1).is_empty());
+        assert!(t.feed(key(KEY_ESC, 1), 1).is_empty());
+        assert!(t.feed(dropped, 2).is_empty());
+        assert!(t.feed(syn_report(), 3).is_empty());
+        // Normal delivery resumes after SYN_REPORT; the discarded press left no state.
+        assert_eq!(
+            t.feed(key(KEY_RIGHTCTRL, 1), 10),
+            vec![Event::KeyDown {
+                key: Key::Trigger,
+                at_ms: 10
+            }]
+        );
+        assert!(t.feed(syn_report(), 10).is_empty());
+        assert_eq!(t.feed(key(KEY_RIGHTCTRL, 0), 20).len(), 1);
+    }
+
+    /// Test event source fed from a channel, like a device that blocks between keys.
+    struct ChannelSource(mpsc::Receiver<RawEvent>);
+
+    impl EventSource for ChannelSource {
+        fn next_event(&mut self, timeout_ms: i32) -> io::Result<Option<RawEvent>> {
+            match self
+                .0
+                .recv_timeout(Duration::from_millis(timeout_ms as u64))
+            {
+                Ok(ev) => Ok(Some(ev)),
+                Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    Err(io::Error::from(io::ErrorKind::BrokenPipe))
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn file_source_polls_with_timeout() {
+        use std::io::Write;
+        use std::os::fd::OwnedFd;
+        let (reader, mut writer) = io::pipe().unwrap();
+        let mut file = File::from(OwnedFd::from(reader));
+        let t0 = Instant::now();
+        assert!(file.next_event(50).unwrap().is_none());
+        assert!(t0.elapsed() >= Duration::from_millis(40));
+
+        let mut buf = [0u8; INPUT_EVENT_SIZE];
+        let o = 2 * std::mem::size_of::<c_long>();
+        buf[o..o + 2].copy_from_slice(&EV_KEY.to_ne_bytes());
+        buf[o + 2..o + 4].copy_from_slice(&KEY_ESC.to_ne_bytes());
+        buf[o + 4..o + 8].copy_from_slice(&1i32.to_ne_bytes());
+        writer.write_all(&buf).unwrap();
+        assert_eq!(file.next_event(1_000).unwrap(), Some(key(KEY_ESC, 1)));
+
+        drop(writer); // hang-up: the reader thread would exit
+        assert!(file.next_event(1_000).is_err());
+    }
+
+    fn counting_sink() -> (Arc<AtomicUsize>, Sink) {
+        let count = Arc::new(AtomicUsize::new(0));
+        let c = count.clone();
+        (
+            count,
+            Box::new(move |_| {
+                c.fetch_add(1, Ordering::SeqCst);
+            }),
+        )
+    }
+
+    fn wait_for(count: &AtomicUsize, n: usize) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while count.load(Ordering::SeqCst) < n {
+            assert!(Instant::now() < deadline, "sink not called");
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn no_sink_call_after_stop_and_threads_exit() {
+        let (count, sink) = counting_sink();
+        let (tx, rx) = mpsc::channel();
+        let (tx2, rx2) = mpsc::channel();
+        let running = spawn_readers(vec![ChannelSource(rx), ChannelSource(rx2)], sink).unwrap();
+        let mut h = LinuxHotkey {
+            backend: HotkeyBackend::Evdev { devices: vec![] },
+            running: Some(running),
+        };
+        tx.send(key(KEY_RIGHTCTRL, 1)).unwrap();
+        wait_for(&count, 1);
+
+        // Both readers are idle (blocked waiting for input) when stop is called; it must
+        // return only after they exited, well within a few poll timeouts.
+        let t0 = Instant::now();
+        h.stop();
+        assert!(
+            t0.elapsed() < Duration::from_millis(1_000),
+            "{:?}",
+            t0.elapsed()
+        );
+        // The threads have exited, so their receivers are gone.
+        assert!(tx.send(key(KEY_RIGHTCTRL, 0)).is_err());
+        assert!(tx2.send(key(KEY_ESC, 1)).is_err());
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn stop_while_events_are_flowing_never_calls_sink_afterwards() {
+        let (count, sink) = counting_sink();
+        let (tx, rx) = mpsc::channel();
+        let running = spawn_readers(vec![ChannelSource(rx)], sink).unwrap();
+        let feeder = thread::spawn(move || {
+            // Alternate press/release as fast as possible until the reader is gone.
+            for i in 0u64.. {
+                if tx.send(key(KEY_ESC, (i % 2) as i32 ^ 1)).is_err() {
+                    return;
+                }
+            }
+        });
+        wait_for(&count, 10);
+        running.shutdown();
+        let after_stop = count.load(Ordering::SeqCst);
+        feeder.join().unwrap();
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(count.load(Ordering::SeqCst), after_stop);
     }
 
     #[test]

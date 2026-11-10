@@ -33,3 +33,5 @@ features = [
 # 5.x matches the zbus already in Cargo.lock (Tauri's Linux deps), so the app links one copy.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5.19"
+# `poll()` with a timeout so evdev reader threads exit promptly on stop (already in Cargo.lock).
+libc = "0.2"
