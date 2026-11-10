@@ -9,7 +9,7 @@
 use std::sync::{Arc, OnceLock};
 
 use tracing::{debug, warn};
-use v2c_core::history::{now_unix, History, NewEntry};
+use v2c_core::history::{now_unix, AddOutcome, History, NewEntry};
 use v2c_core::pipeline::Output;
 
 use crate::sinks::{OutputContext, OutputSink};
@@ -25,8 +25,9 @@ impl HistorySink {
         Self { store }
     }
 
-    /// Writes one output (blocking: SQLite + DPAPI).
-    pub fn record(&self, output: &Output, ctx: &OutputContext) {
+    /// Writes one output (blocking: SQLite + DPAPI). Returns whether the text is now in the
+    /// history (false when disabled, excluded, empty, or the write failed).
+    pub fn record(&self, output: &Output, ctx: &OutputContext) -> bool {
         let entry = NewEntry {
             created_at: now_unix(),
             mode: output.mode,
@@ -36,12 +37,18 @@ impl HistorySink {
             timings: Some(output.timings),
         };
         match self.store.add_entry(&entry) {
-            Ok(outcome) => debug!(
-                outcome = outcome.as_str(),
-                injected = ctx.injected,
-                "history sink"
-            ),
-            Err(e) => warn!(error = %e, "history write failed"),
+            Ok(outcome) => {
+                debug!(
+                    outcome = outcome.as_str(),
+                    injected = ctx.injected,
+                    "history sink"
+                );
+                matches!(outcome, AddOutcome::Stored(_))
+            }
+            Err(e) => {
+                warn!(error = %e, "history write failed");
+                false
+            }
         }
     }
 }
@@ -60,7 +67,9 @@ impl OutputSink for HistorySink {
                 let (output, ctx) = (output.clone(), ctx.clone());
                 rt.spawn_blocking(move || sink.record(&output, &ctx));
             }
-            Err(_) => self.record(output, ctx),
+            Err(_) => {
+                self.record(output, ctx);
+            }
         }
     }
 }
@@ -73,10 +82,15 @@ pub fn install(sink: Arc<HistorySink>) {
 }
 
 /// The installed history sink, if history is available and enabled.
+#[cfg_attr(target_os = "linux", allow(dead_code))] // Linux wraps it: linux_app::kept
 pub fn installed() -> Option<Arc<dyn OutputSink>> {
-    INSTALLED
-        .get()
-        .map(|s| Arc::clone(s) as Arc<dyn OutputSink>)
+    installed_sink().map(|s| s as Arc<dyn OutputSink>)
+}
+
+/// The installed history sink as its concrete type (the Linux kept-text sink wraps it).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn installed_sink() -> Option<Arc<HistorySink>> {
+    INSTALLED.get().map(Arc::clone)
 }
 
 #[cfg(test)]

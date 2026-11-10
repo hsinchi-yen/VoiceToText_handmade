@@ -56,7 +56,25 @@
     await refresh();
   }
 
-  const copy = (id) => act("history_copy", id, "已複製到剪貼簿");
+  // Linux has no background clipboard access (GNOME < 45): copy from the page itself.
+  async function copy(item) {
+    message = "";
+    try {
+      await invoke("history_copy", { id: item.id });
+      message = "已複製到剪貼簿";
+    } catch (code) {
+      if (code !== "platform_unsupported" || !navigator.clipboard) {
+        message = describe(code);
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(item.text);
+        message = "已複製到剪貼簿";
+      } catch {
+        message = "無法存取剪貼簿：請選取文字後按 Ctrl+C";
+      }
+    }
+  }
   const reoutput = (id) => act("history_reoutput", id, "已重新輸出");
   const remove = (id) => act("history_delete", id, "已刪除");
   async function clearAll() {
@@ -102,13 +120,17 @@
     <li>
       <div class="meta">
         <span>{fmt.format(new Date(item.created_at * 1000))}</span>
-        <span>{item.app || "未知 App"}</span>
+        {#if item.id < 0}
+          <span class="tag">未輸入（只保留到 v2c 結束）</span>
+        {:else}
+          <span>{item.app || "未知 App"}</span>
+        {/if}
         <span>{item.chars} 字</span>
         {#if item.mode === "translate"}<span class="tag">中翻英</span>{/if}
       </div>
       <p class="text">{item.text}</p>
       <div class="actions">
-        <button onclick={() => copy(item.id)}>複製</button>
+        <button onclick={() => copy(item)}>複製</button>
         <button onclick={() => reoutput(item.id)} title="切回上一個視窗並輸入這段文字">
           重新輸出
         </button>

@@ -31,6 +31,7 @@ pub struct SinkRegistry {
 
 impl SinkRegistry {
     /// The registry used by the app: the input history (T1.9) when it is available.
+    #[cfg_attr(target_os = "linux", allow(dead_code))] // Linux: linux_app::start_controller
     pub fn with_defaults() -> Self {
         let mut reg = Self::default();
         reg.sinks.extend(crate::history_sink::installed()); // T1.9

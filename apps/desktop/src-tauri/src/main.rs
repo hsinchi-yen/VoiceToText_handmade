@@ -17,6 +17,8 @@ mod controller;
 mod engine;
 mod gpu_task;
 mod history_sink;
+#[cfg(target_os = "linux")]
+mod linux_app;
 mod local_asr;
 mod logging;
 mod overlay;
@@ -37,7 +39,9 @@ use v2c_core::secrets::SecretStore;
 
 use crate::app_state::AppState;
 use crate::controller::StatusEvent;
-use crate::engine::{Engine, EngineHandle};
+use crate::engine::Engine;
+#[cfg(not(target_os = "linux"))]
+use crate::engine::EngineHandle;
 use crate::recorder::{Recorder, RecorderNotice};
 
 /// Webview event carrying [`StatusEvent`]s (overlay and UI pages listen to it).
@@ -72,6 +76,11 @@ fn main() {
         // instance runs hidden) only shows the running instance's window and exits, so there is
         // never a second keyboard hook typing everything twice.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // Linux: ibus-daemon's `v2c --ibus` reconnects the engine; no window.
+            #[cfg(target_os = "linux")]
+            if linux_app::on_second_instance(app, &_args) {
+                return;
+            }
             info!("second launch: showing the running instance");
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
@@ -174,17 +183,27 @@ fn main() {
 /// after the onboarding restart and while no local speech model is installed (onboarding).
 fn show_main_unless_autostart(app: &tauri::AppHandle) {
     let autostart = std::env::args().any(|a| a == commands::settings::AUTOSTART_ARG);
+    // Linux: started by ibus-daemon (`v2c --ibus`): never pop up a window.
+    #[cfg(target_os = "linux")]
+    let ibus_launch = linux_app::launch::is_ibus_launch(&std::env::args().collect::<Vec<_>>());
+    #[cfg(not(target_os = "linux"))]
+    let ibus_launch = false;
     let paths = &app.state::<AppState>().paths;
     let resumed = commands::onboarding::take_show_flag(paths);
     let has_model = commands::models::any_asr_model(paths);
-    let show = commands::onboarding::show_main_at_start(autostart, resumed, has_model);
-    info!(autostart, resumed, has_model, show, "main window");
+    let show =
+        !ibus_launch && commands::onboarding::show_main_at_start(autostart, resumed, has_model);
+    info!(
+        autostart,
+        ibus_launch, resumed, has_model, show, "main window"
+    );
     if show {
         if let Some(w) = app.get_webview_window("main") {
             let _ = w.show();
         }
     }
 }
+
 /// The floating overlay: always on Windows; off on a Linux Wayland session, where a window
 /// cannot be placed near the cursor or kept from taking focus (T3.6).
 fn overlay_enabled() -> bool {
@@ -212,11 +231,22 @@ fn install_keyring() -> Arc<dyn SecretStore> {
         // Cloud services then report a key error; local use is unaffected.
         Err(e) => warn!(error = %e, "keyring store unavailable"),
     }
-    // T3.6: freedesktop Secret Service (GNOME Keyring / KWallet) over zbus.
+    // T3.6: freedesktop Secret Service (GNOME Keyring / KWallet) over zbus. Connecting can
+    // wait for D-Bus activation of the keyring daemon (up to ~25 s), so it runs in the
+    // background; a cloud call before it finishes reports a key error once.
     #[cfg(target_os = "linux")]
-    match v2c_platform::linux::secret::install_default_store() {
-        Ok(()) => info!("keyring: Secret Service"),
-        Err(e) => warn!(error = %e, "keyring store unavailable"),
+    {
+        let spawned = std::thread::Builder::new()
+            .name("v2c-keyring".into())
+            .spawn(
+                || match v2c_platform::linux::secret::install_default_store() {
+                    Ok(()) => info!("keyring: Secret Service"),
+                    Err(e) => warn!(error = %e, "keyring store unavailable"),
+                },
+            );
+        if spawned.is_err() {
+            warn!("could not start the keyring thread");
+        }
     }
     Arc::new(v2c_core::secrets::KeyringSecretStore::new())
 }
@@ -329,6 +359,9 @@ fn start_background(app: &tauri::AppHandle, config_error: Option<&'static str>) 
         }
     }
 
+    #[cfg(target_os = "linux")]
+    linux_app::start_controller(app, &state, recorder);
+    #[cfg(not(target_os = "linux"))]
     start_controller(&state, recorder);
 }
 
@@ -381,99 +414,6 @@ fn start_controller(state: &AppState, recorder: Arc<Recorder>) {
         source: recorder,
         injector: Arc::new(SendInputInjector),
         foreground: Arc::new(WinForeground),
-        sinks: sinks::SinkRegistry::with_defaults(),
-        status: state.status.clone(),
-        backend: Arc::new(EngineHandle(Arc::clone(&state.engine))),
-        config: state.engine.config_watch(),
-    };
-    tauri::async_runtime::spawn(controller::run(deps, events_rx));
-    info!("controller started");
-}
-
-/// Linux (T3.6, UNVERIFIED: not compiled yet). Uses the T3.1 hotkey (GlobalShortcuts portal
-/// or evdev) and the T3.2 injector (Clipboard + RemoteDesktop portals).
-///
-/// TODO(T3.5): prefer `IbusHotkey` / `IbusInjector` when the v2c IBus engine is active, and
-/// fall back to the backends below otherwise (with the T3.4 notification telling the user).
-/// Their API is not merged yet. The floating overlay stays off on Wayland (notifications
-/// replace it).
-#[cfg(target_os = "linux")]
-fn start_controller(state: &AppState, recorder: Arc<Recorder>) {
-    use std::time::Duration;
-
-    use v2c_core::trigger::Event;
-    use v2c_platform::linux::hotkey::{monotonic_ms, LinuxHotkey};
-    use v2c_platform::linux::inject::{portal_injector, InjectConfig};
-    use v2c_platform::{Hotkey, InjectError, Injector};
-
-    const TICK: Duration = Duration::from_millis(50);
-
-    /// No foreground-app detection on Wayland: app rules fall back to the defaults.
-    struct NoForeground;
-    impl v2c_platform::Foreground for NoForeground {
-        fn current_app(&self) -> Option<v2c_platform::AppInfo> {
-            None
-        }
-    }
-
-    /// Used when no injection backend works here: every run reports why.
-    struct UnsupportedInjector(InjectError);
-    impl Injector for UnsupportedInjector {
-        fn run(&self, _: &[v2c_core::inject_plan::Action]) -> Result<(), InjectError> {
-            Err(self.0.clone())
-        }
-    }
-
-    let caps = v2c_platform::linux::caps::probe();
-    let (events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
-
-    let mut hook = LinuxHotkey::new(v2c_platform::linux::hotkey::select_backend(&caps));
-    let hook_tx = events_tx.clone();
-    match hook.start(Box::new(move |event| {
-        let _ = hook_tx.send(event);
-    })) {
-        Ok(()) => info!(backend = ?hook.backend(), "hotkey started"),
-        Err(e) => {
-            warn!(error = %e, "hotkey failed");
-            let _ = state.status.send(StatusEvent::Error {
-                code: "hotkey_failed",
-            });
-        }
-    }
-    if let Ok(mut keep) = state.keep_alive.lock() {
-        keep.push(Box::new(hook));
-    }
-
-    tauri::async_runtime::spawn(async move {
-        let mut interval = tokio::time::interval(TICK);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            let tick = Event::Tick {
-                at_ms: monotonic_ms(),
-            };
-            if events_tx.send(tick).is_err() {
-                break;
-            }
-        }
-    });
-
-    let injector: Arc<dyn Injector + Send + Sync> =
-        match portal_injector(&caps, InjectConfig::default()) {
-            Ok(i) => {
-                info!("injector: Clipboard + RemoteDesktop portals");
-                Arc::new(i)
-            }
-            Err(e) => {
-                warn!(error = %e, "no text injection backend");
-                Arc::new(UnsupportedInjector(e))
-            }
-        };
-
-    let deps = controller::Deps {
-        source: recorder,
-        injector,
-        foreground: Arc::new(NoForeground),
         sinks: sinks::SinkRegistry::with_defaults(),
         status: state.status.clone(),
         backend: Arc::new(EngineHandle(Arc::clone(&state.engine))),
