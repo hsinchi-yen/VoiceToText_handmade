@@ -29,6 +29,9 @@ use crate::{
 
 /// Sampling temperature: low, because polish and translate must stay faithful to the input.
 const TEMPERATURE: f32 = 0.1;
+/// A transport failure faster than this is treated as a stale pooled connection and retried
+/// once (see `send_with_stale_retry`).
+const STALE_RETRY_WINDOW: Duration = Duration::from_millis(500);
 /// Output token budget: `chars * TOKENS_PER_CHAR + TOKEN_HEADROOM`, clamped to the bounds below.
 /// Chinese is about 1-2 tokens per character; English translation of Chinese runs a bit longer.
 const TOKENS_PER_CHAR: usize = 3;
@@ -122,6 +125,30 @@ impl OpenAiCompatLlm {
         }
     }
 
+    /// Sends once more on a fresh connection when the first attempt failed at once on the
+    /// transport (not a timeout, not a refused connect). Servers such as llama.cpp close idle
+    /// keep-alive connections after ~5 s while the client pool keeps them longer, so the first
+    /// request after a pause can hit a closed socket and fail in ~0 ms.
+    async fn send_with_stale_retry(
+        &self,
+        req: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response> {
+        let retry = req.try_clone();
+        let started = std::time::Instant::now();
+        match req.send().await {
+            Ok(resp) => Ok(resp),
+            Err(e)
+                if !e.is_timeout() && !e.is_connect() && started.elapsed() < STALE_RETRY_WINDOW =>
+            {
+                match retry {
+                    Some(again) => again.send().await.map_err(|e| self.send_error(&e)),
+                    None => Err(self.send_error(&e)),
+                }
+            }
+            Err(e) => Err(self.send_error(&e)),
+        }
+    }
+
     /// Maps a transport error without looking at (or keeping) its message, which may echo the URL.
     fn send_error(&self, e: &reqwest::Error) -> V2cError {
         // Connect first: a connect attempt that hit the deadline still means "not reachable".
@@ -159,6 +186,17 @@ struct ChatRequest<'a> {
     temperature: f32,
     max_tokens: usize,
     stream: bool,
+    chat_template_kwargs: TemplateKwargs,
+}
+
+/// Turns off "thinking" for chat templates that support it (Qwen3 and similar, on llama.cpp
+/// `llama-server` and vLLM). A thinking model spends hundreds of tokens before answering, so
+/// short polish/translate calls hit the timeout or the `max_tokens` cap; with thinking off the
+/// same request measured 0.63 s instead of 3-4 s (2026-11-10, Qwen3 27B on llama.cpp).
+/// Servers and templates that do not know the field ignore it (checked with LM Studio).
+#[derive(Serialize)]
+struct TemplateKwargs {
+    enable_thinking: bool,
 }
 
 #[derive(Serialize)]
@@ -228,6 +266,9 @@ impl LlmProvider for OpenAiCompatLlm {
             temperature: TEMPERATURE,
             max_tokens: max_tokens_for(transcript),
             stream: false,
+            chat_template_kwargs: TemplateKwargs {
+                enable_thinking: false,
+            },
         };
         let mut req = self
             .client
@@ -237,7 +278,7 @@ impl LlmProvider for OpenAiCompatLlm {
         if let Some(key) = &self.api_key {
             req = req.bearer_auth(key);
         }
-        let resp = req.send().await.map_err(|e| self.send_error(&e))?;
+        let resp = self.send_with_stale_retry(req).await?;
         if let Some(kind) = status_error(resp.status()) {
             return Err(self.err(kind));
         }
@@ -563,6 +604,64 @@ mod wire_tests {
         )
     }
 
+    /// A server that drops the first connection without answering (like a keep-alive socket
+    /// the server already closed), then answers the second one normally.
+    #[tokio::test]
+    async fn connection_dropped_at_once_is_retried_on_a_fresh_one() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (first, _) = listener.accept().await.unwrap();
+            drop(first);
+            let (mut second, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 64 * 1024];
+            let mut got = Vec::new();
+            // Read headers + body (Content-Length) before answering.
+            loop {
+                let n = second.read(&mut buf).await.unwrap();
+                got.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&got);
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let len = text[..end]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if got.len() >= end + 4 + len {
+                        break;
+                    }
+                }
+                if n == 0 {
+                    break;
+                }
+            }
+            let body =
+                r#"{"choices":[{"message":{"content":"我們明天見。"},"finish_reason":"stop"}]}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            second.write_all(resp.as_bytes()).await.unwrap();
+        });
+        let llm = OpenAiCompatLlm::new(
+            reqwest::Client::new(),
+            format!("http://{addr}/v1"),
+            None,
+            None,
+            Duration::from_secs(2),
+        );
+        let out = llm
+            .complete(SYSTEM, &prompts::wrap_transcript(USER))
+            .await
+            .unwrap();
+        assert_eq!(out, "我們明天見。");
+    }
+
     fn reply(content: &str) -> ResponseTemplate {
         ResponseTemplate::new(200).set_body_json(json!({
             "id": "chatcmpl-1",
@@ -627,6 +726,11 @@ mod wire_tests {
         let body: Value = serde_json::from_slice(&req.body).unwrap();
         assert!(body.get("model").is_none(), "model omitted for LM Studio");
         assert_eq!(body["stream"], json!(false));
+        // Thinking off, so reasoning models answer within the polish budget.
+        assert_eq!(
+            body["chat_template_kwargs"],
+            json!({ "enable_thinking": false })
+        );
         let t = body["temperature"].as_f64().unwrap();
         assert!((0.0..=0.2).contains(&t));
         assert_eq!(body["max_tokens"], json!(max_tokens_for(USER)));
