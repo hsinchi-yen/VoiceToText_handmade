@@ -1,6 +1,7 @@
 <script>
   // Hotkeys, polish, per-purpose routing, start with Windows.
   import * as api from "./api.js";
+  import { displayName } from "../cloud-setup/api.js";
 
   let { view, save } = $props();
 
@@ -73,7 +74,7 @@
         onchange={(e) => save([{ field: p.field, value: e.currentTarget.value }])}>
         <option value="local">地端（{p.asr ? "Breeze／SenseVoice" : "LM Studio"}）</option>
         {#each view.cloud.filter((s) => !p.asr || s.supports_asr) as s (s.id)}
-          <option value={s.id}>{api.kindLabels[s.kind] ?? s.kind}：{s.id}</option>
+          <option value={s.id}>{api.kindLabels[s.kind] ?? s.kind}：{displayName(cfg.cloud.find((c) => c.id === s.id) ?? s)}</option>
         {/each}
       </select>
     </label>

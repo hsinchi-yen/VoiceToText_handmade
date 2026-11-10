@@ -48,7 +48,7 @@
     try {
       const r = await api.remove(s.id);
       confirmId = null;
-      message = `已移除「${s.label}」，原本交給它的用途已改回地端。`;
+      message = `已移除「${api.displayName(s)}」，原本交給它的用途已改回地端。`;
       if (!r.key_deleted) {
         message += "（金鑰沒能從 Windows 認證管理員刪除，v2c 已不會再使用它；可以自行到認證管理員刪除。）";
       }
@@ -72,7 +72,7 @@
     {#each services as s (s.id)}
       <li>
         <div class="title">
-          <strong>{s.label}</strong> <span class="id">{s.id}</span>
+          <strong>{api.displayName(s)}</strong> <span class="id">{s.label}{s.name ? `（代號 ${s.id}）` : ""}</span>
         </div>
         <div class="meta">
           {#if s.kind === "open_ai_compat"}提供：{provides(s)}<br />{/if}
@@ -87,6 +87,9 @@
             {busyId === s.id ? "處理中…" : "測試連線"}
           </button>
           <button onclick={() => onEdit(s)} disabled={busyId !== null}>修改</button>
+          {#if s.kind === "open_ai_compat"}
+            <button onclick={() => onEdit(s)} disabled={busyId !== null}>重新命名</button>
+          {/if}
           {#if confirmId === s.id}
             <button class="danger" onclick={() => removeOne(s)} disabled={busyId !== null}>
               確定移除（連同金鑰）

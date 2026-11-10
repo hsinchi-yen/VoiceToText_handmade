@@ -123,6 +123,11 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
   5. **Defender**：在測試機執行 `"%ProgramFiles%\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -File <安裝檔>`；有誤報就記下來（README 已寫處理方式）
   6. **Breeze 下載網址**：把轉好的 GGML 上傳到你的 Hugging Face repo 後，把 url、sha256、size 填進 `apps/desktop/src-tauri/models.json`（目前是 `PLACEHOLDER-HF-USER`，App 會顯示「尚未提供下載」）
   7. 要分享給 RTX 30／40 系列使用者時，告訴 agent 加入更多 CUDA 架構（目前只建 sm_75，新顯示卡第一次載入較慢）
+- [ ] T1.13 自訂相容端點別名（安裝含 T1.13 的新版後）
+  1. 雲端服務頁 → 現有的 `custom` 按「重新命名」→ 第 2 步「名稱（選填）」填例如「區網 Qwen」→ 走完測試與儲存；`custom-2` 同樣取另一個名字
+  2. 服務清單、「目前由誰處理」、設定頁「潤飾與用途」的下拉選單都顯示新名稱；`%APPDATA%\v2c\config.toml` 出現 `name = "…"`，`id` 仍是 `custom`／`custom-2`，原有註解還在
+  3. 改名後說一句：潤飾、辨識（交給該端點的用途）照常運作；金鑰末 4 碼不變
+  4. 把名稱清空再儲存 → 畫面改回顯示 `custom`，設定檔的 `name` 被移除
 - [ ] 各卡的實機驗收（見各卡「🧑 需人工」）
 - [ ] 檢查點 1：日常使用一週，問題記在 `tasks/dogfood-windows.md`
 

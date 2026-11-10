@@ -71,6 +71,8 @@
   - [ ] 🧑 Sandbox 乾淨安裝、實機安裝、Defender、VS 授權確認（見 human-checklist）
 - [ ] W7b T1.12 TEA-ASR-1.1 第三個地端語音辨識引擎（設定頁可選）
 - [ ] W7b T1.13 自訂相容端點別名（沒填顯示 custom）
+  - [x] 程式完成（2026-11-11，分支 `t1.13-cloud-alias`，待審查與你核准）：`[[cloud]] name`（只限自訂相容端點，去空白、最多 32 字、不可與其他服務的名稱或代號重複）、精靈第 2 步「名稱（選填）」、服務清單「重新命名」、清單／用途摘要／設定頁用途選單顯示名稱、`docs/cloud-setup.md`
+  - [ ] 🧑 替現有的 `custom`、`custom-2` 取名並確認各畫面（見 human-checklist）
 - [ ] **檢查點 1**：日常使用一週，問題記在 `dogfood-windows.md`
 
 ## Phase 2 — Android

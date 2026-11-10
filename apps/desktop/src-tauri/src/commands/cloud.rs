@@ -11,6 +11,12 @@
 //! - `cloud_save(draft, purposes)`: key → OS keyring, service + `[route]` → `config.toml`,
 //!   then `v2c:config-changed`.
 //! - `cloud_remove(id)`: deletes the key and the service; routes using it go back to local.
+//!
+//! Display names (T1.13): a compatible endpoint may carry a user-chosen `name` (e.g.
+//! 「區網 Qwen」); [`display_name`] is the one display rule (name, else `id`). Names are
+//! checked by [`normalize_name`] and must not clash with another service's name or id
+//! (case-insensitive). The `id`, `[route]`, and keyring entry never change on rename, and
+//! logs keep using the `id` only.
 //! - `cloud_open_key_page(kind)`: opens the vendor's API-key page (fixed allow-list) in the
 //!   default browser, so the webview needs no opener permission.
 //!
@@ -63,6 +69,9 @@ pub struct CloudDraft {
     #[serde(default)]
     pub id: Option<String>,
     pub kind: CloudKind,
+    /// Optional display name (compatible endpoints only; ignored for other kinds).
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(default)]
     pub base_url: Option<String>,
     #[serde(default)]
@@ -84,6 +93,7 @@ impl std::fmt::Debug for CloudDraft {
         f.debug_struct("CloudDraft")
             .field("id", &self.id)
             .field("kind", &self.kind)
+            .field("has_name", &self.name.is_some())
             .field("has_base_url", &self.base_url.is_some())
             .field(
                 "api_key",
@@ -129,6 +139,10 @@ pub struct KindInfo {
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct ServiceView {
     pub id: String,
+    /// User-chosen name (compatible endpoints only).
+    pub name: Option<String>,
+    /// What to show for this service: `name`, else `id` (see [`display_name`]).
+    pub display_name: String,
     pub kind: CloudKind,
     pub label: &'static str,
     /// Configured override, if any (`None` = official endpoint).
@@ -246,6 +260,49 @@ pub fn kinds() -> Vec<KindInfo> {
     .collect()
 }
 
+/// Longest display name, in Unicode characters.
+pub const NAME_MAX_CHARS: usize = 32;
+
+/// The one display rule: the user's name if set, else the id (`custom`, `custom-2`, ...).
+pub fn display_name(svc: &CloudService) -> &str {
+    svc.name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .unwrap_or(&svc.id)
+}
+
+/// Trims a display name; empty means "no name". Only compatible endpoints keep one.
+fn normalize_name(kind: CloudKind, name: &Option<String>) -> Result<Option<String>, &'static str> {
+    if kind != CloudKind::OpenAiCompat {
+        return Ok(None);
+    }
+    let Some(n) = trimmed(name) else {
+        return Ok(None);
+    };
+    if n.chars().count() > NAME_MAX_CHARS {
+        return Err("name_too_long");
+    }
+    if n.chars().any(char::is_control) {
+        return Err("invalid_name");
+    }
+    Ok(Some(n))
+}
+
+/// `name` must differ (case-insensitively) from every other service's name and id.
+fn check_name_unique(name: &str, id: &str, services: &[CloudService]) -> Result<(), &'static str> {
+    let clash = |other: &str| other.trim().to_lowercase() == name.to_lowercase();
+    let taken = services
+        .iter()
+        .filter(|s| s.id != id)
+        .any(|s| clash(&s.id) || s.name.as_deref().is_some_and(clash));
+    if taken {
+        Err("name_taken")
+    } else {
+        Ok(())
+    }
+}
+
 fn trimmed(s: &Option<String>) -> Option<String> {
     s.as_deref()
         .map(str::trim)
@@ -254,7 +311,8 @@ fn trimmed(s: &Option<String>) -> Option<String> {
 }
 
 impl CloudDraft {
-    /// The `CloudService` this draft describes, validated (endpoint scheme, required URL).
+    /// The `CloudService` this draft describes, validated (endpoint scheme, required URL,
+    /// name length). Name uniqueness is checked on save.
     fn to_service(&self, id: &str) -> Result<CloudService, &'static str> {
         let mut base_url = trimmed(&self.base_url).map(|u| u.trim_end_matches('/').to_owned());
         if base_url.as_deref() == route::default_base_url(self.kind) {
@@ -262,6 +320,7 @@ impl CloudDraft {
         }
         let svc = CloudService {
             id: id.to_owned(),
+            name: normalize_name(self.kind, &self.name)?,
             kind: self.kind,
             base_url,
             asr_model: if self.kind.supports_asr() {
@@ -510,6 +569,8 @@ fn view(svc: &CloudService, cfg: &Config, stored: &dyn SecretStore) -> ServiceVi
     };
     ServiceView {
         id: svc.id.clone(),
+        name: svc.name.clone(),
+        display_name: display_name(svc).to_owned(),
         kind: svc.kind,
         label: kind_label(svc.kind),
         base_url: svc.base_url.clone(),
@@ -628,6 +689,7 @@ fn upsert_service(doc: &mut DocumentMut, svc: &CloudService) -> Result<(), &'sta
         }
     };
     set_str(table, "kind", kind_toml(svc.kind));
+    set_opt(table, "name", &svc.name);
     set_opt(table, "base_url", &svc.base_url);
     set_opt(table, "asr_model", &svc.asr_model);
     set_opt(table, "llm_model", &svc.llm_model);
@@ -693,6 +755,9 @@ pub fn save_service(
         None => (new_id(draft.kind, &cfg), true),
     };
     let svc = draft.to_service(&id)?;
+    if let Some(name) = &svc.name {
+        check_name_unique(name, &id, &cfg.cloud)?;
+    }
     if purposes.asr && !svc.kind.supports_asr() {
         return Err("unsupported_purpose");
     }
@@ -984,6 +1049,7 @@ mod tests {
         CloudDraft {
             id: None,
             kind,
+            name: None,
             base_url: base,
             api_key: key.map(str::to_owned),
             asr_model: None,
@@ -1288,6 +1354,7 @@ mod tests {
         stored.set("claude", &ApiKey::new(KEY)).unwrap();
         let saved = [CloudService {
             id: "claude".into(),
+            name: None,
             kind: CloudKind::Claude,
             base_url: Some(server.uri()),
             asr_model: None,
@@ -1447,6 +1514,188 @@ future_option = 42  # unknown key
         assert_eq!(cfg.route.polish, "custom");
         let again = save_service(&path, &store, &d, Purposes::default()).unwrap();
         assert_eq!(again.id, "custom-2");
+    }
+
+    fn compat(url: &str, name: Option<&str>) -> CloudDraft {
+        let mut d = draft(CloudKind::OpenAiCompat, Some(url.into()), None);
+        d.llm_model = Some("qwen".into());
+        d.name = name.map(str::to_owned);
+        d
+    }
+
+    #[test]
+    fn name_is_trimmed_limited_and_compat_only() {
+        let n = |kind, v: &str| normalize_name(kind, &Some(v.to_owned()));
+        let compat = CloudKind::OpenAiCompat;
+        assert_eq!(n(compat, "  區網 Qwen  "), Ok(Some("區網 Qwen".into())));
+        assert_eq!(n(compat, "   "), Ok(None));
+        assert_eq!(n(compat, ""), Ok(None));
+        assert_eq!(normalize_name(compat, &None), Ok(None));
+        // 32 characters (not bytes) is the limit; CJK counts one per character.
+        assert_eq!(n(compat, &"字".repeat(32)), Ok(Some("字".repeat(32))));
+        assert_eq!(n(compat, &"字".repeat(33)), Err("name_too_long"));
+        assert_eq!(n(compat, &"a".repeat(33)), Err("name_too_long"));
+        assert_eq!(
+            n(
+                compat, "a
+b"
+            ),
+            Err("invalid_name")
+        );
+        for kind in [CloudKind::Gemini, CloudKind::OpenAi, CloudKind::Claude] {
+            assert_eq!(n(kind, "My Gemini"), Ok(None));
+        }
+
+        let mut svc = compat_service("custom-2");
+        assert_eq!(display_name(&svc), "custom-2");
+        svc.name = Some("區網 Qwen".into());
+        assert_eq!(display_name(&svc), "區網 Qwen");
+        svc.name = Some("  ".into());
+        assert_eq!(display_name(&svc), "custom-2");
+    }
+
+    fn compat_service(id: &str) -> CloudService {
+        CloudService {
+            id: id.into(),
+            name: None,
+            kind: CloudKind::OpenAiCompat,
+            base_url: Some("http://h/v1".into()),
+            asr_model: None,
+            llm_model: None,
+        }
+    }
+
+    #[test]
+    fn duplicate_names_are_refused_case_insensitively() {
+        let mut a = compat_service("custom");
+        a.name = Some("LAN Qwen".into());
+        let b = compat_service("custom-2");
+        let all = [a, b];
+        assert_eq!(
+            check_name_unique("lan qwen", "custom-2", &all),
+            Err("name_taken")
+        );
+        assert_eq!(
+            check_name_unique("CUSTOM", "custom-2", &all),
+            Err("name_taken")
+        );
+        // A service may keep its own name or use its own id.
+        assert_eq!(check_name_unique("LAN QWEN", "custom", &all), Ok(()));
+        assert_eq!(check_name_unique("custom-2", "custom-2", &all), Ok(()));
+        assert_eq!(check_name_unique("Speech", "custom-2", &all), Ok(()));
+    }
+
+    #[test]
+    fn name_is_saved_renamed_and_removed_without_touching_id_route_or_key() {
+        let path = temp_config("name");
+        std::fs::write(&path, USER_CONFIG).unwrap();
+        let store = MemorySecretStore::new();
+        let text_only = Purposes {
+            asr: false,
+            polish: true,
+            translate: true,
+        };
+        // Unnamed: shows the id.
+        let first = save_service(
+            &path,
+            &store,
+            &compat("http://10.0.0.5:8002/v1", None),
+            Purposes::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            (first.id.as_str(), first.display_name.as_str()),
+            ("custom", "custom")
+        );
+        assert_eq!(first.name, None);
+
+        // Named: id is still custom-N; the name is written with toml_edit.
+        let mut d = compat("http://10.0.0.5:8000/v1", Some("  區網 Qwen "));
+        d.api_key = Some(KEY.into());
+        let row = save_service(&path, &store, &d, text_only).unwrap();
+        assert_eq!(row.id, "custom-2");
+        assert_eq!(row.name.as_deref(), Some("區網 Qwen"));
+        assert_eq!(row.display_name, "區網 Qwen");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("name = \"區網 Qwen\""), "{text}");
+        assert!(text.contains("# keep this comment") && text.contains("future_option = 42"));
+        let cfg = load_config(&path).unwrap();
+        assert_eq!(cfg.route.polish, "custom-2");
+
+        // Same name (any case) or another service's id is refused, and nothing changes.
+        let dup = compat("http://10.0.0.6:8000/v1", Some("區網 qwen"));
+        assert_eq!(
+            save_service(&path, &store, &dup, Purposes::default()),
+            Err("name_taken")
+        );
+        let mut clash = compat("http://10.0.0.5:8002/v1", Some("Custom-2"));
+        clash.id = Some("custom".into());
+        assert_eq!(
+            save_service(&path, &store, &clash, Purposes::default()),
+            Err("name_taken")
+        );
+        let long = compat("http://10.0.0.6:8000/v1", Some(&"x".repeat(33)));
+        assert_eq!(
+            save_service(&path, &store, &long, Purposes::default()),
+            Err("name_too_long")
+        );
+        assert_eq!(load_config(&path).unwrap().cloud.len(), 2);
+
+        // Rename: same id, routes and key unchanged.
+        let mut rename = compat("http://10.0.0.5:8000/v1", Some("Office LLM"));
+        rename.id = Some("custom-2".into());
+        let row = save_service(&path, &store, &rename, text_only).unwrap();
+        assert_eq!(
+            (row.id.as_str(), row.display_name.as_str()),
+            ("custom-2", "Office LLM")
+        );
+        assert!(row.has_key);
+        assert_eq!(store.get("custom-2").unwrap().unwrap().expose(), KEY);
+        let cfg = load_config(&path).unwrap();
+        assert_eq!(cfg.route.polish, "custom-2");
+        assert_eq!(cfg.route.translate, "custom-2");
+
+        // Blank name removes the key from config.toml.
+        rename.name = Some("   ".into());
+        let row = save_service(&path, &store, &rename, text_only).unwrap();
+        assert_eq!((row.name, row.display_name.as_str()), (None, "custom-2"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("name ="), "{text}");
+        assert!(text.contains("# keep this comment"));
+    }
+
+    #[test]
+    fn names_on_official_services_are_ignored() {
+        let path = temp_config("name-official");
+        let store = MemorySecretStore::new();
+        let mut d = draft(CloudKind::Gemini, None, Some(KEY));
+        d.name = Some("My Gemini".into());
+        let row = save_service(&path, &store, &d, Purposes::default()).unwrap();
+        assert_eq!((row.name, row.display_name.as_str()), (None, "gemini"));
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("My Gemini"));
+    }
+
+    #[test]
+    fn old_config_without_names_lists_ids() {
+        let path = temp_config("name-old");
+        std::fs::write(
+            &path,
+            "[[cloud]]
+id = \"custom\"
+kind = \"open_ai_compat\"
+base_url = \"http://h:8000/v1\"
+llm_model = \"qwen\"
+",
+        )
+        .unwrap();
+        let rows = list_services(&path, &MemorySecretStore::new()).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (rows[0].name.as_ref(), rows[0].display_name.as_str()),
+            (None, "custom")
+        );
     }
 
     #[test]

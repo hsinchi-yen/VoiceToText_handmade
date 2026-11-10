@@ -572,6 +572,7 @@ mod tests {
 
         cfg.cloud.push(CloudService {
             id: "gem".into(),
+            name: None,
             kind: CloudKind::Gemini,
             base_url: None,
             asr_model: None,

@@ -488,6 +488,7 @@ mod tests {
         for (id, kind) in [("g", CloudKind::Gemini), ("c", CloudKind::Claude)] {
             c.cloud.push(CloudService {
                 id: id.into(),
+                name: None,
                 kind,
                 base_url: None,
                 asr_model: None,

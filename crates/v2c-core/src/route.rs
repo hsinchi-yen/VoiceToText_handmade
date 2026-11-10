@@ -650,6 +650,7 @@ mod tests {
     fn svc(id: &str, kind: CloudKind) -> CloudService {
         CloudService {
             id: id.into(),
+            name: None,
             kind,
             base_url: None,
             asr_model: None,
