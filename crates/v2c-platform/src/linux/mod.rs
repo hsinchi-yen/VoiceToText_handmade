@@ -11,6 +11,10 @@
 //!   and clipboard injection above remain the fallback when the engine is not active.
 //! - [`notify`]: status notifications over `org.freedesktop.Notifications`
 //!   ([`notify::Notifier`], [`notify::DbusNotifier`]); replaces the overlay on Wayland.
+//! - [`secret`]: Secret Service as the keyring-core default store
+//!   ([`secret::install_default_store`]) and a read-only status probe (T3.6).
+//! - [`protect`]: history encryption, AES-256-GCM with a key kept in the Secret Service
+//!   ([`protect::SecretServiceProtector`]); counterpart of `windows::dpapi` (T3.6).
 
 pub mod caps;
 pub mod clipboard;
@@ -19,3 +23,5 @@ pub mod ibus;
 pub mod inject;
 pub mod keys;
 pub mod notify;
+pub mod protect; // T3.6
+pub mod secret; // T3.6

@@ -126,5 +126,9 @@
   - [ ] 🧑 在 GNOME 設定加入 v2c 輸入來源，在 gedit／Firefox／終端機實機按住右 Ctrl 說話（含：吞掉右 Ctrl 後右 Ctrl+C 是否仍是複製、ForwardKeyEvent 的 Enter／Shift+Enter 在各 App 的效果）
   - [ ] 🧑 核准合併 T3.5
 - [ ] W16 T3.6 桌面 App 支援 Linux（等 🧑 安裝建置套件）
+  - [x] A 部分（不需 Tauri 依賴）：`linux::secret::install_default_store()` 以 `zbus-secret-service-keyring-store` 1.0.1（`crypto-rust`，純 Rust zbus、不需 libdbus；相容 keyring-core 1.0.1）安裝 Secret Service 為 keyring-core 預設 store；`linux::secret::probe()` 唯讀狀態；`linux::protect::SecretServiceProtector`：AES-256-GCM（ring 0.17，Cargo.lock 已有）、隨機 96-bit nonce、格式 `[01][nonce][密文+tag]`，256-bit 金鑰首次使用時產生並存進 Secret Service（service `v2c-history`／user `history-key`），只在「沒有項目」時才產生新金鑰；`KeySource` trait＋記憶體金鑰的 mock 測試（往返、竄改、錯金鑰、版本位元組、空輸入、nonce 不重複、Debug／錯誤不含明文或金鑰）
+  - [x] 本機唯讀實測 `-- --ignored secret_real`：Secret Service 在 session bus 上，`login`（預設、未鎖定）與 `session` 兩個 collection；寫入測試需另設 `V2C_SECRET_REAL_WRITE=1`，**未執行**
+  - [ ] B 部分：`apps/desktop` 的 Linux `cfg` 分支已寫好但**尚未在 Linux 編譯**（缺 webkit2gtk-4.1 等）；IBus 接線等 T3.5 合併
+  - [ ] 🧑 實機寫入測試：`V2C_SECRET_REAL_WRITE=1 cargo test -p v2c-platform -- --ignored secret_real_write`（會在登入鑰匙圈建立再刪除一個 `v2c-test` 項目）
 - [ ] W17 T3.7 .deb／AppImage 交付到 `releases/`
 - [ ] **檢查點 3**：第一版交付
