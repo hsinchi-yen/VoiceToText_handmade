@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  IBus component for v2c (T3.5). The .deb (T3.7) installs this file to
+  /usr/share/ibus/component/v2c.xml; ibus-daemon reads it when it starts (or after
+  `ibus restart`), and GNOME Settings > Keyboard > Input Sources can then add "v2c".
+
+  <exec> is what ibus-daemon runs when the engine is first needed. Tauri's .deb puts the
+  desktop binary at /usr/bin/v2c (bin name "v2c" in apps/desktop/src-tauri/Cargo.toml).
+  In that mode the app claims the component name below on the IBus bus
+  (v2c_platform::linux::ibus::Registration::Launched). If v2c is already running it
+  should claim the name itself at startup, and an instance started with ibus-daemon's
+  exec should hand over and exit (T3.6).
+
+  Keep in sync with v2c_platform::linux::ibus::v2c_component() (checked by a unit test).
+-->
+<component>
+    <name>org.freedesktop.IBus.V2c</name>
+    <description>v2c voice input</description>
+    <exec>/usr/bin/v2c --ibus</exec>
+    <version>0.1.3</version>
+    <author>v2c</author>
+    <license>MIT</license>
+    <homepage></homepage>
+    <textdomain>v2c</textdomain>
+    <engines>
+        <engine>
+            <name>v2c</name>
+            <language>zh_TW</language>
+            <license>MIT</license>
+            <author>v2c</author>
+            <layout>us</layout>
+            <longname>v2c 語音輸入</longname>
+            <description>按住右 Ctrl 說話，放開後輸入文字</description>
+            <symbol>語</symbol>
+            <rank>0</rank>
+        </engine>
+    </engines>
+</component>

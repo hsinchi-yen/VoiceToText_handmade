@@ -116,6 +116,14 @@
   - [ ] 🧑 核准 `tauri.conf.json` 的 Linux 打包設定與合併 T3.4
 - [x] 整合分支 `t3-linux-integration`（2026-11-10，基於 origin/main 0.1.3；T3.1～T3.4 各經獨立審查通過）：`cargo test -p v2c-core -p v2c-platform` 全部通過、clippy／fmt 通過；真實 LLM（8000）4/4、真實 ASR（8002，英文合成句）在預設 5 秒逾時下失敗、放寬到 15 秒通過（約 5.6 秒，CER 0）；**不代表真實 GNOME Wayland 端到端可用**
 - [ ] W15 T3.5 IBus 引擎（熱鍵＋CommitText 輸出）
+  - [x] `linux::ibus::{IbusAddress, IbusEngine, IbusHotkey, IbusInjector, Registration, ComponentDesc, EngineDesc, v2c_component()}`、`PlatformError::Ibus`；位址依 ibus 1.5.26 `ibusshare.c`（`IBUS_ADDRESS` → `IBUS_ADDRESS_FILE` → `~/.config/ibus/bus/<machine-id>-unix-<WAYLAND_DISPLAY>`，並檢查 daemon pid）；Factory／Engine／Service D-Bus 物件（zbus 5.19），右 Ctrl 吞掉、其他鍵放行、自動重複丟棄；`Text`／`Paste` → `CommitText`，`NewLine` → `ForwardKeyEvent(Return, 28)` 按下＋放開（ShiftEnter 帶 Shift）
+  - [x] `tools/ibus/v2c.xml`（exec `/usr/bin/v2c --ibus`，T3.7 安裝到 `/usr/share/ibus/component/`）；單元測試檢查與 `v2c_component()` 一致
+  - [x] mock 測試：轉換表、序列進真正的 `trigger::Trigger`（按住說話、雙擊免持、Ctrl+C 取消、Shift 翻譯、Esc）、一般按鍵放行、`IBusText` 位元組、注入動作序列、沒焦點時報錯不送出、錯誤／Debug 不含文字
+  - [x] 本機真實（`-- --ignored ibus_real --test-threads=1`）：在**私人** ibus-daemon（同一個 1.5.26 執行檔，獨立 socket，不連 session bus）上動態註冊 `v2c-test`、測試客戶端 `CreateInputContext` → `FocusIn` → `SetEngine`、右 Ctrl 按住 0.5 秒 → `StartRecording` + `StopAndProcess`、`a` 放行、收到兩筆中文 `CommitText` 與四個 `ForwardKeyEvent`、關閉後引擎消失；使用者的 daemon 只做唯讀查詢。沒在使用者 daemon 上註冊的原因：1.5.26 的動態元件消失時 `bus_ibus_impl_check_global_engine` 可能把焦點輸入框的引擎設成 NULL
+  - [x] 發現：IBus 全域引擎模式下，輸入框失焦後引擎會被移到內部 fake context 並再次收到 FocusIn／Enable；因此只有「FocusIn 後收到過按鍵」的引擎才是輸出目標，否則 `IbusInjector` 回報錯誤（不會打到別處）
+  - [ ] `Registration::Launched`（由 ibus-daemon 依 component XML 啟動、RequestName）尚未實測（要先安裝 XML）
+  - [ ] 🧑 在 GNOME 設定加入 v2c 輸入來源，在 gedit／Firefox／終端機實機按住右 Ctrl 說話（含：吞掉右 Ctrl 後右 Ctrl+C 是否仍是複製、ForwardKeyEvent 的 Enter／Shift+Enter 在各 App 的效果）
+  - [ ] 🧑 核准合併 T3.5
 - [ ] W16 T3.6 桌面 App 支援 Linux（等 🧑 安裝建置套件）
 - [ ] W17 T3.7 .deb／AppImage 交付到 `releases/`
 - [ ] **檢查點 3**：第一版交付
