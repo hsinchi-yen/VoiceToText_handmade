@@ -2,7 +2,7 @@
 
 這份文件說明在 Linux（目前以 Ubuntu 22.04／GNOME 42 Wayland 開發）上，怎麼把 v2c 的**潤飾**、**中翻英**接到你已經架好的 OpenAI 相容文字模型伺服器（例如 llama.cpp `llama-server`、vLLM、Ollama、另一台電腦的 LM Studio），以及語音辨識有哪些選項。
 
-> 狀態：Linux 版桌面 App 已可在這台機器編譯、啟動（T3.6，見第 6 節），但**還沒有實機按住說話驗證**（沒有麥克風、v2c 輸入法元件尚未安裝）。下面的設定格式和 Windows 版共用同一份 `config.toml`，已用自動測試驗證（`crates/v2c-platform/tests/linux_*.rs`）。Linux 上設定檔在 `~/.config/v2c/config.toml`（見第 6.1 節）。手動改設定檔後要重新啟動 v2c 才會生效。
+> 狀態：Linux 版桌面 App 已可在這台機器編譯、啟動（T3.6，見第 6 節），也已產生 .deb 與 AppImage 安裝包（T3.7，安裝步驟見第 7 節），但**還沒有實機安裝、按住說話驗證**（沒有麥克風、.deb 尚未安裝）。下面的設定格式和 Windows 版共用同一份 `config.toml`，已用自動測試驗證（`crates/v2c-platform/tests/linux_*.rs`）。Linux 上設定檔在 `~/.config/v2c/config.toml`（見第 6.1 節）。手動改設定檔後要重新啟動 v2c 才會生效。
 
 文中的 `192.168.1.50` 是範例 IP，請換成你伺服器的位址。
 

@@ -141,4 +141,10 @@
   - [ ] 🧑 核准合併 T3.6
   - [ ] 🧑 實機寫入測試：`V2C_SECRET_REAL_WRITE=1 cargo test -p v2c-platform -- --ignored secret_real_write`（會在登入鑰匙圈建立再刪除一個 `v2c-test` 項目）
 - [ ] W17 T3.7 .deb／AppImage 交付到 `releases/`
+  - [x] `apps/desktop/src-tauri/tauri.linux.conf.json`（只在 Linux 合併，Windows 的 NSIS 設定不變）：deb＋AppImage；.deb 裝 `/usr/bin/v2c`、`/usr/share/ibus/component/v2c.xml`、`/usr/lib/v2c/libsherpa-onnx-c-api.so`／`libonnxruntime.so`（rpath `$ORIGIN/../lib/v2c`）、`/usr/lib/v2c/docs/`；相依 ibus、libasound2｜libasound2t64、libdbus-1-3（Tauri 自動加 webkit2gtk、gtk3、ayatana-appindicator）；建議 gnome-keyring
+  - [x] `tools/build-linux.sh --stage-libs`（`beforeBundleCommand`）把 sherpa-onnx `.so` 從 target 複製到 git-ignored 的 `runtime-dlls/`
+  - [x] `bash tools/build-linux.sh` 成功：`releases/v2c_0.1.3_amd64.deb`、`v2c_0.1.3_amd64.AppImage` 與 `SHA256SUMS.txt`；`dpkg-deb -I`／`-c` 內容正確，解開後 `ldd` 找得到 sherpa／onnx 函式庫；AppImage `--appimage-extract` 檢查（linuxdeploy 把 rpath 改成 `$ORIGIN/../lib`，函式庫在 `usr/lib/`）
+  - [x] `docs/linux-setup.md` 第 7 節（安裝、輸入來源、兩個遠端服務、AppImage 限制）、README Linux 段落
+  - [ ] 🧑 `sudo apt install ./releases/v2c_0.1.3_amd64.deb`、`ibus restart`、加入 v2c 輸入來源、實機說話（含 `v2c --ibus` 由 ibus-daemon 啟動）
+  - [ ] 🧑 核准合併 T3.7
 - [ ] **檢查點 3**：第一版交付

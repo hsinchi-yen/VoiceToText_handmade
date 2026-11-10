@@ -48,7 +48,9 @@ fi
 # after the binary is compiled and before the .deb/AppImage are made: copies the sherpa-onnx
 # libraries to the git-ignored stage folder that bundle.linux.{deb,appimage}.files read.
 # (They cannot be bundle resources: tauri-build checks resources while compiling, before
-# sherpa-onnx-sys has produced them.)
+# sherpa-onnx-sys has produced them.) The AppImage also maps them to /usr/lib/v2c/ so that
+# linuxdeploy can resolve them through the binary's rpath; it then copies them to usr/lib/ and
+# rewrites the rpath to $ORIGIN/../lib (the usr/lib/v2c copies are unused duplicates there).
 stage_libs() {
     local target profile src stage lib
     target="${CARGO_TARGET_DIR:-}"

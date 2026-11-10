@@ -159,4 +159,6 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] T3.5 右 Ctrl：Wayland 下 v2c 輸入來源啟用時，右 Ctrl+C 仍能複製（引擎吞掉右 Ctrl 的按下；若失效，改成不吞觸發鍵需你決定）
 - [ ] T3.5（選做）在你正在用的 ibus-daemon 上做動態註冊測試：ibus 1.5.26 移除動態引擎時可能拔掉目前的全域引擎，所以 agent 只在私人 daemon 上測；要做需你本人同意
 - [ ] T3.6 Secret Service 寫入測試：`V2C_SECRET_REAL_WRITE=1 cargo test -p v2c-platform -- --ignored secret_real_write`（會在 login 鑰匙圈建立再刪除 `v2c-test` 項目）
+- [ ] T3.7 安裝 .deb：在 `releases/` 執行 `sha256sum -c --ignore-missing SHA256SUMS.txt`，再 `sudo apt install ./v2c_0.1.3_amd64.deb`，`ibus restart`，加入「v2c 語音輸入」輸入來源，實機按住右 Ctrl 說話（含切到 v2c 時由 ibus-daemon 啟動 `v2c --ibus`）。步驟見 `docs/linux-setup.md` 第 7 節
+- [ ] T3.7（選做）AppImage：`./v2c_0.1.3_amd64.AppImage` 能否啟動（需要 libfuse2）
 - [ ] 錄音檔已推上 GitHub（`34fcbe2`）：`tests/fixtures/audio/README.md` 寫的是「不會進 git」，若要公開 repo 請確認

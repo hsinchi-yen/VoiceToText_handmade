@@ -163,6 +163,17 @@ cd apps/desktop && npm run tauri build                  # 不含 CUDA 的安裝�
 用 `tools\build-installer.ps1` 建置時，安裝檔會放在 repo 的 `releases\`（不進 git）；手動執行 `npm run tauri build` 則在 `<CARGO_TARGET_DIR 或 target>\release\bundle\nsis\`。
 Breeze 模型的轉檔方式見 [tools/convert-breeze/README.md](tools/convert-breeze/README.md)。
 
+## Linux（測試中）
+
+Linux 版（Ubuntu 22.04／GNOME，透過 IBus 輸入）還沒有在實機上按住說話驗證過。這一版只有 CPU 版：語音辨識用區網的遠端服務或 SenseVoice，不支援 Breeze／CUDA。
+
+- 安裝：`sudo apt install ./v2c_0.1.3_amd64.deb`，再執行 `ibus restart`，然後在「設定 → 鍵盤 → 輸入來源」加入「v2c 語音輸入」。.deb 會一併安裝 IBus 輸入法元件。
+- 也有免安裝的 `v2c_0.1.3_amd64.AppImage`，但它不含 IBus 元件，建議用 .deb。
+- 設定檔在 `~/.config/v2c/config.toml`，模型在 `~/.local/share/v2c/models/`。
+- 從原始碼建置：`bash tools/build-linux.sh --check` 會列出缺少的套件；`bash tools/build-linux.sh` 會產生 .deb 與 AppImage，放在 `releases/`，雜湊寫在 `releases/SHA256SUMS.txt`。
+
+完整步驟（加入輸入來源、設定語音辨識與文字模型兩個遠端服務）見 [docs/linux-setup.md](docs/linux-setup.md) 第 7 節。
+
 ## 授權
 
 v2c 本身以 MIT 授權釋出。使用與隨附的第三方元件：
