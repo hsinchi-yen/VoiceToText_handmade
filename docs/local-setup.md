@@ -6,7 +6,7 @@ v2c 預設全部在你自己的電腦上執行：語音辨識用 Breeze-ASR-25 �
 
 ## 三個語音辨識引擎
 
-在設定頁「地端語音模型 → 辨識引擎」選擇，或在 `config.toml` 寫 `[local] asr = "..."`。改了立即生效（幾秒內換好引擎，不用重新啟動）。
+在設定頁「潤飾與用途 → 語音辨識」（「地端：…」幾項）或「地端語音模型 → 辨識引擎」選擇，兩個選單永遠一致；也可以在 `config.toml` 寫 `[local] asr = "..."`。按「儲存」後立即生效（幾秒內換好引擎，不用重新啟動）。
 
 | 引擎 | 設定值 | 跑在哪裡 | 特色 | 顯存（實測） |
 |------|--------|----------|------|--------------|
@@ -39,7 +39,7 @@ curl.exe -L -o "$dst\TEA-ASR-1.1-Q8_0.gguf" https://huggingface.co/dorajim15/TEA
 
 檔名必須是 `TEA-ASR-1.1-Q8_0.gguf`，直接放在 `models` 資料夾裡（不要再包一層資料夾）。
 
-**選用**：設定頁「地端語音模型 → 辨識引擎」選「TEA-ASR-1.1（顯示卡）」（「潤飾與用途 → 語音辨識」要是「地端」）。日誌（`%APPDATA%\v2c\logs`）會出現 `GPU ASR active asr="tea_asr"`，之後每句話出現 `providers for utterance ... asr="tea_asr"`。
+**選用**：設定頁「潤飾與用途 → 語音辨識」選「地端：TEA-ASR-1.1（NVIDIA 顯示卡）」（或「地端語音模型 → 辨識引擎」選「TEA-ASR-1.1（NVIDIA 顯示卡）」），按「儲存」。日誌（`%APPDATA%\v2c\logs`）會出現 `GPU ASR active asr="tea_asr"`，之後每句話出現 `providers for utterance ... asr="tea_asr"`。
 
 技術細節：TEA-ASR 由 transcribe.cpp 執行（安裝檔附 `transcribe.dll` 與它自己的 `ggml*.dll`，和 Breeze 的 whisper.cpp 分開）；超過 30 秒的錄音會在最安靜的地方切段、依序辨識再接起來；語言固定為中文（中英夾雜時英文照樣保留）。
 
@@ -94,6 +94,28 @@ breeze_quant = "q5_0"         # q5_0 | q8_0
 ```
 
 `heavy_apps` 填執行檔名稱（不分大小寫），可在工作管理員 →「詳細資料」頁籤查到，例如 `blender.exe`、`DaVinci Resolve`（`Resolve.exe`）、各遊戲的 `.exe`。
+
+## 確認目前用的是哪個引擎
+
+設定頁最上方的「目前使用中」顯示 v2c 實際在用的語音辨識引擎與執行位置（例如「Breeze-ASR-25 q5_0・NVIDIA 顯示卡・已載入」）、潤飾與中翻英走的服務與模型，以及顯示卡可用記憶體。設定是 Breeze 或 TEA-ASR 但實際用 SenseVoice 時（顯存不足、吃顯卡的程式在前景…），會用一句話說明原因；閒置卸載後顯示「目前沒有載入模型」，換模型的那幾秒顯示「切換模型中…」。
+
+「潤飾與用途」的語音辨識選單可以直接選地端引擎（「地端：自動」「地端：Breeze-ASR-25」「地端：TEA-ASR-1.1」「地端：SenseVoice-Small」），也可以選已串接的雲端服務；選地端引擎時會同時改「地端語音模型 → 辨識引擎」，兩個選單永遠一致。
+
+設定頁的變更要按上方「儲存」才會寫進 `config.toml` 並套用；「取消變更」回到已儲存的值。
+
+「地端語音模型」的「測試」按鈕會用內建的 3 秒測試音（不是你的聲音），實際跑一次已儲存設定會用到的地端引擎，顯示用了哪個引擎、是否在顯示卡上、載入與辨識各花多久，以及 Breeze／TEA-ASR 用了多少顯存；顯存不足而改用 SenseVoice 時會說明原因。測試只用目前載入的那一個模型（閒置卸載時才先載入），不會多載一個；正在聽寫或正在切換模型時不能測試。辨識出來的文字不會顯示，也不會記錄。
+
+## LM Studio 位址與模型
+
+「地端」潤飾與中翻英固定使用這台電腦的 LM Studio，設定頁不再顯示 LM Studio 的位址與模型欄位。預設位址是 `http://localhost:1234/v1`，模型用 LM Studio 目前載入的那個。真的需要改時，直接編輯 `config.toml`，存檔後重新啟動 v2c（系統列 → 結束，再開啟）：
+
+```toml
+[local]
+llm_base_url = "http://localhost:1234/v1"
+llm_model = "qwen2.5-3b-instruct"   # 不寫＝用 LM Studio 目前載入的模型
+```
+
+要用別台電腦的 LM Studio 或別的模型，建議到「雲端服務 → 新增雲端服務 → 自訂（OpenAI 相容端點）」新增，再到設定頁的「潤飾與用途」選它；雲端服務失敗時仍會退回本機 LM Studio。
 
 ## LM Studio 建議設定
 

@@ -6,6 +6,7 @@
   let { view, save } = $props();
 
   const g = $derived(view.config.gpu);
+  const dirty = (field) => view.dirty?.has(field);
   let usage = $state(null);
   let heavy = $state("");
   $effect(() => {
@@ -39,8 +40,6 @@
   const pct = (mb) => (usage && usage.total_mb ? `${(mb / usage.total_mb) * 100}%` : "0%");
   const others = $derived(usage ? Math.max(0, usage.used_mb - (usage.v2c_mb ?? 0)) : 0);
   const roomForBreeze = $derived(usage ? usage.free_mb - usage.reserve_mb >= usage.breeze_need_mb : false);
-  // TEA-ASR-1.1 Q8_0, measured (docs/local-setup.md); matches gpu_guard::TEA_ASR_Q8_0_VRAM_MB.
-  const TEA_NEED_MB = 2600;
   const tea = $derived(view.config.local.asr === "tea_asr");
 
   async function saveNumber(e, field, old) {
@@ -70,7 +69,7 @@
     </p>
     <p class="hint">
       {#if tea}
-        TEA-ASR-1.1 約需 {TEA_NEED_MB} MB：已手動指定，不先檢查可用量；全螢幕或重度程式在前景時改用 CPU。
+        TEA-ASR-1.1 約需 {usage.breeze_need_mb} MB：已手動指定，不先檢查可用量；全螢幕或重度程式在前景時改用 CPU。
       {:else}
         Breeze（{view.config.local.breeze_quant}）約需 {usage.breeze_need_mb} MB：
         {roomForBreeze ? "目前放得下。" : "目前可用量扣掉保留額度後放不下，會改用 CPU。"}
@@ -80,19 +79,19 @@
   {/if}
 
   {#each profiles as p (p.value)}
-    <label>
+    <label class:dirty={dirty("gpu_profile") && g.profile === p.value}>
       <input type="radio" name="gpu_profile" value={p.value} checked={g.profile === p.value}
         onchange={() => save([{ field: "gpu_profile", value: p.value }])} />
       <b>{p.label}</b>：{p.note}
     </label>
   {/each}
   <p class="hint">上面的用量是估計值；LM Studio 的部分要在 LM Studio 自己調整。</p>
-  <label>
+  <label class:dirty={dirty("gpu_reserve_mb")}>
     保留給畫面與其他程式（MB）
     <input type="number" min="0" max="16384" step="100" value={g.vram_reserve_mb}
       onchange={(e) => saveNumber(e, "gpu_reserve_mb", g.vram_reserve_mb)} />
   </label>
-  <label>
+  <label class:dirty={dirty("gpu_keep_loaded")}>
     模型常駐：
     <select value={g.keep_loaded} onchange={(e) => save([{ field: "gpu_keep_loaded", value: e.currentTarget.value }])}>
       <option value="auto">自動（閒置卸載、顯存不足讓路）</option>
@@ -100,17 +99,17 @@
       <option value="on_demand">用到才載入</option>
     </select>
   </label>
-  <label>
+  <label class:dirty={dirty("gpu_idle_unload_minutes")}>
     閒置幾分鐘後卸載
     <input type="number" min="1" max="240" value={g.idle_unload_minutes}
       onchange={(e) => saveNumber(e, "gpu_idle_unload_minutes", g.idle_unload_minutes)} />
   </label>
-  <label>
+  <label class:dirty={dirty("gpu_yield_on_fullscreen")}>
     <input type="checkbox" checked={g.yield_on_fullscreen}
       onchange={(e) => save([{ field: "gpu_yield_on_fullscreen", value: e.currentTarget.checked }])} />
     全螢幕程式（遊戲）在前景時改用 CPU
   </label>
-  <label for="heavy-apps">吃顯卡的程式（在前景時改用 CPU，一行一個執行檔名稱）</label>
+  <label for="heavy-apps" class:dirty={dirty("gpu_heavy_apps")}>吃顯卡的程式（在前景時改用 CPU，一行一個執行檔名稱）</label>
   <textarea id="heavy-apps" rows="3" bind:value={heavy} spellcheck="false"
     onchange={() => save([{ field: "gpu_heavy_apps", value: api.parseExeList(heavy) }])}></textarea>
 </section>

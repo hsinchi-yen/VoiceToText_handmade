@@ -288,10 +288,10 @@ mod tests {
                 match target(action, slot.current(), gpu, true, false) {
                     Target::Keep => {}
                     Target::Load(kind) => slot
-                        .switch_model(Some(kind), Duration::ZERO, || FakeAsr::load(&census))
+                        .switch_model(Some(kind), false, Duration::ZERO, || FakeAsr::load(&census))
                         .unwrap(),
                     Target::Unload => slot
-                        .switch_model(None, Duration::ZERO, || unreachable!())
+                        .switch_model(None, false, Duration::ZERO, || unreachable!())
                         .unwrap(),
                 }
                 assert!(census.live() <= 1);

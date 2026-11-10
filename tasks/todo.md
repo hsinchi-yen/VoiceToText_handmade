@@ -73,8 +73,14 @@
   - [x] 程式完成（2026-11-11，分支 `t1.12-tea-asr`）：`LocalAsr::TeaAsr`（`tea_asr`）、transcribe.cpp 0.4.1（CUDA＋shared DLL，和 whisper-rs 同一個執行檔共存）、`select.rs` 新規則與測試、VRAM 管理沿用 Breeze 規則、30 秒切段、`v2c-cli bench --asr tea`、設定頁選項與模型下載、`models.json`、安裝檔附 `transcribe.dll`＋`ggml*.dll`、`docs/local-setup.md`
   - [x] 追加（2026-11-11）：同一時間只載入一個辨識模型（`local_asr.rs` 單一槽位，先卸載、確認釋放再載入；讓路時 SenseVoice 暫代、恢復後換回；不再常駐 SenseVoice），含「任一時刻最多一個模型」測試
   - [x] 實測：fixtures 平均 CER 1.0%（Breeze q8_0 3.6%）、每段約 240 ms（Breeze 693 ms）、VRAM 載入後約 2.0 GB／辨識時約 2.6 GB
-  - [ ] 延後處理：初次設定頁（`onboarding/ModelStep.svelte`，不在本卡範圍）有 NVIDIA 時會列出 `tea-asr` 項目但沒有中文名稱；設定頁 VRAM 條（`commands/gpu.rs`，不在本卡範圍）的 v2c 用量仍以 Breeze 估計；`docs/build-guide.md` 補上 `/utf-8` 環境變數
+  - [x] 併入 W7b 整合分支（T1.13／T1.14）後補齊：兩個引擎選單都有「TEA-ASR-1.1（NVIDIA 顯示卡）」、「目前使用中」與「測試」支援 TEA 與單一模型（切換中、閒置卸載、暫代原因）、初次設定的 TEA 名稱與說明、VRAM 條依目前 GPU 引擎估計、`docs/build-guide.md` 的 `/utf-8`
   - [ ] 🧑 實機聽寫驗收（見 human-checklist）
+- [ ] W7b T1.13 自訂相容端點別名（沒填顯示 custom）
+  - [x] 程式完成（2026-11-11，分支 `t1.13-cloud-alias`，審查通過）：`[[cloud]] name`（只限自訂相容端點，去空白、最多 32 字、不可與其他服務的名稱或代號重複）、精靈第 2 步「名稱（選填）」、服務清單「重新命名」、清單／用途摘要／設定頁用途選單顯示名稱、`docs/cloud-setup.md`
+  - [ ] 🧑 替現有的 `custom`、`custom-2` 取名並確認各畫面（見 human-checklist）
+- [ ] W7b T1.14 設定頁：儲存按鈕、目前使用中、直接選地端辨識引擎、地端語音模型測試
+  - [x] 程式完成（2026-11-11，分支 `t1.14-local-route-test`，審查通過）：設定改為草稿＋「儲存」（`settings_preview` 驗證、`settings_apply` 一次寫入，未儲存欄位標示、離開前詢問、外部變更時可選重新載入或保留草稿）；「目前使用中」（`settings_runtime_status`）；語音辨識選單分成三個地端選項＋雲端；地端語音模型「測試」（`settings_test_local_asr`，不回傳辨識文字）；移除 LM Studio 區塊與 `settings_test_lm`
+  - [ ] 🧑 安裝新版後實機操作（見 human-checklist）
 - [ ] **檢查點 1**：日常使用一週，問題記在 `dogfood-windows.md`
 
 ## Phase 2 — Android

@@ -52,6 +52,7 @@
   {#key wizardKey}
     <Wizard
       {kinds}
+      {services}
       editing={wizard.id ? wizard : null}
       preset={wizard.preset ?? null}
       onDone={done}

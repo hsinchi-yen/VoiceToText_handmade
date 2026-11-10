@@ -1,5 +1,6 @@
 <script>
-  // Local speech models and LM Studio (polish / translate).
+  // Local speech models: engine, Breeze quantisation, and 「測試」 (runs the built-in 3 s test
+  // clip through the engine the saved settings use; the transcript is never shown or kept).
   import { listen } from "@tauri-apps/api/event";
   import * as api from "./api.js";
   import * as models from "../onboarding/api.js";
@@ -7,19 +8,15 @@
   let { view, save } = $props();
 
   const cfg = $derived(view.config);
-  let baseUrl = $state("");
-  let model = $state("");
+  const dirty = (field) => view.dirty?.has(field);
+  // The test runs the saved settings, not the draft.
+  const testOutdated = $derived(["local_asr", "breeze_quant", "gpu_profile", "gpu_reserve_mb"].some(dirty));
   let testing = $state(false);
   let result = $state(null);
   let testError = $state("");
 
-  // Re-sync the text fields when the saved config changes.
-  $effect(() => {
-    baseUrl = cfg.local.llm_base_url;
-    model = cfg.local.llm_model ?? "";
-  });
-
   const have = (ok) => (ok ? "已安裝" : "未安裝");
+  const mark = { passed: "✓", failed: "✗", skipped: "–" };
 
   // TEA-ASR model: status and download (2.18 GB) from models.json entry `tea-asr`.
   const TEA_ID = "tea-asr";
@@ -66,39 +63,48 @@
     result = null;
     testError = "";
     try {
-      result = await api.testLm(baseUrl);
+      result = await api.testLocalAsr();
     } catch (code) {
-      testError = api.describe(code);
+      testError = code === "already_running" ? "測試進行中，請稍候" : api.describe(code);
     } finally {
       testing = false;
     }
-  }
-
-  async function saveLm() {
-    await save([
-      { field: "llm_base_url", value: baseUrl },
-      { field: "llm_model", value: model.trim() || null },
-    ]);
   }
 </script>
 
 <section class="settings-section">
   <h2>地端語音模型</h2>
-  <label>
-    辨識引擎：
-    <select value={cfg.local.asr} onchange={(e) => save([{ field: "local_asr", value: e.currentTarget.value }])}>
-      <option value="auto">自動（有 NVIDIA 顯示卡用 Breeze，否則 SenseVoice）</option>
-      <option value="breeze">Breeze-ASR-25（顯示卡）</option>
-      <option value="tea_asr">TEA-ASR-1.1（顯示卡，{have(view.tea_asr)}）</option>
-      <option value="sense_voice">SenseVoice-Small（CPU）</option>
-    </select>
-  </label>
-  {#if cfg.local.asr === "tea_asr" && !view.tea_build}
-    <p class="bad">這個版本沒有內建 TEA-ASR（需要 CUDA 版），目前改用 SenseVoice。</p>
-  {:else if cfg.local.asr === "tea_asr" && !view.tea_asr}
-    <p class="bad">尚未安裝 TEA-ASR 模型，目前改用 SenseVoice。請在下方下載。</p>
+  <div class="row">
+    <label class:dirty={dirty("local_asr")}>
+      辨識引擎：
+      <select value={cfg.local.asr} onchange={(e) => save([{ field: "local_asr", value: e.currentTarget.value }])}>
+        {#each api.localAsrOptions(view) as o (o.value)}
+          <option value={o.value}>{o.label}</option>
+        {/each}
+      </select>
+    </label>
+    <button onclick={test} disabled={testing}>{testing ? "處理中…" : "測試"}</button>
+  </div>
+  {#if testOutdated}
+    <p class="hint">「測試」使用已儲存的設定；要測試剛改的引擎，請先按上方「儲存」。</p>
   {/if}
-  <label>
+  {#if testError}<p class="bad">{testError}</p>{/if}
+  {#if result}
+    <p class={result.ok ? "ok" : "bad"}><strong>{result.summary}</strong></p>
+    <table class="steps">
+      <tbody>
+        {#each result.steps as s (s.label)}
+          <tr>
+            <td class={s.status}>{mark[s.status]}</td>
+            <td>{s.label}</td>
+            <td>{s.detail ?? ""}</td>
+            <td class="ms">{s.latency_ms != null ? `${s.latency_ms} ms` : ""}</td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  {/if}
+  <label class:dirty={dirty("breeze_quant")}>
     Breeze 版本：
     <select value={cfg.local.breeze_quant}
       onchange={(e) => save([{ field: "breeze_quant", value: e.currentTarget.value }])}>
@@ -107,7 +113,7 @@
     </select>
   </label>
   <p class="hint">
-    SenseVoice：{have(view.sensevoice)}。{view.cuda_build ? "" : "這個版本未啟用 CUDA，Breeze 無法使用顯示卡。"}
+    SenseVoice：{have(view.sensevoice)}。{view.cuda_build ? "" : "這個版本沒有 CUDA，Breeze 無法使用顯示卡。"}
     下載或匯入模型請到 <a href="#/onboarding">初次設定</a>。
   </p>
   <div class="tea">
@@ -135,42 +141,29 @@
   </div>
 </section>
 
-<section class="settings-section">
-  <h2>LM Studio（潤飾與中翻英，選用）</h2>
-  <p class="hint">
-    在 LM Studio 載入 3B～4B 的模型並開啟 Local Server。
-    <button class="link" onclick={() => api.openDoc("local-setup")}>設定說明</button>
-  </p>
-  <label>
-    位址
-    <input type="text" size="34" bind:value={baseUrl} onchange={saveLm} spellcheck="false" />
-  </label>
-  <label>
-    模型
-    <input type="text" size="28" bind:value={model} onchange={saveLm} list="lm-models"
-      placeholder="留空＝使用 LM Studio 目前載入的模型" spellcheck="false" />
-    <datalist id="lm-models">
-      {#each result?.models ?? [] as m (m)}<option value={m}></option>{/each}
-    </datalist>
-  </label>
-  <button onclick={test} disabled={testing}>{testing ? "測試中…" : "測試連線"}</button>
-  {#if result}
-    <span>連線成功（{result.latency_ms} ms），{result.models.length} 個模型可用</span>
-  {/if}
-  {#if testError}<span class="bad">{testError}</span>{/if}
-</section>
-
 <style>
-  .link {
-    background: none;
-    border: none;
-    padding: 0;
-    color: #2f81f7;
-    cursor: pointer;
-    text-decoration: underline;
-    font: inherit;
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 0.75rem;
   }
-  .bad {
+  .steps {
+    border-collapse: collapse;
+    margin: 0.25rem 0 0.5rem;
+  }
+  .steps td {
+    padding: 0.15rem 0.4rem;
+    vertical-align: top;
+  }
+  .steps .ms {
+    white-space: nowrap;
+    opacity: 0.75;
+  }
+  .passed {
+    color: #1a7f37;
+  }
+  .failed {
     color: #cf222e;
   }
   .tea {

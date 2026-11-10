@@ -21,8 +21,8 @@
         <th scope="row">{r.label}</th>
         {#if r.service}
           <td>
-            <strong>{r.service.label}</strong>
-            <span class="id">{r.service.id}</span>
+            <strong>{api.displayName(r.service)}</strong>
+            <span class="id">{r.service.label}</span>
             <div class="url">{r.service.effective_base_url}</div>
           </td>
         {:else}

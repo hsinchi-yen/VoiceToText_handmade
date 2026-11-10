@@ -1,19 +1,25 @@
 //! Settings page commands (T1.11, `tasks/plan.md` section 7).
 //!
-//! The page changes one setting at a time ([`Change`]); [`settings_apply`] validates every
-//! change, applies it to the current `config.toml` through [`config_edit`] (only the changed
-//! keys are rewritten, comments survive), and emits `v2c:config-changed` so the running
-//! engine reloads. Cloud services are not edited here (雲端服務 page). Start with Windows uses
-//! `tauri-plugin-autostart` from Rust only (HKCU `Run` key; no webview permission).
+//! The page collects changes ([`Change`]) as a draft (T1.14): [`settings_preview`] validates
+//! them and returns the settings as they would be, without writing anything. 「儲存」 sends the
+//! whole draft to [`settings_apply`], which applies it to the current `config.toml` through
+//! [`config_edit`] (only the changed keys are rewritten, comments survive) and emits
+//! `v2c:config-changed` so the running engine reloads. Cloud services are not edited here
+//! (雲端服務 page). Start with Windows uses `tauri-plugin-autostart` from Rust only (HKCU `Run`
+//! key; no webview permission).
+//!
+//! [`settings_runtime_status`] reports what the engine actually uses (「目前使用中」), and
+//! [`settings_test_local_asr`] runs the local engine on the built-in test clip.
 //!
 //! Every command refuses callers other than the main window (`forbidden`). Logs carry the
-//! changed field names only.
+//! changed field names, engine names, timings and error codes only.
 
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tracing::{info, warn};
+use v2c_asr_local::{gpu_engine, GuardReason, LocalAsrKind, PickReason};
 use v2c_core::config::{
     AppRule, BreezeQuant, CloudKind, Config, GpuProfile, KeepLoaded, LocalAsr, MicMode, LOCAL,
 };
@@ -21,7 +27,8 @@ use v2c_core::config::{
 use crate::app_state::{self, AppState};
 use crate::commands::models;
 use crate::config_edit;
-use crate::engine::ConfigDiff;
+use crate::controller::StatusEvent;
+use crate::engine::{ConfigDiff, CpuReason, LocalStatus, LocalTestRun, PurposeUse, RouteStatus};
 use crate::tray::CONFIG_CHANGED_EVENT;
 
 const MAIN_WINDOW: &str = "main";
@@ -284,6 +291,24 @@ pub struct SettingsView {
     pub tea_asr: bool,
     /// This binary can run TEA-ASR (built with the `tea` and `cuda` features).
     pub tea_build: bool,
+    /// Value of the 語音辨識 menu on 潤飾與用途: a cloud service id, or `local:<[local] asr>`.
+    pub asr_choice: String,
+}
+
+/// Prefix of the local options of the 語音辨識 menu (`local:auto`, `local:breeze`, ...).
+pub const LOCAL_CHOICE_PREFIX: &str = "local:";
+
+/// The 語音辨識 menu value for `cfg`: the cloud service when ASR is routed to one, otherwise the
+/// local option matching `[local] asr`.
+pub fn asr_choice(cfg: &Config) -> String {
+    if cfg.route.asr != LOCAL && cfg.cloud_service(&cfg.route.asr).is_some() {
+        return cfg.route.asr.clone();
+    }
+    let engine = serde_json::to_value(cfg.local.asr)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    format!("{LOCAL_CHOICE_PREFIX}{engine}")
 }
 
 fn view(app: &AppHandle, config: Config, file_error: Option<&'static str>) -> SettingsView {
@@ -300,7 +325,6 @@ fn view(app: &AppHandle, config: Config, file_error: Option<&'static str>) -> Se
                 supports_asr: c.kind.supports_asr(),
             })
             .collect(),
-        config,
         file_error,
         hotkeys: HotkeyOptions {
             dictate: &DICTATE_KEYS,
@@ -313,6 +337,8 @@ fn view(app: &AppHandle, config: Config, file_error: Option<&'static str>) -> Se
         breeze_q8_0: models::breeze_present(paths, BreezeQuant::Q8_0),
         tea_asr: models::tea_present(paths),
         tea_build: v2c_asr_local::tea::tea_enabled() && v2c_asr_local::breeze::cuda_enabled(),
+        asr_choice: asr_choice(&config),
+        config,
     }
 }
 
@@ -418,74 +444,562 @@ pub async fn settings_input_devices(window: WebviewWindow) -> Result<Vec<String>
         .map_err(|_| "internal_error")
 }
 
-#[derive(Debug, Serialize, PartialEq)]
-pub struct LmTest {
-    pub latency_ms: u64,
-    /// Model ids LM Studio reports (for the model list).
-    pub models: Vec<String>,
+// ---- draft preview --------------------------------------------------------------------
+
+/// Applies `changes` to a copy of `base`. Returns the result and the fields whose change
+/// alone leaves `base` as it is (the page drops those from its draft).
+pub fn preview_changes(
+    base: &Config,
+    changes: &[Change],
+) -> Result<(Config, Vec<&'static str>), &'static str> {
+    let mut cfg = base.clone();
+    let mut unchanged = Vec::new();
+    for c in changes {
+        apply_change(&mut cfg, c)?;
+        let mut alone = base.clone();
+        apply_change(&mut alone, c)?;
+        if alone == *base {
+            unchanged.push(c.name());
+        }
+    }
+    Ok((cfg, unchanged))
 }
 
-/// `GET {base_url}/models` on the given LM Studio address. Errors: `invalid_url`,
-/// `unreachable`, `timeout`, `http_error`, `bad_response`.
-pub async fn test_lm(client: &reqwest::Client, base: &str) -> Result<LmTest, &'static str> {
-    #[derive(Deserialize)]
-    struct Models {
-        data: Vec<ModelId>,
-    }
-    #[derive(Deserialize)]
-    struct ModelId {
-        id: String,
-    }
-    let base = base_url(base)?;
-    let t = Instant::now();
-    let resp = client
-        .get(format!("{base}/models"))
-        .timeout(Duration::from_secs(3))
-        .send()
-        .await
-        .map_err(|e| {
-            if e.is_timeout() {
-                "timeout"
-            } else {
-                "unreachable"
-            }
-        })?;
-    if !resp.status().is_success() {
-        return Err("http_error");
-    }
-    let m: Models = resp.json().await.map_err(|_| "bad_response")?;
-    Ok(LmTest {
-        latency_ms: t.elapsed().as_millis() as u64,
-        models: m.data.into_iter().map(|d| d.id).take(100).collect(),
-    })
+#[derive(Debug, Serialize)]
+pub struct Preview {
+    /// The settings as they would be after saving the draft.
+    pub settings: SettingsView,
+    /// Draft fields that equal the saved value.
+    pub unchanged: Vec<&'static str>,
 }
 
-/// 「測試連線」 for LM Studio.
+/// Validates the page's draft against the current `config.toml` without writing anything.
 #[tauri::command]
-pub async fn settings_test_lm(
+pub async fn settings_preview(
+    app: AppHandle,
     window: WebviewWindow,
-    base_url: String,
-) -> Result<LmTest, &'static str> {
+    changes: Vec<Change>,
+) -> Result<Preview, &'static str> {
     check_caller(window.label())?;
-    // The cloud client never follows redirects; LM Studio does not need any.
-    let http = v2c_core::route::cloud_http_client().map_err(|_| "internal_error")?;
-    let r = test_lm(http.client(), &base_url).await;
-    match &r {
-        Ok(t) => info!(
-            latency_ms = t.latency_ms,
-            models = t.models.len(),
-            "LM Studio test ok"
-        ),
-        Err(code) => info!(code, "LM Studio test failed"),
+    let a = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = a.state::<AppState>();
+        let (base, err) = match app_state::read_config(&state.paths.config_file()) {
+            Ok(c) => (c, None),
+            Err(code) => ((*state.engine.config()).clone(), Some(code)),
+        };
+        let (cfg, unchanged) = preview_changes(&base, &changes)?;
+        Ok(Preview {
+            settings: view(&a, cfg, err),
+            unchanged,
+        })
+    })
+    .await
+    .map_err(|_| "internal_error")?
+}
+
+// ---- 目前使用中 ------------------------------------------------------------------------
+
+/// One line of 「目前使用中」.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UseView {
+    /// What is used, e.g. 「Breeze-ASR-25 q8_0・NVIDIA 顯示卡・已載入」.
+    pub text: String,
+    /// Why it differs from the settings, in one sentence (or a problem).
+    pub note: Option<String>,
+    /// `note` is a problem (red) rather than an explanation (grey).
+    pub warn: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VramView {
+    pub free_mb: u64,
+    pub total_mb: u64,
+    pub reserve_mb: u64,
+    /// VRAM the configured GPU model needs (name predates TEA-ASR).
+    pub breeze_need_mb: u64,
+    /// That GPU model, e.g. 「Breeze-ASR-25 q5_0」 or 「TEA-ASR-1.1」.
+    pub gpu_engine: String,
+}
+
+/// `settings_runtime_status`: what the running engine uses (not what the file says).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuntimeStatus {
+    pub asr: UseView,
+    pub polish: UseView,
+    pub translate: UseView,
+    pub polish_enabled: bool,
+    /// `None` without an NVIDIA GPU / NVML.
+    pub vram: Option<VramView>,
+}
+
+fn kind_label(kind: CloudKind) -> &'static str {
+    match kind {
+        CloudKind::OpenAi => "OpenAI",
+        CloudKind::Gemini => "Gemini",
+        CloudKind::Claude => "Claude",
+        CloudKind::OpenAiCompat => "自訂端點",
     }
-    r
+}
+
+fn quant_label(q: BreezeQuant) -> &'static str {
+    match q {
+        BreezeQuant::Q5_0 => "q5_0",
+        BreezeQuant::Q8_0 => "q8_0",
+    }
+}
+
+/// 「Breeze-ASR-25 q5_0」 / 「TEA-ASR-1.1」 / 「SenseVoice-Small」.
+pub fn engine_label(kind: LocalAsrKind, cfg: &Config) -> String {
+    match kind {
+        LocalAsrKind::Breeze => format!("Breeze-ASR-25 {}", quant_label(cfg.local.breeze_quant)),
+        LocalAsrKind::TeaAsr => "TEA-ASR-1.1".to_owned(),
+        LocalAsrKind::SenseVoice => "SenseVoice-Small".to_owned(),
+    }
+}
+
+/// `engine` value of the test result (`breeze`, `tea_asr`, `sense_voice`).
+fn engine_value(kind: LocalAsrKind) -> &'static str {
+    match kind {
+        LocalAsrKind::Breeze => "breeze",
+        LocalAsrKind::TeaAsr => "tea_asr",
+        LocalAsrKind::SenseVoice => "sense_voice",
+    }
+}
+
+/// 「Gemini：gemini・gemini-3.6-flash」.
+fn cloud_text(cfg: &Config, id: &str, asr: bool) -> String {
+    let Some(svc) = cfg.cloud_service(id) else {
+        return id.to_owned();
+    };
+    let suggested = v2c_core::route::suggested_models(svc.kind);
+    let model = if asr {
+        svc.asr_model.as_deref().or(suggested.asr)
+    } else {
+        svc.llm_model.as_deref().or(suggested.llm)
+    };
+    let mut text = format!(
+        "{}：{}",
+        kind_label(svc.kind),
+        super::cloud::display_name(svc)
+    );
+    if let Some(m) = model {
+        text.push('・');
+        text.push_str(m);
+    }
+    text
+}
+
+/// One sentence (繁中) on why the configured GPU model (Breeze or TEA-ASR) is not running;
+/// `None` when the user chose SenseVoice (or nothing needs explaining). `cuda_build`: this
+/// binary can run the GPU model (CUDA, plus the TEA-ASR runtime for TEA-ASR).
+pub fn cpu_reason_text(reason: CpuReason, cfg: &Config, cuda_build: bool) -> Option<String> {
+    let gpu = engine_label(gpu_engine(cfg), cfg);
+    let gpu_short = match gpu_engine(cfg) {
+        LocalAsrKind::TeaAsr => "TEA-ASR",
+        _ => "Breeze",
+    };
+    let low_vram = |free_mb: u64, needed_mb: u64| {
+        format!("顯存不足（可用 {free_mb} MB，需要 {needed_mb} MB），自動改用 SenseVoice。")
+    };
+    let text = match reason {
+        CpuReason::LoadFailed => {
+            format!("{gpu_short} 載入失敗，改用 SenseVoice（原因見記錄檔）。")
+        }
+        CpuReason::Guard(GuardReason::Engine(p)) => match p {
+            PickReason::Configured | PickReason::BreezeFits => return None,
+            PickReason::GpuDisabled => {
+                "設定檔關閉了顯示卡（[gpu] enabled = false），改用 SenseVoice。".to_owned()
+            }
+            PickReason::CpuOnlyProfile => "顯示卡方案是「不用顯卡」，改用 SenseVoice。".to_owned(),
+            PickReason::BreezeModelMissing | PickReason::TeaModelMissing => {
+                format!("{gpu} 模型未安裝，改用 SenseVoice。")
+            }
+            PickReason::NoCuda if !cuda_build => "此版本沒有 CUDA，改用 SenseVoice。".to_owned(),
+            PickReason::NoCuda => "沒有偵測到可用的 NVIDIA 顯示卡，改用 SenseVoice。".to_owned(),
+            PickReason::LowVram { free_mb, needed_mb } => low_vram(free_mb, needed_mb),
+        },
+        CpuReason::Guard(GuardReason::LowVram { free_mb, needed_mb }) => {
+            low_vram(free_mb, needed_mb)
+        }
+        CpuReason::Guard(GuardReason::VramUnknown) => {
+            "讀不到顯存用量，自動模式改用 SenseVoice；要強制使用請選 Breeze-ASR-25。".to_owned()
+        }
+        CpuReason::Guard(GuardReason::HeavyApp) => {
+            "吃顯卡的程式在前景，暫時改用 SenseVoice。".to_owned()
+        }
+        CpuReason::Guard(GuardReason::Fullscreen) => {
+            "全螢幕程式在前景，暫時改用 SenseVoice。".to_owned()
+        }
+        CpuReason::Guard(GuardReason::Idle) => {
+            format!("閒置一段時間後已卸載 {gpu_short}，下次按熱鍵時重新載入。")
+        }
+        CpuReason::Guard(GuardReason::RestorePending) => {
+            format!("顯存剛恢復，稍候會重新載入 {gpu_short}。")
+        }
+    };
+    Some(text)
+}
+
+/// The binary can run `cfg`'s GPU model.
+pub fn gpu_build(cfg: &Config) -> bool {
+    let cuda = v2c_asr_local::breeze::cuda_enabled();
+    match gpu_engine(cfg) {
+        LocalAsrKind::TeaAsr => cuda && v2c_asr_local::tea::tea_enabled(),
+        _ => cuda,
+    }
+}
+
+fn local_asr_view(cfg: &Config, local: &LocalStatus, cuda_build: bool) -> UseView {
+    let reason = || {
+        local
+            .cpu_reason
+            .filter(|_| cfg.local.asr != LocalAsr::SenseVoice)
+            .and_then(|r| cpu_reason_text(r, cfg, cuda_build))
+    };
+    match local.active {
+        Some(kind @ (LocalAsrKind::Breeze | LocalAsrKind::TeaAsr)) => UseView {
+            text: format!(
+                "{}・{}・已載入",
+                engine_label(kind, cfg),
+                if local.on_gpu {
+                    "NVIDIA 顯示卡"
+                } else {
+                    "CPU"
+                }
+            ),
+            note: None,
+            warn: false,
+        },
+        Some(LocalAsrKind::SenseVoice) => UseView {
+            text: "SenseVoice-Small・CPU".to_owned(),
+            note: reason(),
+            warn: false,
+        },
+        None if local.switching => UseView {
+            text: "切換模型中…".to_owned(),
+            note: Some("同一時間只載入一個語音模型，舊模型卸載後才載入新的。".to_owned()),
+            warn: false,
+        },
+        None if local.starting => UseView {
+            text: "載入中…".to_owned(),
+            note: None,
+            warn: false,
+        },
+        None if local.unloaded => UseView {
+            text: "目前沒有載入模型".to_owned(),
+            note: reason().or_else(|| Some("按熱鍵說話時會自動載入。".to_owned())),
+            warn: false,
+        },
+        None => UseView {
+            text: "沒有可用的地端語音模型".to_owned(),
+            note: Some(match local.error {
+                Some("model_missing") | None => "請到「初次設定」下載或匯入模型。".to_owned(),
+                Some(code) => format!("模型無法載入（{code}），原因見記錄檔。"),
+            }),
+            warn: true,
+        },
+    }
+}
+
+fn cloud_unusable(cfg: &Config, id: &str) -> String {
+    let name = cfg.cloud_service(id).map_or(id.to_owned(), |s| {
+        format!("{}：{}", kind_label(s.kind), super::cloud::display_name(s))
+    });
+    format!("雲端服務「{name}」無法使用（金鑰或設定有誤）")
+}
+
+/// 「語音辨識」 line.
+pub fn asr_view(
+    cfg: &Config,
+    route: &PurposeUse,
+    local: &LocalStatus,
+    cuda_build: bool,
+) -> UseView {
+    match route {
+        PurposeUse::Cloud { service_id } => UseView {
+            text: cloud_text(cfg, service_id, true),
+            note: None,
+            warn: false,
+        },
+        PurposeUse::Unavailable { service_id } => UseView {
+            text: "無法辨識".to_owned(),
+            note: Some(format!(
+                "{}，且沒有開啟「雲端失敗時自動改用地端」。",
+                cloud_unusable(cfg, service_id)
+            )),
+            warn: true,
+        },
+        PurposeUse::Local => local_asr_view(cfg, local, cuda_build),
+        PurposeUse::LocalInsteadOfCloud { service_id } => {
+            let mut v = local_asr_view(cfg, local, cuda_build);
+            let lead = format!("{}，改用地端。", cloud_unusable(cfg, service_id));
+            v.note = Some(match v.note {
+                Some(n) => format!("{lead}{n}"),
+                None => lead,
+            });
+            v.warn = true;
+            v
+        }
+    }
+}
+
+/// 「潤飾」 (`translate = false`) or 「中翻英」 line.
+pub fn llm_view(cfg: &Config, route: &PurposeUse, lm_up: bool, translate: bool) -> UseView {
+    if !translate && !cfg.polish.enabled {
+        return UseView {
+            text: "已關閉".to_owned(),
+            note: None,
+            warn: false,
+        };
+    }
+    let without = if translate {
+        "中翻英無法使用"
+    } else {
+        "潤飾改用規則式去贅字"
+    };
+    let local = |lead: Option<String>| {
+        let model = cfg
+            .local
+            .llm_model
+            .as_deref()
+            .unwrap_or("LM Studio 目前載入的模型");
+        let down = (!lm_up).then(|| {
+            format!(
+                "連不到 LM Studio（{}），{without}。",
+                cfg.local.llm_base_url
+            )
+        });
+        let warn = lead.is_some() || down.is_some();
+        let note = match (lead, down) {
+            (Some(l), Some(d)) => Some(format!("{l}{d}")),
+            (l, d) => l.or(d),
+        };
+        UseView {
+            text: format!("本機 LM Studio・{model}"),
+            note,
+            warn,
+        }
+    };
+    match route {
+        PurposeUse::Cloud { service_id } => UseView {
+            text: cloud_text(cfg, service_id, false),
+            note: None,
+            warn: false,
+        },
+        PurposeUse::Unavailable { service_id } => UseView {
+            text: "無法使用".to_owned(),
+            note: Some(format!(
+                "{}，且沒有開啟「雲端失敗時自動改用地端」；{without}。",
+                cloud_unusable(cfg, service_id)
+            )),
+            warn: true,
+        },
+        PurposeUse::Local => local(None),
+        PurposeUse::LocalInsteadOfCloud { service_id } => local(Some(format!(
+            "{}，改用地端。",
+            cloud_unusable(cfg, service_id)
+        ))),
+    }
+}
+
+/// Builds 「目前使用中」 (pure; tested).
+pub fn runtime_status(
+    cfg: &Config,
+    route: &RouteStatus,
+    local: &LocalStatus,
+    vram: Option<VramView>,
+    cuda_build: bool,
+) -> RuntimeStatus {
+    RuntimeStatus {
+        asr: asr_view(cfg, &route.asr, local, cuda_build),
+        polish: llm_view(cfg, &route.polish, route.lm_up, false),
+        translate: llm_view(cfg, &route.translate, route.lm_up, true),
+        polish_enabled: cfg.polish.enabled,
+        vram,
+    }
+}
+
+/// 「目前使用中」: the running engine's state.
+#[tauri::command]
+pub async fn settings_runtime_status(
+    app: AppHandle,
+    window: WebviewWindow,
+) -> Result<RuntimeStatus, &'static str> {
+    check_caller(window.label())?;
+    let engine = Arc::clone(&app.state::<AppState>().engine);
+    tauri::async_runtime::spawn_blocking(move || {
+        let cfg = engine.config();
+        let vram = engine.vram().map(|s| VramView {
+            free_mb: s.free_mb,
+            total_mb: s.total_mb,
+            reserve_mb: cfg.gpu.vram_reserve_mb,
+            breeze_need_mb: engine.gpu_need_mb(),
+            gpu_engine: engine_label(gpu_engine(&cfg), &cfg),
+        });
+        runtime_status(
+            &cfg,
+            &engine.route_status(),
+            &engine.local_status(),
+            vram,
+            gpu_build(&cfg),
+        )
+    })
+    .await
+    .map_err(|_| "internal_error")
+}
+
+// ---- 地端語音模型「測試」 ------------------------------------------------------------------
+
+/// One step of the test, shown like the cloud wizard's step 5.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StepView {
+    pub label: &'static str,
+    /// `passed`, `failed`, or `skipped`.
+    pub status: &'static str,
+    pub latency_ms: Option<u64>,
+    pub detail: Option<String>,
+}
+
+/// `settings_test_local_asr` result. Never contains the transcript.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LocalTestView {
+    pub ok: bool,
+    pub summary: String,
+    /// `breeze`, `tea_asr`, or `sense_voice`.
+    pub engine: &'static str,
+    pub on_gpu: bool,
+    pub fallback_reason: Option<String>,
+    pub load_ms: Option<u64>,
+    pub transcribe_ms: Option<u64>,
+    pub vram_mb: Option<u64>,
+    pub steps: Vec<StepView>,
+}
+
+/// Builds the test result view (pure; tested).
+pub fn local_test_view(run: &LocalTestRun, cfg: &Config, cuda_build: bool) -> LocalTestView {
+    let label = engine_label(run.engine, cfg);
+    let place = if run.on_gpu {
+        "NVIDIA 顯示卡"
+    } else {
+        "CPU"
+    };
+    let reason = run
+        .cpu_reason
+        .filter(|_| cfg.local.asr != LocalAsr::SenseVoice)
+        .and_then(|r| cpu_reason_text(r, cfg, cuda_build));
+    let mut chosen = format!("{label}・{place}");
+    if let Some(mb) = run.vram_mb {
+        chosen.push_str(&format!("，約使用 {mb} MB 顯存"));
+    }
+    if let Some(r) = &reason {
+        chosen.push('。');
+        chosen.push_str(r);
+    }
+    const LOAD: &str = "載入模型";
+    let load = match (run.load_ms, run.cpu_reason) {
+        // The GPU model failed; SenseVoice may have been loaded instead (`load_ms`).
+        (ms, Some(CpuReason::LoadFailed)) => StepView {
+            label: LOAD,
+            status: "failed",
+            latency_ms: ms,
+            detail: Some(format!(
+                "{} 載入失敗，改用 SenseVoice",
+                engine_label(gpu_engine(cfg), cfg)
+            )),
+        },
+        (Some(ms), _) => StepView {
+            label: LOAD,
+            status: "passed",
+            latency_ms: Some(ms),
+            detail: Some("這次才載入".to_owned()),
+        },
+        (None, _) => StepView {
+            label: LOAD,
+            status: "skipped",
+            latency_ms: None,
+            detail: Some("已在記憶體中".to_owned()),
+        },
+    };
+    const TRANSCRIBE: &str = "辨識 3 秒測試音";
+    let transcribe = match run.transcribe {
+        Ok(ms) => StepView {
+            label: TRANSCRIBE,
+            status: "passed",
+            latency_ms: Some(ms),
+            detail: None,
+        },
+        Err(_) => StepView {
+            label: TRANSCRIBE,
+            status: "failed",
+            latency_ms: None,
+            detail: Some("辨識失敗，原因見記錄檔".to_owned()),
+        },
+    };
+    let ok = run.transcribe.is_ok();
+    LocalTestView {
+        ok,
+        summary: if ok {
+            format!("{label}・{place} 可以正常辨識")
+        } else {
+            format!("{label} 辨識失敗")
+        },
+        engine: engine_value(run.engine),
+        on_gpu: run.on_gpu,
+        fallback_reason: reason,
+        load_ms: run.load_ms,
+        transcribe_ms: run.transcribe.ok(),
+        vram_mb: run.vram_mb,
+        steps: vec![
+            StepView {
+                label: "選擇引擎",
+                status: "passed",
+                latency_ms: None,
+                detail: Some(chosen),
+            },
+            load,
+            transcribe,
+        ],
+    }
+}
+
+/// Dictation in progress (from the latest status event).
+fn dictating(last: Option<&StatusEvent>) -> bool {
+    matches!(
+        last,
+        Some(StatusEvent::Recording { .. } | StatusEvent::Transcribing | StatusEvent::Polishing)
+    )
+}
+
+/// 「測試」 on 地端語音模型: runs the built-in 3 s clip through the local engine the saved
+/// settings use. Errors: `busy` while dictating, `already_running`, local engine errors.
+#[tauri::command]
+pub async fn settings_test_local_asr(
+    app: AppHandle,
+    window: WebviewWindow,
+) -> Result<LocalTestView, &'static str> {
+    check_caller(window.label())?;
+    let state = app.state::<AppState>();
+    let last = state
+        .last_status
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default();
+    if dictating(last.as_ref()) {
+        return Err("busy");
+    }
+    let engine = Arc::clone(&state.engine);
+    let run = engine
+        .test_local_asr()
+        .await
+        .inspect_err(|code| info!(code, "local ASR test refused"))?;
+    let cfg = engine.config();
+    Ok(local_test_view(&run, &cfg, gpu_build(&cfg)))
 }
 
 #[cfg(test)]
 mod tests {
     use v2c_core::config::{CloudService, NewlineKey};
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
 
@@ -494,6 +1008,7 @@ mod tests {
         for (id, kind) in [("g", CloudKind::Gemini), ("c", CloudKind::Claude)] {
             c.cloud.push(CloudService {
                 id: id.into(),
+                name: None,
                 kind,
                 base_url: None,
                 asr_model: None,
@@ -666,30 +1181,314 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[tokio::test]
-    async fn lm_studio_test_lists_models() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/v1/models"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": [{"id": "qwen2.5-3b-instruct"}, {"id": "gemma-3-4b"}]
-            })))
-            .mount(&server)
-            .await;
-        let client = reqwest::Client::new();
-        let r = test_lm(&client, &format!("{}/v1/", server.uri()))
-            .await
-            .unwrap();
-        assert_eq!(r.models, ["qwen2.5-3b-instruct", "gemma-3-4b"]);
+    #[test]
+    fn asr_menu_value_follows_route_and_local_engine() {
+        let mut c = with_services();
+        assert_eq!(asr_choice(&c), "local:auto");
+        // 「地端：Breeze-ASR-25」 saves both fields in one go.
+        let (cfg, _) = preview_changes(
+            &c,
+            &[
+                Change::RouteAsr("local".into()),
+                Change::LocalAsr(LocalAsr::Breeze),
+            ],
+        )
+        .unwrap();
         assert_eq!(
-            test_lm(&client, &format!("{}/nope", server.uri())).await,
-            Err("http_error")
+            (cfg.route.asr.as_str(), cfg.local.asr),
+            (LOCAL, LocalAsr::Breeze)
         );
+        assert_eq!(asr_choice(&cfg), "local:breeze");
+        // A cloud option only changes the route; the local engine is kept for later.
+        c.local.asr = LocalAsr::SenseVoice;
+        apply_change(&mut c, &Change::RouteAsr("g".into())).unwrap();
+        assert_eq!(asr_choice(&c), "g");
+        assert_eq!(c.local.asr, LocalAsr::SenseVoice);
+        // Back to local.
+        apply_change(&mut c, &Change::RouteAsr("local".into())).unwrap();
+        assert_eq!(asr_choice(&c), "local:sense_voice");
+        // A route to a service that no longer exists shows the local engine.
+        c.route.asr = "gone".into();
+        assert_eq!(asr_choice(&c), "local:sense_voice");
+    }
+
+    #[test]
+    fn preview_reports_unchanged_fields_and_refuses_bad_ones() {
+        let base = with_services();
+        let (cfg, unchanged) = preview_changes(
+            &base,
+            &[
+                Change::RouteAsr("local".into()),
+                Change::LocalAsr(LocalAsr::Breeze),
+                Change::PolishEnabled(true),
+                Change::GpuReserveMb(800),
+            ],
+        )
+        .unwrap();
+        assert_eq!(unchanged, ["route_asr", "polish_enabled"]);
+        assert_eq!(cfg.gpu.vram_reserve_mb, 800);
         assert_eq!(
-            test_lm(&client, "http://127.0.0.1:9/v1").await,
-            Err("unreachable")
+            preview_changes(
+                &base,
+                &[Change::GpuReserveMb(1), Change::RouteAsr("c".into())]
+            )
+            .err(),
+            Some("route_no_asr")
         );
-        assert_eq!(test_lm(&client, "nonsense").await, Err("invalid_url"));
+    }
+
+    fn local(active: Option<LocalAsrKind>, reason: Option<CpuReason>) -> LocalStatus {
+        LocalStatus {
+            active,
+            on_gpu: matches!(active, Some(LocalAsrKind::Breeze | LocalAsrKind::TeaAsr)),
+            gpu_engine: LocalAsrKind::Breeze,
+            switching: false,
+            starting: false,
+            unloaded: false,
+            error: None,
+            cpu_reason: reason,
+        }
+    }
+
+    #[test]
+    fn runtime_status_reports_tea_switching_and_idle() {
+        let mut c = Config::with_defaults();
+        c.local.asr = LocalAsr::TeaAsr;
+        let r = routes(true);
+        let tea = LocalStatus {
+            gpu_engine: LocalAsrKind::TeaAsr,
+            ..local(Some(LocalAsrKind::TeaAsr), None)
+        };
+        let s = runtime_status(&c, &r, &tea, None, true);
+        assert_eq!(s.asr.text, "TEA-ASR-1.1・NVIDIA 顯示卡・已載入");
+        // Stand-in while a fullscreen app runs.
+        let sv = LocalStatus {
+            gpu_engine: LocalAsrKind::TeaAsr,
+            ..local(
+                Some(LocalAsrKind::SenseVoice),
+                Some(CpuReason::Guard(GuardReason::Fullscreen)),
+            )
+        };
+        let s = runtime_status(&c, &r, &sv, None, true);
+        assert_eq!(s.asr.text, "SenseVoice-Small・CPU");
+        assert!(s.asr.note.unwrap().contains("全螢幕"));
+        // Missing model / no TEA runtime.
+        let missing = CpuReason::Guard(GuardReason::Engine(PickReason::TeaModelMissing));
+        assert_eq!(
+            cpu_reason_text(missing, &c, true).unwrap(),
+            "TEA-ASR-1.1 模型未安裝，改用 SenseVoice。"
+        );
+        let no_cuda = CpuReason::Guard(GuardReason::Engine(PickReason::NoCuda));
+        assert!(cpu_reason_text(no_cuda, &c, false)
+            .unwrap()
+            .contains("此版本沒有 CUDA"));
+        assert!(cpu_reason_text(CpuReason::LoadFailed, &c, true)
+            .unwrap()
+            .starts_with("TEA-ASR 載入失敗"));
+        // Switching: nothing loaded on purpose, not an error.
+        let switching = LocalStatus {
+            switching: true,
+            ..local(None, None)
+        };
+        let s = runtime_status(&c, &r, &switching, None, true);
+        assert_eq!(s.asr.text, "切換模型中…");
+        assert!(!s.asr.warn);
+        // Idle unload.
+        let idle = LocalStatus {
+            unloaded: true,
+            ..local(None, Some(CpuReason::Guard(GuardReason::Idle)))
+        };
+        let s = runtime_status(&c, &r, &idle, None, true);
+        assert_eq!(s.asr.text, "目前沒有載入模型");
+        assert!(s.asr.note.unwrap().contains("TEA-ASR"));
+        assert!(!s.asr.warn);
+        assert!(!gpu_build(&c) || v2c_asr_local::tea::tea_enabled());
+    }
+
+    fn routes(lm_up: bool) -> RouteStatus {
+        RouteStatus {
+            asr: PurposeUse::Local,
+            polish: PurposeUse::Local,
+            translate: PurposeUse::Local,
+            lm_up,
+        }
+    }
+
+    #[test]
+    fn runtime_status_shows_breeze_on_the_gpu() {
+        let mut c = Config::with_defaults();
+        c.local.breeze_quant = BreezeQuant::Q8_0;
+        c.local.llm_model = Some("qwen3-4b".into());
+        let s = runtime_status(
+            &c,
+            &routes(true),
+            &local(Some(LocalAsrKind::Breeze), None),
+            None,
+            true,
+        );
+        assert_eq!(s.asr.text, "Breeze-ASR-25 q8_0・NVIDIA 顯示卡・已載入");
+        assert_eq!(s.asr.note, None);
+        assert_eq!(s.polish.text, "本機 LM Studio・qwen3-4b");
+        assert_eq!(s.translate.note, None);
+        assert!(s.polish_enabled);
+    }
+
+    #[test]
+    fn runtime_status_explains_why_sensevoice_runs() {
+        let c = Config::with_defaults();
+        let low = CpuReason::Guard(GuardReason::Engine(PickReason::LowVram {
+            free_mb: 1200,
+            needed_mb: 2100,
+        }));
+        let s = runtime_status(
+            &c,
+            &routes(false),
+            &local(Some(LocalAsrKind::SenseVoice), Some(low)),
+            None,
+            true,
+        );
+        assert_eq!(s.asr.text, "SenseVoice-Small・CPU");
+        let note = s.asr.note.unwrap();
+        assert!(note.contains("顯存不足") && note.contains("1200"), "{note}");
+        // LM Studio down: polish degrades, translate is unavailable.
+        assert!(s.polish.warn && s.polish.note.unwrap().contains("規則式去贅字"));
+        assert!(s.translate.note.unwrap().contains("中翻英無法使用"));
+
+        // The user chose SenseVoice: nothing to explain.
+        let mut chosen = c.clone();
+        chosen.local.asr = LocalAsr::SenseVoice;
+        let reason = CpuReason::Guard(GuardReason::Engine(PickReason::Configured));
+        let s = runtime_status(
+            &chosen,
+            &routes(true),
+            &local(Some(LocalAsrKind::SenseVoice), Some(reason)),
+            None,
+            true,
+        );
+        assert_eq!(s.asr.note, None);
+        // No CUDA in this build.
+        let no_cuda = CpuReason::Guard(GuardReason::Engine(PickReason::NoCuda));
+        assert_eq!(
+            cpu_reason_text(no_cuda, &c, false).as_deref(),
+            Some("此版本沒有 CUDA，改用 SenseVoice。")
+        );
+    }
+
+    #[test]
+    fn runtime_status_for_cloud_routes() {
+        let mut c = with_services();
+        c.route.polish = "c".into();
+        let r = RouteStatus {
+            asr: PurposeUse::LocalInsteadOfCloud {
+                service_id: "g".into(),
+            },
+            polish: PurposeUse::Cloud {
+                service_id: "c".into(),
+            },
+            translate: PurposeUse::Unavailable {
+                service_id: "g".into(),
+            },
+            lm_up: true,
+        };
+        let s = runtime_status(&c, &r, &local(None, None), None, true);
+        assert_eq!(s.polish.text, "Claude：c・claude-haiku-5-5");
+        assert!(s.asr.warn && s.asr.note.as_deref().unwrap().contains("Gemini：g"));
+        assert_eq!(s.asr.text, "沒有可用的地端語音模型");
+        assert_eq!(s.translate.text, "無法使用");
+        // Polish off.
+        c.polish.enabled = false;
+        let s = runtime_status(&c, &r, &local(None, None), None, true);
+        assert_eq!(s.polish.text, "已關閉");
+    }
+
+    #[test]
+    fn local_test_view_reports_steps_without_text() {
+        let c = Config::with_defaults();
+        let run = LocalTestRun {
+            engine: LocalAsrKind::Breeze,
+            on_gpu: true,
+            cpu_reason: None,
+            load_ms: Some(2300),
+            transcribe: Ok(410),
+            vram_mb: Some(1700),
+        };
+        let v = local_test_view(&run, &c, true);
+        assert!(v.ok);
+        assert_eq!(v.engine, "breeze");
+        assert_eq!(v.summary, "Breeze-ASR-25 q5_0・NVIDIA 顯示卡 可以正常辨識");
+        let status: Vec<_> = v.steps.iter().map(|s| (s.status, s.latency_ms)).collect();
+        assert_eq!(
+            status,
+            [
+                ("passed", None),
+                ("passed", Some(2300)),
+                ("passed", Some(410))
+            ]
+        );
+        assert!(v.steps[0].detail.as_deref().unwrap().contains("1700 MB"));
+
+        let run = LocalTestRun {
+            engine: LocalAsrKind::SenseVoice,
+            on_gpu: false,
+            cpu_reason: Some(CpuReason::Guard(GuardReason::LowVram {
+                free_mb: 900,
+                needed_mb: 2400,
+            })),
+            load_ms: None,
+            transcribe: Err("asr_failed"),
+            vram_mb: None,
+        };
+        let v = local_test_view(&run, &c, true);
+        assert!(!v.ok);
+        assert!(v.fallback_reason.as_deref().unwrap().contains("顯存不足"));
+        assert_eq!(v.steps[1].status, "skipped");
+        assert_eq!(v.steps[2].status, "failed");
+        let failed = LocalTestRun {
+            cpu_reason: Some(CpuReason::LoadFailed),
+            transcribe: Ok(900),
+            ..run
+        };
+        assert_eq!(local_test_view(&failed, &c, true).steps[1].status, "failed");
+        // TEA-ASR.
+        let mut t = Config::with_defaults();
+        t.local.asr = LocalAsr::TeaAsr;
+        let tea = LocalTestRun {
+            engine: LocalAsrKind::TeaAsr,
+            on_gpu: true,
+            cpu_reason: None,
+            load_ms: Some(9600),
+            transcribe: Ok(240),
+            vram_mb: Some(2600),
+        };
+        let v = local_test_view(&tea, &t, true);
+        assert_eq!(v.engine, "tea_asr");
+        assert_eq!(v.summary, "TEA-ASR-1.1・NVIDIA 顯示卡 可以正常辨識");
+        let tea_failed = LocalTestRun {
+            engine: LocalAsrKind::SenseVoice,
+            on_gpu: false,
+            cpu_reason: Some(CpuReason::LoadFailed),
+            ..tea
+        };
+        let v = local_test_view(&tea_failed, &t, true);
+        assert_eq!(v.engine, "sense_voice");
+        assert_eq!(
+            v.steps[1].detail.as_deref(),
+            Some("TEA-ASR-1.1 載入失敗，改用 SenseVoice")
+        );
+    }
+
+    #[test]
+    fn test_is_refused_while_dictating() {
+        assert!(dictating(Some(&StatusEvent::Transcribing)));
+        assert!(dictating(Some(&StatusEvent::Recording {
+            rms: 0.1,
+            hands_free: false
+        })));
+        assert!(!dictating(Some(&StatusEvent::Done {
+            chars: 3,
+            latency_ms: 10
+        })));
+        assert!(!dictating(None));
     }
 
     #[test]

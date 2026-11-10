@@ -44,6 +44,21 @@ pub enum Startup {
 pub struct Loaded {
     pub kind: LocalAsrKind,
     pub asr: Arc<dyn AsrProvider>,
+    /// It runs on the GPU (TEA-ASR always; Breeze when CUDA is built in and the GPU allowed).
+    pub on_gpu: bool,
+}
+
+/// Whether model `kind` runs on the GPU when loaded for `cfg` (see [`load_breeze`]).
+pub fn runs_on_gpu(kind: LocalAsrKind, cfg: &Config) -> bool {
+    match kind {
+        LocalAsrKind::SenseVoice => false,
+        LocalAsrKind::TeaAsr => v2c_asr_local::tea::tea_enabled(),
+        LocalAsrKind::Breeze => {
+            v2c_asr_local::breeze::cuda_enabled()
+                && cfg.gpu.enabled
+                && cfg.gpu.profile != GpuProfile::CpuOnly
+        }
+    }
 }
 
 /// The single local model slot (shared; all methods take `&self`).
@@ -89,6 +104,11 @@ impl LocalEngines {
         active_error(read(&self.startup), self.switching())
     }
 
+    /// The loaded model, if any.
+    pub fn loaded(&self) -> Option<Loaded> {
+        read(&self.slot)
+    }
+
     /// Which model is loaded, if any.
     pub fn current(&self) -> Option<LocalAsrKind> {
         read(&self.slot).map(|l| l.kind)
@@ -109,12 +129,13 @@ impl LocalEngines {
 
     /// Replaces the loaded model with `kind` from `load`: empties the slot, waits up to
     /// `release_wait` until the old model is no longer used, drops it, then calls `load`.
-    /// `kind = None` only unloads. Errors: `switch_running` (another switch is in progress),
+    /// `kind = None` only unloads. `on_gpu` is recorded with the new model. Errors: `switch_running` (another switch is in progress),
     /// `model_busy` (the old model was not released in time; it stays loaded), or `load`'s
     /// error (the slot stays empty).
     pub fn switch_model<F>(
         &self,
         kind: Option<LocalAsrKind>,
+        on_gpu: bool,
         release_wait: Duration,
         load: F,
     ) -> Result<(), &'static str>
@@ -146,7 +167,7 @@ impl LocalEngines {
             return Ok(());
         };
         let asr = load()?;
-        write(&self.slot, Some(Loaded { kind, asr }));
+        write(&self.slot, Some(Loaded { kind, asr, on_gpu }));
         Ok(())
     }
 }
@@ -364,8 +385,10 @@ pub(crate) mod tests {
         e.set_startup(Startup::Done(None));
         let short = Duration::from_secs(5);
 
-        e.switch_model(Some(LocalAsrKind::Breeze), short, || FakeAsr::load(&census))
-            .unwrap();
+        e.switch_model(Some(LocalAsrKind::Breeze), false, short, || {
+            FakeAsr::load(&census)
+        })
+        .unwrap();
         assert_eq!(e.current(), Some(LocalAsrKind::Breeze));
         // An utterance is using Breeze while the switch to SenseVoice starts.
         let in_use = e.active().unwrap();
@@ -374,12 +397,13 @@ pub(crate) mod tests {
         let switch = std::thread::spawn(move || {
             e2.switch_model(
                 Some(LocalAsrKind::SenseVoice),
+                false,
                 Duration::from_secs(5),
                 || FakeAsr::load(&c2),
             )
         });
         // The slot is empty during the switch: the next utterance waits.
-        while !e.switching() {
+        while !(e.switching() && e.current().is_none()) {
             std::thread::yield_now();
         }
         assert_eq!(e.active().err(), Some("asr_loading"));
@@ -392,7 +416,8 @@ pub(crate) mod tests {
         assert_eq!(census.live(), 1);
 
         // Unload only.
-        e.switch_model(None, short, || unreachable!()).unwrap();
+        e.switch_model(None, false, short, || unreachable!())
+            .unwrap();
         assert_eq!(e.current(), None);
         assert_eq!(census.live(), 0);
         assert_eq!(e.active().err(), Some("model_missing"));
@@ -402,7 +427,7 @@ pub(crate) mod tests {
     fn busy_old_model_cancels_the_switch_and_stays() {
         let census = Arc::new(Census::default());
         let e = LocalEngines::default();
-        e.switch_model(Some(LocalAsrKind::TeaAsr), Duration::ZERO, || {
+        e.switch_model(Some(LocalAsrKind::TeaAsr), false, Duration::ZERO, || {
             FakeAsr::load(&census)
         })
         .unwrap();
@@ -410,6 +435,7 @@ pub(crate) mod tests {
         assert_eq!(
             e.switch_model(
                 Some(LocalAsrKind::SenseVoice),
+                false,
                 Duration::from_millis(50),
                 || FakeAsr::load(&census)
             ),
@@ -424,12 +450,12 @@ pub(crate) mod tests {
     fn failed_load_leaves_the_slot_empty_and_a_second_switch_is_refused() {
         let census = Arc::new(Census::default());
         let e = Arc::new(LocalEngines::default());
-        e.switch_model(Some(LocalAsrKind::Breeze), Duration::ZERO, || {
+        e.switch_model(Some(LocalAsrKind::Breeze), false, Duration::ZERO, || {
             FakeAsr::load(&census)
         })
         .unwrap();
         assert_eq!(
-            e.switch_model(Some(LocalAsrKind::TeaAsr), Duration::ZERO, || Err(
+            e.switch_model(Some(LocalAsrKind::TeaAsr), false, Duration::ZERO, || Err(
                 "model_load_failed"
             )),
             Err("model_load_failed")
@@ -441,20 +467,23 @@ pub(crate) mod tests {
         let e2 = Arc::clone(&e);
         let c2 = Arc::clone(&census);
         let t = std::thread::spawn(move || {
-            e2.switch_model(Some(LocalAsrKind::SenseVoice), Duration::ZERO, || {
-                rx.recv().unwrap();
-                FakeAsr::load(&c2)
-            })
+            e2.switch_model(
+                Some(LocalAsrKind::SenseVoice),
+                false,
+                Duration::ZERO,
+                || {
+                    rx.recv().unwrap();
+                    FakeAsr::load(&c2)
+                },
+            )
         });
         while !e.switching() {
             std::thread::yield_now();
         }
         assert_eq!(
-            e.switch_model(
-                Some(LocalAsrKind::Breeze),
-                Duration::ZERO,
-                || FakeAsr::load(&census)
-            ),
+            e.switch_model(Some(LocalAsrKind::Breeze), false, Duration::ZERO, || {
+                FakeAsr::load(&census)
+            }),
             Err("switch_running")
         );
         tx.send(()).unwrap();
