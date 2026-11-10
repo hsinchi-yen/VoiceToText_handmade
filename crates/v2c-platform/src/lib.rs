@@ -18,6 +18,17 @@ pub enum PlatformError {
     Os(String),
     #[error("not supported on this platform")]
     Unsupported,
+    /// Linux: an input device (`/dev/input/event*`) could not be opened (`EACCES`). v2c never
+    /// elevates itself; the user has to join the `input` group.
+    #[error(
+        "permission denied opening {}: add your user to the `input` group \
+         (sudo usermod -aG input $USER), then log out and back in",
+        path.display()
+    )]
+    InputPermission { path: std::path::PathBuf },
+    /// Linux: no global hotkey backend works on this system; the text says why.
+    #[error("no global hotkey backend available: {0}")]
+    HotkeyUnavailable(String),
 }
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
