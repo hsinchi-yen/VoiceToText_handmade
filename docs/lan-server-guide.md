@@ -284,7 +284,7 @@ sudo -u v2c /opt/v2c/vllm/bin/vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
 
 ### 6.2 手動改設定檔（等效做法）
 
-`%APPDATA%\v2c\config.toml`（改完存檔，v2c 會自動重新載入）：
+`%APPDATA%\v2c\config.toml`（改完存檔後，從系統列結束 v2c 再重新開啟才會生效；v2c 不會自動偵測手動修改。在設定頁或精靈裡改的則立刻生效）：
 
 ```toml
 [route]
@@ -306,9 +306,16 @@ base_url = "http://192.168.1.50:11434/v1"
 llm_model = "qwen2.5:7b"
 
 [timeouts]
-asr_cloud_ms = 5000    # CPU 版辨識（方案 A）請調到 15000
-llm_cloud_ms = 3000    # CPU 版文字模型（方案 C）建議 6000
+asr_cloud_ms = 5000    # 伺服器較慢時調高；CPU 版辨識（方案 A）請調到 15000
+llm_cloud_ms = 3000    # 會先「思考」的模型或 CPU 版文字模型（方案 C）建議 6000
+
+[polish]
+timeout_ms = 1000      # 潤飾的基本時間上限（依字數放寬，最多到 llm_cloud_ms）；伺服器較慢時調到 5000
 ```
+
+注意：潤飾有自己的時間上限 `[polish] timeout_ms`，只調 `llm_cloud_ms` 不夠。中翻英只看 `llm_cloud_ms`。
+
+實例（2026-11-10 實測一台區網伺服器）：語音辨識每句固定約 5.6 秒、會思考的 27B 文字模型約 3～4 秒，預設上限下兩者都逾時；改成 `asr_cloud_ms = 8000`、`llm_cloud_ms = 6000`、`[polish] timeout_ms = 5000` 後即可使用（較慢，但不會退回本機）。
 
 需要金鑰的服務（例如 vLLM）請用精靈貼金鑰：金鑰只存在 Windows 認證管理員，不會寫進這個檔案。
 
