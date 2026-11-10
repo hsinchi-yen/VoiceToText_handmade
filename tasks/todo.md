@@ -98,13 +98,21 @@
   - [x] 真實 LLM（`llm_real`）實測：潤飾直接呼叫成功約 2.5 秒；經管線 1 秒預算逾時並退回；中翻英時好時壞（思考吃掉 max_tokens → `finish_reason=length`）
   - [x] 真實 ASR（`asr_real`，英文合成語音）：結果正確（CER 0），每次約 5.6 秒，預設 `asr_cloud_ms=5000` 每次逾時；真實端到端（`e2e_real`）在逾時調到 15 秒後通過
   - [ ] 中文語音辨識實測（沒有中文合成語音與麥克風）
-  - [ ] T3.2 合併後接上真正的 `LinuxInjector`
+  - [x] T3.2 合併後接上真正的 `LinuxInjector`（整合分支：`linux_injector_pastes_the_pipeline_output_into_a_simulated_app`，模擬桌面上兩行貼上、Shift+Enter 不送出、按鍵全部放開、原剪貼簿還原）
   - [ ] 🧑 核准「LLM 額外請求欄位」設定提案（見 `docs/linux-setup.md`；main 0.1.3 已內建關閉思考）
 - [ ] W13 T3.2 剪貼簿注入（RemoteDesktop＋Clipboard portal）
+  - [x] `linux::inject::{LinuxInjector<C, K>, InjectConfig, select_injector(), portal_injector()}`、`linux::clipboard::{ClipboardBackend, PortalClipboard}`、`linux::keys::{KeyBackend, ModifierState, PortalKeys, PortalSession}`；`InjectError::{PermissionDenied, Unsupported}`；`Text`／`Paste` 一律貼上，換行以 keycode 送；mock 測試涵蓋多行、Shift+Enter、修飾鍵逾時、權限拒絕、剪貼簿設定失敗、Ctrl+V 送一半仍放開、還原與被別人改過不還原
+  - [x] 本機唯讀實測（`-- --ignored linux_real_select_injector`）：GNOME 42 判定 `Unsupported`（沒有 Clipboard portal、RemoteDesktop 只有 v1）
+  - [ ] 修飾鍵狀態：portal 無法讀實體按鍵（`ModifierState::Unknown` → 不等待）；之後可改由 evdev 提供
+  - [x] `apps/desktop` 的 `inject_error_code` 補上兩個新變體（a0ee91d）
+  - [x] 審查修正：工作階段只在 `prepare` 開啟、執行結束後才丟棄（不會在中途再跳對話框）；中途失敗盡力還原；權限/不支援錯誤保留種類；剪貼簿訊號限定 portal 送出者並忽略過期的擁有者變更
+  - [ ] 🧑 在 GNOME ≥ 45 實機測貼上到 gedit／Firefox／終端機；RemoteDesktop 同意對話框按「取消」的提示
+  - [ ] 🧑 核准合併 T3.2
 - [ ] W14 T3.4 通知提示＋打包
   - [x] `linux::notify::{notification_for, Notifier, DbusNotifier}`：狀態（錄音中／辨識中／潤飾中／完成／已複製請按 Ctrl+V／權限不足、不支援剪貼簿、熱鍵無法使用等錯誤）→ 通知內容的純函式，只有固定 UI 字串、不含辨識文字；`Notify` 以 `replaces_id` 更新同一個泡泡，進度狀態加 `transient`；D-Bus 失敗回傳可忽略的錯誤（mock 測試）
   - [x] `tools/build-linux.sh`：`--check` 列出缺少的依賴與 `apt` 指令並以非 0 結束（不自動安裝）；建置 .deb／AppImage → 複製到 `releases/` → 更新 `SHA256SUMS.txt`。本機 `--check` 實測：缺 webkit2gtk-4.1、libsoup-3、gtk3、ayatana-appindicator、librsvg、cmake、clang、libclang，exit 1
   - [ ] 🧑 安裝 Tauri Linux 依賴後執行 `bash tools/build-linux.sh`
   - [ ] 🧑 實機看通知（`cargo test -p v2c-platform -- --ignored linux_real_notify`）
   - [ ] 🧑 核准 `tauri.conf.json` 的 Linux 打包設定與合併 T3.4
+- [x] 整合分支 `t3-linux-integration`（2026-11-10，基於 origin/main 0.1.3；T3.1～T3.4 各經獨立審查通過）：`cargo test -p v2c-core -p v2c-platform` 全部通過、clippy／fmt 通過；真實 LLM（8000）4/4、真實 ASR（8002，英文合成句）在預設 5 秒逾時下失敗、放寬到 15 秒通過（約 5.6 秒，CER 0）；**不代表真實 GNOME Wayland 端到端可用**
 - [ ] **檢查點 3**：第一版交付

@@ -377,7 +377,11 @@ pub fn inject_error_code(f: &InjectFailure) -> &'static str {
         (InjectError::Partial { .. }, _) | (_, true) => "inject_partial",
         (InjectError::Elevated, false) => "inject_elevated",
         (InjectError::ModifiersHeld, false) => "inject_modifiers_held",
-        (InjectError::Os(_), false) => "inject_failed",
+        // Linux portal errors (T3.2) reuse the generic code until the Linux UI gets its own strings.
+        (
+            InjectError::Os(_) | InjectError::PermissionDenied | InjectError::Unsupported(_),
+            false,
+        ) => "inject_failed",
     }
 }
 

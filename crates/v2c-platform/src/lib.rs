@@ -45,6 +45,14 @@ pub enum InjectError {
     ModifiersHeld,
     #[error("OS call failed: {0}")]
     Os(String),
+    /// Linux: the user declined the portal's permission dialog (or unticked the keyboard /
+    /// clipboard in it). Nothing was typed.
+    #[error("permission denied: the input/clipboard permission dialog was cancelled")]
+    PermissionDenied,
+    /// Linux: this desktop offers no way to inject (e.g. no Clipboard portal before
+    /// GNOME 45); the text says what is missing. Nothing was typed.
+    #[error("clipboard injection not supported here: {0}")]
+    Unsupported(String),
 }
 
 /// Information about the foreground application.

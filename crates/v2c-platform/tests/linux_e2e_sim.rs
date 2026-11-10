@@ -3,7 +3,7 @@
 //! `Pipeline` (mock or wiremock `CompatAsr` + wiremock LLM, built from `Config`) →
 //! `inject_plan::plan` → a recording [`Injector`].
 //!
-//! The real `LinuxInjector` is wired in after T3.2; this test only needs the trait.
+//! The last test also runs the real `LinuxInjector` (T3.2) against a simulated desktop.
 //! Also checks that no transcript / polished / translated text reaches the log
 //! (AGENTS.md rule 1), with every log event of this binary captured at TRACE level.
 
@@ -759,4 +759,130 @@ async fn e2e_real_asr_llm_polish_inject() {
     if let Some(e) = var("V2C_TEST_ASR_EXPECT") {
         assert!(!log.contains(e.as_str()), "log contains the transcript");
     }
+}
+
+// ----------------------------------------------------------------------------------------
+// The real Linux injector (T3.2) on a simulated desktop
+// ----------------------------------------------------------------------------------------
+
+use std::cell::RefCell;
+use v2c_platform::linux::clipboard::{ClipContent, ClipboardBackend};
+use v2c_platform::linux::inject::{InjectConfig, LinuxInjector, RestoreOutcome};
+use v2c_platform::linux::keys::{
+    KeyBackend, ModifierState, KEY_ENTER, KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_V,
+};
+
+/// A focused text field plus the system clipboard, driven only by key events, the way a
+/// GNOME app sees the RemoteDesktop portal's virtual keyboard.
+#[derive(Default)]
+struct FakeDesktop {
+    clipboard: RefCell<ClipContent>,
+    /// The clipboard content v2c set last (for `still_ours`).
+    ours: RefCell<Option<ClipContent>>,
+    held: RefCell<Vec<u16>>,
+    document: RefCell<String>,
+    /// Shift+Enter in a chat box inserts a line break; plain Enter would "send".
+    sent_messages: RefCell<usize>,
+}
+
+fn text_clip(s: &str) -> ClipContent {
+    ClipContent(vec![(
+        "text/plain;charset=utf-8".into(),
+        s.as_bytes().to_vec(),
+    )])
+}
+
+struct FakeClipboard<'a>(&'a FakeDesktop);
+struct FakeKeys<'a>(&'a FakeDesktop);
+
+impl ClipboardBackend for FakeClipboard<'_> {
+    fn backup(&self) -> Result<ClipContent, InjectError> {
+        Ok(self.0.clipboard.borrow().clone())
+    }
+    fn set_text(&self, text: &str) -> Result<(), InjectError> {
+        *self.0.clipboard.borrow_mut() = text_clip(text);
+        *self.0.ours.borrow_mut() = Some(text_clip(text));
+        Ok(())
+    }
+    fn still_ours(&self) -> Result<bool, InjectError> {
+        Ok(self.0.ours.borrow().as_ref() == Some(&*self.0.clipboard.borrow()))
+    }
+    fn restore(&self, content: &ClipContent) -> Result<(), InjectError> {
+        *self.0.clipboard.borrow_mut() = content.clone();
+        Ok(())
+    }
+}
+
+impl KeyBackend for FakeKeys<'_> {
+    fn modifiers(&self) -> Result<ModifierState, InjectError> {
+        Ok(ModifierState::Unknown)
+    }
+    fn key(&self, code: u16, pressed: bool) -> Result<(), InjectError> {
+        let d = self.0;
+        if !pressed {
+            d.held.borrow_mut().retain(|&k| k != code);
+            return Ok(());
+        }
+        let held = d.held.borrow().clone();
+        match code {
+            KEY_V if held.contains(&KEY_LEFTCTRL) => {
+                let clip = d.clipboard.borrow();
+                let text = clip
+                    .0
+                    .iter()
+                    .find(|(m, _)| m.starts_with("text/plain"))
+                    .map(|(_, b)| String::from_utf8(b.clone()).unwrap())
+                    .unwrap_or_default();
+                d.document.borrow_mut().push_str(&text);
+            }
+            KEY_ENTER if held.contains(&KEY_LEFTSHIFT) => d.document.borrow_mut().push('\n'),
+            KEY_ENTER => *d.sent_messages.borrow_mut() += 1,
+            _ => {}
+        }
+        d.held.borrow_mut().push(code);
+        Ok(())
+    }
+}
+
+/// The hands-free scenario's output, run through the real `LinuxInjector`: both lines land in
+/// the chat box, the line break does not send the message, no key stays held, and the user's
+/// own clipboard is back afterwards.
+#[tokio::test]
+async fn linux_injector_pastes_the_pipeline_output_into_a_simulated_app() {
+    logs();
+    let server = llm_server(llm_reply(TWO_LINES)).await;
+    let cfg = local_config(&format!("{}/v1", server.uri()));
+    let chat = inject_plan::profile_for("slack.exe", &cfg.apps);
+    let mut sim = Sim::new(
+        &cfg,
+        pipeline(&cfg, MockAsr::new(HEARD), local_llm(&cfg, Stage::Polish)),
+        chat,
+    );
+    sim.feed(&[down(Key::Trigger, 0), up(Key::Trigger, 1_200)])
+        .await;
+    let runs = sim.runs();
+    assert_eq!(runs.len(), 1);
+
+    let desktop = FakeDesktop::default();
+    *desktop.clipboard.borrow_mut() = text_clip("user's own copy");
+    let config = InjectConfig {
+        settle: Duration::from_millis(1),
+        ..InjectConfig::default()
+    };
+    let inj = LinuxInjector::new(FakeClipboard(&desktop), FakeKeys(&desktop), config);
+    inj.run(&runs[0]).unwrap();
+
+    assert_eq!(*desktop.document.borrow(), TWO_LINES);
+    assert_eq!(
+        *desktop.sent_messages.borrow(),
+        0,
+        "a line break sent the message"
+    );
+    assert!(
+        desktop.held.borrow().is_empty(),
+        "keys left held: {:?}",
+        desktop.held.borrow()
+    );
+    assert_eq!(*desktop.clipboard.borrow(), text_clip("user's own copy"));
+    assert_eq!(inj.last_restore_outcome(), Some(RestoreOutcome::Restored));
 }
