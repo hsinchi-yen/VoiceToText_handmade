@@ -450,74 +450,150 @@ fn read_wav(bytes: &[u8]) -> Option<AudioClip> {
     None
 }
 
+/// Character error rate between two texts after dropping case, whitespace and punctuation
+/// (Levenshtein distance over chars / expected length). Test-only.
+fn cer(expected: &str, got: &str) -> f64 {
+    let norm = |s: &str| -> Vec<char> {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let (a, b) = (norm(expected), norm(got));
+    if a.is_empty() {
+        return if b.is_empty() { 0.0 } else { 1.0 };
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut cur = vec![i + 1; b.len() + 1];
+        for (j, cb) in b.iter().enumerate() {
+            cur[j + 1] = (prev[j] + usize::from(ca != cb))
+                .min(prev[j + 1] + 1)
+                .min(cur[j] + 1);
+        }
+        prev = cur;
+    }
+    prev[b.len()] as f64 / a.len() as f64
+}
+
+#[test]
+fn cer_ignores_case_space_and_punctuation() {
+    assert_eq!(cer("Hello, world.", "hello world"), 0.0);
+    assert_eq!(cer("我們明天見", "我們明天見。"), 0.0);
+    assert!((cer("abcd", "abed") - 0.25).abs() < 1e-9);
+    assert_eq!(cer("", ""), 0.0);
+}
+
+/// Real ASR endpoint. Env: `V2C_TEST_ASR_BASE_URL` (required), `V2C_TEST_ASR_MODEL`,
+/// `V2C_TEST_ASR_KEY_FILE` (key never printed), `V2C_TEST_ASR_WAV` (PCM16; otherwise a 1 s
+/// synthetic tone and only auth + protocol are checked), `V2C_TEST_ASR_EXPECT` (expected
+/// transcript; only match/CER are printed), `V2C_TEST_ASR_TIMEOUT_MS` (default: the config
+/// default `[timeouts] asr_cloud_ms`), `V2C_TEST_ASR_RUNS` (default 2: cold, then warm).
 #[tokio::test]
 #[ignore = "needs V2C_TEST_ASR_BASE_URL (a real OpenAI-compatible ASR server)"]
 async fn asr_real_transcribe() {
-    let Some(base_url) = std::env::var("V2C_TEST_ASR_BASE_URL")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-    else {
+    let Some(env) = real_asr_env() else {
         eprintln!("asr_real: V2C_TEST_ASR_BASE_URL not set; skipped");
         return;
     };
-    let model = std::env::var("V2C_TEST_ASR_MODEL")
-        .ok()
-        .filter(|s| !s.trim().is_empty());
-    let timeout_ms: u64 = std::env::var("V2C_TEST_ASR_TIMEOUT_MS")
+    let cfg = asr_config(&env.base_url, Some(&env.model), env.timeout_ms, true);
+    let asr = cloud_asr(&cfg, &env.secrets);
+    println!(
+        "asr_real: model {}, key {}, audio {} ms ({}), timeout {} ms",
+        env.model,
+        if env.has_key { "loaded" } else { "none" },
+        env.clip.duration_ms(),
+        if env.real_speech {
+            "WAV"
+        } else {
+            "synthetic tone"
+        },
+        env.timeout_ms
+    );
+    let runs: usize = std::env::var("V2C_TEST_ASR_RUNS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(30_000);
-    let secrets = MemorySecretStore::new();
-    let has_key = match std::env::var("V2C_TEST_ASR_KEY_FILE") {
-        Ok(p) if !p.trim().is_empty() => {
-            // Never printed: only whether a key was loaded.
-            let key = std::fs::read_to_string(p.trim()).expect("V2C_TEST_ASR_KEY_FILE readable");
-            let key = key.trim();
-            if !key.is_empty() {
-                secrets.set(ASR_ID, &ApiKey::new(key)).unwrap();
+        .unwrap_or(2);
+    let mut failures = 0;
+    for run in 1..=runs {
+        let started = Instant::now();
+        let out = asr.transcribe(&env.clip, &ctx("")).await;
+        let ms = started.elapsed().as_millis();
+        match &out {
+            Ok(t) => {
+                let score = env.expect.as_deref().map(|e| cer(e, &t.text));
+                println!(
+                    "asr_real run {run}: HTTP ok, {} chars, lang {:?}, {ms} ms, match {:?}, CER {:?}",
+                    t.text.chars().count(),
+                    t.lang,
+                    score.map(|c| c == 0.0),
+                    score.map(|c| format!("{c:.3}"))
+                );
+                if env.real_speech {
+                    assert!(!t.text.trim().is_empty(), "speech WAV gave no text");
+                }
+                if let Some(c) = score {
+                    assert!(c <= 0.1, "CER {c:.3} above 0.1");
+                }
             }
-            !key.is_empty()
+            Err(e) => {
+                failures += 1;
+                println!("asr_real run {run}: error {e}, {ms} ms");
+            }
         }
-        _ => false,
-    };
-    let (clip, real_speech) = match std::env::var("V2C_TEST_ASR_WAV") {
-        Ok(p) if !p.trim().is_empty() => {
+    }
+    assert_eq!(failures, 0, "{failures} of {runs} ASR requests failed");
+}
+
+/// Settings for the real ASR tests, from the environment (copied in `linux_e2e_sim.rs`: test
+/// files cannot share a module within this card's allowed paths).
+struct RealAsrEnv {
+    base_url: String,
+    model: String,
+    timeout_ms: u64,
+    secrets: MemorySecretStore,
+    has_key: bool,
+    clip: AudioClip,
+    real_speech: bool,
+    expect: Option<String>,
+}
+
+fn real_asr_env() -> Option<RealAsrEnv> {
+    let var = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
+    let base_url = var("V2C_TEST_ASR_BASE_URL")?;
+    let model = var("V2C_TEST_ASR_MODEL").unwrap_or_else(|| "whisper-1".into());
+    let timeout_ms = var("V2C_TEST_ASR_TIMEOUT_MS")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| Config::default().timeouts.asr_cloud_ms);
+    let secrets = MemorySecretStore::new();
+    let mut has_key = false;
+    if let Some(p) = var("V2C_TEST_ASR_KEY_FILE") {
+        // Never printed: only whether a key was loaded.
+        let key = std::fs::read_to_string(p.trim()).expect("V2C_TEST_ASR_KEY_FILE readable");
+        let key = key.trim();
+        if !key.is_empty() {
+            secrets.set(ASR_ID, &ApiKey::new(key)).unwrap();
+            has_key = true;
+        }
+    }
+    let (clip, real_speech) = match var("V2C_TEST_ASR_WAV") {
+        Some(p) => {
             let bytes = std::fs::read(p.trim()).expect("V2C_TEST_ASR_WAV readable");
             (
                 read_wav(&bytes).expect("V2C_TEST_ASR_WAV is a PCM16 WAV"),
                 true,
             )
         }
-        _ => (tone(), false),
+        None => (tone(), false),
     };
-    let model_name = model.clone().unwrap_or_else(|| "whisper-1".into());
-    let cfg = asr_config(&base_url, Some(&model_name), timeout_ms, true);
-    let asr = cloud_asr(&cfg, &secrets);
-    println!(
-        "asr_real: model {} ({}), key {}, audio {} ms ({})",
-        model_name,
-        if model.is_some() {
-            "V2C_TEST_ASR_MODEL"
-        } else {
-            "default"
-        },
-        if has_key { "loaded" } else { "none" },
-        clip.duration_ms(),
-        if real_speech { "WAV" } else { "synthetic tone" }
-    );
-    let started = Instant::now();
-    let out = asr.transcribe(&clip, &ctx("")).await;
-    let ms = started.elapsed().as_millis();
-    match &out {
-        Ok(t) => println!(
-            "asr_real: ok, {} chars, lang {:?}, {ms} ms",
-            t.text.chars().count(),
-            t.lang
-        ),
-        Err(e) => println!("asr_real: error {e}, {ms} ms"),
-    }
-    let t = out.expect("ASR request succeeded (auth + protocol)");
-    if real_speech {
-        assert!(!t.text.trim().is_empty(), "speech WAV gave no text");
-    }
+    Some(RealAsrEnv {
+        base_url,
+        model,
+        timeout_ms,
+        secrets,
+        has_key,
+        clip,
+        real_speech,
+        expect: var("V2C_TEST_ASR_EXPECT"),
+    })
 }

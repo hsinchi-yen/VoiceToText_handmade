@@ -26,7 +26,7 @@ use v2c_core::llm::{LlmProvider, OpenAiCompatLlm};
 use v2c_core::pipeline::{Pipeline, PipelineConfig, Warning};
 use v2c_core::postprocess::fillers::strip_fillers;
 use v2c_core::route::{self, cloud_http_client, Purpose, Target};
-use v2c_core::secrets::MemorySecretStore;
+use v2c_core::secrets::{ApiKey, MemorySecretStore, SecretStore};
 use v2c_core::trigger::{Command, Event, Key, Trigger, TriggerConfig};
 use v2c_core::{prompts, Lang, Mode};
 use v2c_platform::{InjectError, Injector};
@@ -139,6 +139,10 @@ struct Sim {
     recording: Option<(Mode, u64)>,
     commands: Vec<Command>,
     outputs: Vec<v2c_core::pipeline::Output>,
+    /// Audio to "record" instead of the synthetic tone (e.g. a WAV for the real-endpoint test).
+    clip: Option<AudioClip>,
+    /// Pipeline errors (nothing is injected for them).
+    errors: Vec<v2c_core::V2cError>,
 }
 
 impl Sim {
@@ -151,6 +155,8 @@ impl Sim {
             recording: None,
             commands: Vec::new(),
             outputs: Vec::new(),
+            clip: None,
+            errors: Vec::new(),
         }
     }
 
@@ -168,16 +174,19 @@ impl Sim {
                     Command::Cancel => self.recording = None,
                     Command::StopAndProcess | Command::StopAtLimit => {
                         let (mode, started) = self.recording.take().expect("was recording");
-                        let clip = speech_like_clip(at - started);
-                        let out = self
-                            .pipeline
-                            .run(clip, mode)
-                            .await
-                            .expect("pipeline ok")
-                            .expect("some text");
-                        let actions = inject_plan::plan(&out.text, &self.profile);
-                        self.injector.run(&actions).unwrap();
-                        self.outputs.push(out);
+                        let clip = self
+                            .clip
+                            .clone()
+                            .unwrap_or_else(|| speech_like_clip(at - started));
+                        match self.pipeline.run(clip, mode).await {
+                            Ok(out) => {
+                                let out = out.expect("some text");
+                                let actions = inject_plan::plan(&out.text, &self.profile);
+                                self.injector.run(&actions).unwrap();
+                                self.outputs.push(out);
+                            }
+                            Err(e) => self.errors.push(e),
+                        }
                     }
                 }
             }
@@ -561,5 +570,193 @@ async fn logs_never_contain_the_sentence() {
             "log contains user text ({} chars)",
             secret.chars().count()
         );
+    }
+}
+
+// ----------------------------------------------------------------------------------------
+// Real endpoints (opt-in)
+// ----------------------------------------------------------------------------------------
+
+/// Minimal PCM16 WAV reader (any channel count, mixed down to mono). Test-only; same as in
+/// `linux_asr.rs`.
+fn read_wav(bytes: &[u8]) -> Option<AudioClip> {
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+    let (mut channels, mut rate, mut bits) = (0u16, 0u32, 0u16);
+    let mut i = 12;
+    while i + 8 <= bytes.len() {
+        let id = &bytes[i..i + 4];
+        let len = u32::from_le_bytes(bytes[i + 4..i + 8].try_into().ok()?) as usize;
+        let data = bytes.get(i + 8..(i + 8 + len).min(bytes.len()))?;
+        if id == b"fmt " && data.len() >= 16 {
+            if u16::from_le_bytes([data[0], data[1]]) != 1 {
+                return None;
+            }
+            channels = u16::from_le_bytes([data[2], data[3]]);
+            rate = u32::from_le_bytes(data[4..8].try_into().ok()?);
+            bits = u16::from_le_bytes([data[14], data[15]]);
+        } else if id == b"data" {
+            if bits != 16 || channels == 0 {
+                return None;
+            }
+            let ch = channels as usize;
+            let samples = data
+                .chunks_exact(2 * ch)
+                .map(|frame| {
+                    frame
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|s| f32::from(i16::from_le_bytes(*s)) / 32768.0)
+                        .sum::<f32>()
+                        / ch as f32
+                })
+                .collect();
+            return Some(AudioClip {
+                samples,
+                sample_rate: rate,
+            });
+        }
+        i += 8 + len + (len & 1);
+    }
+    None
+}
+
+/// Character error rate ignoring case, whitespace and punctuation. Same as in `linux_asr.rs`.
+fn cer(expected: &str, got: &str) -> f64 {
+    let norm = |s: &str| -> Vec<char> {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let (a, b) = (norm(expected), norm(got));
+    if a.is_empty() {
+        return if b.is_empty() { 0.0 } else { 1.0 };
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut cur = vec![i + 1; b.len() + 1];
+        for (j, cb) in b.iter().enumerate() {
+            cur[j + 1] = (prev[j] + usize::from(ca != cb))
+                .min(prev[j + 1] + 1)
+                .min(cur[j] + 1);
+        }
+        prev = cur;
+    }
+    prev[b.len()] as f64 / a.len() as f64
+}
+
+/// Real ASR (`CompatAsr`) → pipeline → real LLM polish → plan → recording injector, with the
+/// config defaults (`[timeouts] asr_cloud_ms`, `[polish] timeout_ms`) unless overridden.
+///
+/// Env: `V2C_TEST_ASR_BASE_URL`, `V2C_TEST_ASR_WAV` and `V2C_TEST_LLM_BASE_URL` (required);
+/// `V2C_TEST_ASR_MODEL`, `V2C_TEST_ASR_KEY_FILE` (never printed), `V2C_TEST_ASR_EXPECT`,
+/// `V2C_TEST_ASR_TIMEOUT_MS`, `V2C_TEST_LLM_MODEL`. Prints only outcomes, lengths, timings
+/// and match/CER; never the text.
+#[tokio::test]
+#[ignore = "needs V2C_TEST_ASR_BASE_URL, V2C_TEST_ASR_WAV and V2C_TEST_LLM_BASE_URL"]
+async fn e2e_real_asr_llm_polish_inject() {
+    let var = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
+    let (Some(asr_url), Some(wav), Some(llm_url)) = (
+        var("V2C_TEST_ASR_BASE_URL"),
+        var("V2C_TEST_ASR_WAV"),
+        var("V2C_TEST_LLM_BASE_URL"),
+    ) else {
+        eprintln!("e2e_real: ASR/WAV/LLM env not set; skipped");
+        return;
+    };
+    let buf = logs();
+    let mut cfg = Config::with_defaults();
+    cfg.gpu.enabled = false;
+    cfg.route.asr = "lan-asr".into();
+    cfg.local.llm_base_url = llm_url;
+    cfg.local.llm_model = var("V2C_TEST_LLM_MODEL");
+    if let Some(ms) = var("V2C_TEST_ASR_TIMEOUT_MS").and_then(|s| s.parse().ok()) {
+        cfg.timeouts.asr_cloud_ms = ms;
+    }
+    cfg.cloud.push(v2c_core::config::CloudService {
+        id: "lan-asr".into(),
+        kind: v2c_core::config::CloudKind::OpenAiCompat,
+        base_url: Some(asr_url),
+        asr_model: Some(var("V2C_TEST_ASR_MODEL").unwrap_or_else(|| "whisper-1".into())),
+        llm_model: None,
+    });
+    let secrets = MemorySecretStore::new();
+    if let Some(p) = var("V2C_TEST_ASR_KEY_FILE") {
+        let key = std::fs::read_to_string(p.trim()).expect("key file readable");
+        if !key.trim().is_empty() {
+            secrets.set("lan-asr", &ApiKey::new(key.trim())).unwrap();
+        }
+    }
+    let clip = read_wav(&std::fs::read(wav.trim()).expect("WAV readable")).expect("PCM16 WAV");
+    let clip_ms = clip.duration_ms();
+
+    let plan = route::resolve(&cfg.route, &cfg.cloud);
+    assert!(plan.issues.is_empty(), "{:?}", plan.issues);
+    let asr: Arc<dyn AsrProvider> = Arc::from(
+        route::build_cloud_asr(
+            cfg.cloud_service("lan-asr").unwrap(),
+            &secrets,
+            &cloud_http_client().unwrap(),
+            Duration::from_millis(cfg.timeouts.asr_cloud_ms),
+        )
+        .unwrap()
+        .unwrap(),
+    );
+    let p = pipeline(&cfg, asr, local_llm(&cfg, Stage::Polish));
+    let mut sim = Sim::new(&cfg, p, EDITOR);
+    sim.clip = Some(clip);
+    println!(
+        "e2e_real: audio {clip_ms} ms, asr timeout {} ms, polish budget {} ms",
+        cfg.timeouts.asr_cloud_ms, cfg.polish.timeout_ms
+    );
+    let started = std::time::Instant::now();
+    sim.feed(&[down(Key::Trigger, 0), up(Key::Trigger, clip_ms)])
+        .await;
+    let wall_ms = started.elapsed().as_millis();
+    assert_eq!(
+        sim.commands,
+        vec![
+            Command::StartRecording(Mode::Dictate),
+            Command::StopAndProcess
+        ]
+    );
+    if let Some(e) = sim.errors.first() {
+        println!("e2e_real: pipeline error {e}, {wall_ms} ms");
+        panic!("pipeline failed: {e}");
+    }
+    let out = &sim.outputs[0];
+    let fell_back = out.warnings.contains(&Warning::PolishFellBack);
+    let score = var("V2C_TEST_ASR_EXPECT").map(|e| cer(&e, &out.text));
+    println!(
+        "e2e_real: ok, {} chars, asr_ms {}, llm_ms {:?}, total_ms {}, polish fell_back {fell_back}, match {:?}, CER {:?}",
+        out.text.chars().count(),
+        out.timings.asr_ms,
+        out.timings.llm_ms,
+        out.timings.total_ms,
+        score.map(|c| c == 0.0),
+        score.map(|c| format!("{c:.3}"))
+    );
+    let runs = sim.runs();
+    assert_eq!(runs.len(), 1);
+    let typed: String = runs[0]
+        .iter()
+        .map(|a| match a {
+            Action::Text(t) => t.clone(),
+            Action::NewLine(_) => "\n".into(),
+            Action::Paste(t) => t.clone(),
+        })
+        .collect();
+    assert_eq!(typed, out.text);
+    assert!(!out.text.trim().is_empty());
+    if let Some(c) = score {
+        assert!(c <= 0.15, "CER {c:.3} above 0.15");
+    }
+    let log = String::from_utf8_lossy(&buf.0.lock().unwrap()).into_owned();
+    assert!(!log.contains(out.text.as_str()), "log contains the output");
+    if let Some(e) = var("V2C_TEST_ASR_EXPECT") {
+        assert!(!log.contains(e.as_str()), "log contains the transcript");
     }
 }
