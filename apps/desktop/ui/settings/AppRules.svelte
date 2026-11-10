@@ -21,7 +21,7 @@
 </script>
 
 <section class="settings-section">
-  <h2>App 規則</h2>
+  <h2 class:dirty={view.dirty?.has("apps")}>App 規則</h2>
   <p class="hint">
     聊天程式按 Enter 會送出訊息，換行要用 Shift+Enter；虛擬機視窗收不到模擬打字，要改用貼上。
     名稱是執行檔名稱（可在工作管理員 → 詳細資料查到）。
