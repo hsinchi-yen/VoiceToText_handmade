@@ -155,3 +155,8 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [x] 核准合併 `t3-linux-integration` 到 `main`（2026-11-10，本機 fast-forward，未 push）（含 T3.0～T3.4；本機只合併到整合分支，沒有 push）
 - [ ] T3.5：同意 agent 在你的 ibus-daemon 上動態註冊暫時的 `v2c-test` 引擎做實測（不改 GNOME 輸入來源設定，測完移除）
 - [ ] T3.5 之後：「設定 → 鍵盤 → 輸入來源」加入 v2c，按 Super+Space 切換，實機按住右 Ctrl 說話
+- [ ] T3.5 換行順序：在 gedit／Firefox／終端機輸出多行文字（文字與 Enter 交錯），確認不會變成「ab⏎」（IBus 的 CommitText 立即處理、ForwardKeyEvent 排隊）
+- [ ] T3.5 右 Ctrl：Wayland 下 v2c 輸入來源啟用時，右 Ctrl+C 仍能複製（引擎吞掉右 Ctrl 的按下；若失效，改成不吞觸發鍵需你決定）
+- [ ] T3.5（選做）在你正在用的 ibus-daemon 上做動態註冊測試：ibus 1.5.26 移除動態引擎時可能拔掉目前的全域引擎，所以 agent 只在私人 daemon 上測；要做需你本人同意
+- [ ] T3.6 Secret Service 寫入測試：`V2C_SECRET_REAL_WRITE=1 cargo test -p v2c-platform -- --ignored secret_real_write`（會在 login 鑰匙圈建立再刪除 `v2c-test` 項目）
+- [ ] 錄音檔已推上 GitHub（`34fcbe2`）：`tests/fixtures/audio/README.md` 寫的是「不會進 git」，若要公開 repo 請確認

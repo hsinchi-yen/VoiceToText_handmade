@@ -316,6 +316,7 @@ Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫�
 | 音訊 | PulseAudio 伺服器；**沒有任何擷取裝置**（`arecord -l` 為空，唯一 source 是 HDMI monitor） | 無法實機錄音；ASR 只能用 mock 或 WAV |
 | GPU | Intel Iris Xe，**沒有 NVIDIA** | 不用 CUDA／Breeze；第 5.1 節 VRAM 管理在 Linux 上停用（`gpu.enabled=false`） |
 | 工具鏈 | rustc／cargo 1.99.1、clippy、rustfmt、gcc、Node；**沒有 cmake、clang、libclang、gtk／webkit2gtk-4.1／libsoup-3 開發檔** | `whisper-rs-sys` 編不過 → `v2c-asr-local`、`v2c-cli`、Tauri 桌面 App 在本機無法建置；`v2c-core`、`v2c-platform` 可以 |
+| 實錄音 ASR（2026-11-10） | 你的 10 段錄音（4.4～7.7 秒）經 8002：每段約 5.6～6.1 秒；CER：zh 0～5.9%、en 0～2%、mix 0～4.3%、filler（對 raw）10.5%、vocab 41.9%（未帶詞庫）；加潤飾後 zh-01 0%、mix-01 4.3%、filler-01 20%，總耗時約 6.4～6.7 秒 | 準確度可用；延遲遠超過 ≤ 3 秒目標，需在 ASR 主機端改善 |
 | 既有 ASR | `http://10.20.30.23:8002/v1`（使用者提供）：OpenAI 相容 `/audio/transcriptions`，需要金鑰，模型 `breeze-asr-25`；英文合成句實測約 5.6 秒，超過預設 `asr_cloud_ms=5000` | Linux 設定建議 `asr_cloud_ms = 8000`；中文辨識未驗證（本機只有英文 TTS） |
 | 既有 LLM | `http://10.20.30.23:8000/v1`：llama.cpp（build b10752）、模型 `Qwen3.8-27B-UD-Q6_K_L`、n_ctx 65536、不需金鑰；`/health` ok；`modalities.audio=false`；`/v1/audio/transcriptions` 回 501 | 只用於潤飾／翻譯，**不能做 ASR**；預設開啟思考，一句約 2.7 秒，關閉思考（`chat_template_kwargs.enable_thinking=false`）約 0.23 秒 |
 
@@ -339,6 +340,7 @@ Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫�
 
 - **為什麼**：本機 IBus 1.5.26 由 GNOME 啟動（`ibus-daemon --panel disable`）；GNOME 在 Wayland 下透過 IBus 處理所有輸入框。IBus 引擎可直接 `CommitText` 任意 Unicode（中文、emoji），不需要剪貼簿、RemoteDesktop 同意對話框，也不需要 `input` 群組。
 - **熱鍵**：引擎啟用時，焦點輸入框的每個按鍵都會先經過引擎的 `ProcessKeyEvent(keyval, keycode, state)`，包含放開（`IBUS_RELEASE_MASK`）；右 Ctrl（`Control_R`）、Shift、Esc 轉成 `trigger::Event`，其他鍵原樣放行（回傳 false）。限制：只在「v2c 輸入來源啟用且有輸入框焦點」時有效。
+- **注入目標**：輸入框失焦時 daemon 會把引擎移到內部的 fake context，送到那裡的 CommitText 會被默默丟掉；所以只輸出到「已啟用、有焦點，且 FocusIn 之後收到過按鍵」的引擎，否則回報錯誤，由呼叫端保留文字（T3.5 實測）。`ibus list-engine` 不列出動態註冊的引擎，要看 `ActiveEngines`。
 - **注入**：`Action::Text` → `CommitText`；`NewLine` → `ForwardKeyEvent`（Return，ShiftEnter 帶 Shift）；`Paste` 也改為 `CommitText`。
 - **註冊**：.deb 安裝 `/usr/share/ibus/component/v2c.xml`；開發時用 IBus 的 `RegisterComponent` 動態註冊（是否會出現在 GNOME 設定的清單需實測）。使用者要在「設定 → 鍵盤 → 輸入來源」加入 v2c。
 - **與中文輸入法並存**：v2c 引擎啟用時，一般打字只送英文（按鍵放行）；要用注音等輸入法時以 Super+Space 切換。
