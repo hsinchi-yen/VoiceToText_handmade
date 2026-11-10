@@ -107,7 +107,7 @@ llm_extra_body = { chat_template_kwargs = { enable_thinking = false } }
 | 方案 | 說明 | 狀態 |
 |------|------|------|
 | SenseVoice-Small（CPU，本機） | 需要 sherpa-onnx 共享庫與約 160 MB 模型 | **未驗證**（這台機器沒有下載，也沒有麥克風） |
-| 遠端相容語音辨識端點 | 任何提供 `POST /v1/audio/transcriptions`（OpenAI 格式）的伺服器，例如 whisper.cpp `whisper-server`（見 `docs/lan-server-guide.md`） | 已實測（英文合成語音，見下方）；**中文辨識未驗證** |
+| 遠端相容語音辨識端點 | 任何提供 `POST /v1/audio/transcriptions`（OpenAI 格式）的伺服器，例如 whisper.cpp `whisper-server`（見 `docs/lan-server-guide.md`） | 已用 10 段真人錄音實測（見下方「兩種模型比較」） |
 | Breeze-ASR-25（GPU） | 需要 NVIDIA＋CUDA | 這台機器不可用 |
 
 ### 遠端語音辨識端點
@@ -141,6 +141,17 @@ asr_model = "breeze-asr-25"     # 伺服器的模型名稱（GET /v1/models 列�
 - v2c 送出 multipart：`file`（16 kHz 單聲道 WAV）、`model`、`response_format=json`，有個人詞彙時加 `prompt`；預期回應 `{"text": "..."}`。
 - 伺服器要求金鑰時，在設定視窗「雲端服務」頁貼上（存在系統金鑰庫）。金鑰錯誤會顯示「金鑰錯誤」（HTTP 401），端點不支援語音會顯示「這個端點不支援語音辨識」（404／405／501）。
 - 失敗時改用本機語音辨識的動作由桌面 App 執行（`cloud_fallback_to_local = true`）；本機沒有可用的語音辨識模型時，這次輸入會顯示錯誤。
+
+### 兩種遠端語音辨識模型比較（2026-11-11，10 段真人錄音，同一台文字模型潤飾）
+
+| 指標 | `tea-asr-1` | `breeze-asr-25` |
+|------|-------------|-----------------|
+| 純辨識平均耗時 | 約 1.7 秒 | 約 5.9 秒 |
+| 辨識＋潤飾平均總耗時 | 約 2.4 秒（10 段中 9 段 ≤ 3 秒） | 約 6.9 秒（0 段 ≤ 3 秒） |
+| 純辨識平均 CER | 1.8% | 7.0% |
+| 預設 `asr_cloud_ms = 5000` 可用 | 可以 | 不行（要 ≥ 8000） |
+
+建議 Linux 預設用 `tea-asr-1`（下方範例的 `asr_model` 換成 `tea-asr-1`、埠號換成該服務的埠號，`asr_cloud_ms` 可維持 5000）。兩者都沒有帶詞庫；測試是用 v2c 的處理流程程式直接餵音檔，不是在安裝好的 App 上用麥克風說話。
 
 ## 4. 完整範例：兩台遠端服務（語音辨識 :8002、文字模型 :8000）
 
@@ -273,6 +284,8 @@ sudo apt install ./v2c_0.1.3_amd64.deb            # 會一併安裝相依套件�
 ibus restart                                      # 讓 ibus-daemon 讀到新的 v2c 元件（或登出再登入）
 ```
 
+`ibus restart` 會重新啟動所有 App 共用的輸入法服務：執行當下各 App 的輸入法會中斷一下，目前選用的輸入來源也可能被重設。比較穩妥的做法是登出再登入。
+
 要用 `apt install ./檔名`（前面有 `./`），不要用 `dpkg -i`，否則相依套件不會自動安裝。解除安裝：`sudo apt remove v2c`（設定與紀錄在 `~/.config/v2c/`，不會被刪除）。
 
 ### 7.2 加入 v2c 輸入來源（GNOME）
@@ -298,5 +311,5 @@ chmod +x v2c_0.1.3_amd64.AppImage
 ```
 
 - 需要 FUSE 2（Ubuntu 22.04：`sudo apt install libfuse2`；Ubuntu 24.04：`libfuse2t64`）。沒有 FUSE 時可改用 `./v2c_0.1.3_amd64.AppImage --appimage-extract-and-run`。
-- 系統還是要有 ibus、libayatana-appindicator3-1（系統匣）與 gnome-keyring（金鑰庫）。
+- AppImage 已內含 WebKit、系統匣（ayatana-appindicator）與 D-Bus 函式庫；系統只需要有 ibus（輸入法服務）與 gnome-keyring（金鑰庫）。
 - AppImage **不能安裝 IBus 元件**，所以預設走備援熱鍵／輸出（第 6.2 節；GNOME 42 上文字只會保留在紀錄裡）。要用 IBus 請改裝 .deb。若一定要用 AppImage：把 AppImage 放到固定位置（例如 `~/Applications/v2c.AppImage`），複製 repo 的 `tools/ibus/v2c.xml` 到 `/usr/share/ibus/component/v2c.xml`（需要 sudo），把其中的 `<exec>` 改成 `/home/你的帳號/Applications/v2c.AppImage --ibus`，然後 `ibus restart`。這個做法未經測試。

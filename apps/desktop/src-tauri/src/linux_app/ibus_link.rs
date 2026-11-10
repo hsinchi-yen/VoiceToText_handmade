@@ -73,7 +73,7 @@ pub struct IbusLink {
     factory: Box<dyn EngineFactory>,
     engine: Mutex<Option<Box<dyn LiveEngine>>>,
     injector: Arc<SwitchInjector>,
-    /// Portal injector used when IBus types nothing (`None` when unsupported here).
+    /// Portal injector used while IBus is disconnected (`None` when unsupported here).
     fallback_injector: Option<SharedInjector>,
     /// The portal / evdev hotkey, running while IBus is not connected at startup.
     fallback_hotkey: Mutex<Option<Box<dyn Hotkey + Send>>>,
@@ -133,10 +133,10 @@ impl IbusLink {
     /// both stay live.
     pub fn set_fallback_hotkey(&self, mut hotkey: Box<dyn Hotkey + Send>) {
         let mut slot = lock(&self.fallback_hotkey);
-        if self.is_connected() {
+        if self.is_connected() || self.stopped.load(Ordering::SeqCst) {
             drop(slot);
             hotkey.stop();
-            info!("fallback hotkey stopped (IBus engine already connected)");
+            info!("fallback hotkey stopped (IBus engine already connected, or shutting down)");
         } else {
             *slot = Some(hotkey);
         }
