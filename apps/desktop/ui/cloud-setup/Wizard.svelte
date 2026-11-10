@@ -3,16 +3,27 @@
   // cloud_list to change an existing service: a custom endpoint starts at step 2 (base_url
   // editable), an official service at step 3. The stored key is reused only if the kind and
   // endpoint stay the same (checked by the backend).
+  // Custom endpoints also pick a `role` (what this one URL serves: text model, speech
+  // recognition, or both). One endpoint = one service; `preset` starts a second endpoint
+  // (e.g. speech on another port) from the 「完成」 step. `role` stays in the page: the
+  // backend only sees which model fields are filled in.
   import * as api from "./api.js";
-  import { guides, billingWarning } from "./guides.js";
+  import { guides, billingWarning, lanNote, roles, otherRole } from "./guides.js";
 
-  let { kinds, editing = null, onDone, onCancel } = $props();
+  let { kinds, editing = null, preset = null, onDone, onCancel } = $props();
 
-  const STEPS = ["選擇服務", "取得金鑰", "貼上金鑰", "選擇模型", "測試連線", "指定用途", "完成"];
+  const STEPS = ["選擇服務", "端點網址／取得金鑰", "貼上金鑰", "選擇模型", "測試連線", "指定用途", "完成"];
+
+  function inferRole(s) {
+    if (s.asr_model && s.llm_model) return "both";
+    return s.asr_model ? "asr" : "text";
+  }
 
   // svelte-ignore state_referenced_locally
   const start = editing;
-  const firstStep = start ? (start.kind === "open_ai_compat" ? 2 : 3) : 1;
+  // svelte-ignore state_referenced_locally
+  const startPreset = editing ? null : preset;
+  const firstStep = start ? (start.kind === "open_ai_compat" ? 2 : 3) : startPreset ? 2 : 1;
   let step = $state(firstStep);
   let draft = $state(
     start
@@ -24,7 +35,19 @@
           asr_model: start.asr_model ?? "",
           llm_model: start.llm_model ?? "",
         }
-      : { kind: null, base_url: "", api_key: "", asr_model: "", llm_model: "" },
+      : {
+          kind: startPreset?.kind ?? null,
+          base_url: startPreset?.base_url ?? "",
+          api_key: "",
+          asr_model: "",
+          llm_model: "",
+        },
+  );
+  let role = $state(start ? inferRole(start) : (startPreset?.role ?? "text"));
+  const wantAsr = $derived(role === "asr" || role === "both");
+  const wantText = $derived(role === "text" || role === "both");
+  const urlLooksOff = $derived(
+    draft.base_url.trim() !== "" && !/\/v1\/?$/.test(draft.base_url.trim()),
   );
   let purposes = $state(
     start ? { ...start.purposes } : { asr: false, polish: false, translate: false },
@@ -76,6 +99,15 @@
       message = api.describe("key_missing");
       return;
     }
+    if (step === 4 && isCompat) {
+      if ((wantAsr && !draft.asr_model.trim()) || (wantText && !draft.llm_model.trim())) {
+        message = api.describe("model_required");
+        return;
+      }
+      // Only test (and save) what this endpoint serves.
+      if (!wantAsr) draft.asr_model = "";
+      if (!wantText) draft.llm_model = "";
+    }
     step += 1;
     if (step === 4) loadModels();
     if (step === 5) result = null;
@@ -108,8 +140,18 @@
       }
       if (!editing && !purposes.asr && !purposes.polish && !purposes.translate) {
         purposes = { ...r.supports };
+        if (isCompat) {
+          purposes.asr = r.supports.asr && wantAsr;
+          purposes.polish = r.supports.polish && wantText;
+          purposes.translate = r.supports.translate && wantText;
+        }
       }
     }
+  }
+
+  // 「再新增一個端點」: same server, the other role (the port usually differs).
+  function addAnother() {
+    onDone(saved, { kind: "open_ai_compat", base_url: draft.base_url, role: otherRole[role] });
   }
 
   async function doSave() {
@@ -162,16 +204,33 @@
       </p>
     {/if}
     {#if isCompat}
+      <p class="note">
+        <strong>一個端點＝一個服務。</strong>如果文字模型和語音辨識在不同的網址（例如
+        <code>:8000/v1</code> 修字、<code>:8002/v1</code> 語音辨識），請分兩次新增：先完成一個，最後一步按「再新增一個端點」。
+      </p>
       <label>
         端點網址（base_url）
         <input
           bind:value={draft.base_url}
-          placeholder="http://192.168.1.20:1234/v1"
+          placeholder="http://10.0.0.5:8000/v1"
           spellcheck="false"
         />
       </label>
+      {#if urlLooksOff}
+        <p class="hint">網址通常以 <code>/v1</code> 結尾，請確認是否漏打。</p>
+      {/if}
+      <fieldset class="roles">
+        <legend>這個端點提供什麼？</legend>
+        {#each Object.entries(roles) as [key, r] (key)}
+          <label class="check">
+            <input type="radio" name="role" value={key} bind:group={role} />
+            {r.label}
+            <span class="hint">— {r.hint}</span>
+          </label>
+        {/each}
+      </fieldset>
     {/if}
-    <p class="warn">{billingWarning}</p>
+    <p class="warn">{isCompat ? lanNote : billingWarning}</p>
     <p class="hint">詳見安裝資料夾中的 docs\cloud-setup.md</p>
   {:else if step === 3}
     <h2>貼上金鑰{isCompat ? "（選填）" : ""}</h2>
@@ -207,31 +266,47 @@
         <option value={m}></option>
       {/each}
     </datalist>
-    {#if info.supports_asr}
+    {#if isCompat}
+      <p class="hint">
+        端點：<code>{draft.base_url}</code>（{roles[role].label}）。模型名稱要和伺服器上的一樣；伺服器有提供清單時，點欄位就會出現。
+      </p>
+    {/if}
+    {#if info.supports_asr && (!isCompat || wantAsr)}
       <label>
-        語音辨識模型{isCompat ? "（不用語音辨識可留空）" : ""}
+        語音辨識模型
         <input
           bind:value={draft.asr_model}
           list="cloud-models"
           spellcheck="false"
-          placeholder={info.suggested_asr_model ?? "例如 whisper-1"}
+          placeholder={info.suggested_asr_model ?? "例如 breeze-asr-25 或 whisper-1"}
         />
       </label>
     {/if}
-    <label>
-      文字模型（潤飾／中翻英）{isCompat ? "（不用可留空）" : ""}
-      <input
-        bind:value={draft.llm_model}
-        list="cloud-models"
-        spellcheck="false"
-        placeholder={info.suggested_llm_model ?? "例如 qwen3-8b"}
-      />
-    </label>
+    {#if !isCompat || wantText}
+      <label>
+        文字模型（潤飾／中翻英）
+        <input
+          bind:value={draft.llm_model}
+          list="cloud-models"
+          spellcheck="false"
+          placeholder={info.suggested_llm_model ?? "例如 qwen3-8b"}
+        />
+      </label>
+    {/if}
     {#if modelList}<p class="hint">可以從下拉清單選擇，或直接輸入。</p>{/if}
   {:else if step === 5}
     <h2>測試連線</h2>
     <p class="hint">
-      {info.supports_asr ? "會送出一段 3 秒的內建測試音檔與一句測試文字。" : "會送出一句測試文字。"}
+      {#if isCompat}
+        {wantAsr && wantText
+          ? "會送出一段 3 秒的內建測試音檔與一句測試文字。"
+          : wantAsr
+            ? "會送出一段 3 秒的內建測試音檔（不是你的聲音）。"
+            : "會送出一句測試文字。"}
+        伺服器較慢時，測試可能因逾時失敗，可在設定檔 [timeouts] 放寬（見 docs\lan-server-guide.md）。
+      {:else}
+        {info.supports_asr ? "會送出一段 3 秒的內建測試音檔與一句測試文字。" : "會送出一句測試文字。"}
+      {/if}
     </p>
     <button onclick={runTest} disabled={busy}>{busy ? "測試中…" : "開始測試"}</button>
     {#if result}
@@ -252,7 +327,10 @@
     {/if}
   {:else if step === 6}
     <h2>指定用途</h2>
-    <p>勾選要交給 {info.label} 的用途，沒勾的維持地端。</p>
+    <p>
+      勾選要交給 {info.label}{isCompat ? `（${draft.base_url}）` : ""} 的用途，沒勾的維持原本的設定。
+    </p>
+    <p class="hint">同一個用途只能交給一個服務；勾選後，原本負責這個用途的服務會被取代。</p>
     {#each Object.entries(api.purposeLabels) as [p, label] (p)}
       <label class="check">
         <input
@@ -271,10 +349,25 @@
   {:else if step === 7}
     <h2>完成</h2>
     <p>已儲存「{saved?.label}」（{saved?.id}）。</p>
+    {#if isCompat && otherRole[role]}
+      <p class="note">
+        {role === "text"
+          ? "語音辨識在另一個網址（例如同一台伺服器的 :8002/v1）嗎？"
+          : "文字模型（潤飾、中翻英）在另一個網址（例如同一台伺服器的 :8000/v1）嗎？"}
+        按下面的按鈕再新增一個端點，網址會先帶入這次的，只要改連接埠。
+      </p>
+    {/if}
     <p>
       想全部改回地端時，在系統列圖示按右鍵 →「全部改用地端」，立即生效；也可以在這裡移除服務。
     </p>
-    <button onclick={() => onDone(saved)}>回到雲端服務列表</button>
+    <div class="nav">
+      {#if isCompat && otherRole[role]}
+        <button onclick={addAnother}>
+          再新增一個端點（{roles[otherRole[role]].label}）
+        </button>
+      {/if}
+      <button onclick={() => onDone(saved)}>回到雲端服務列表</button>
+    </div>
   {/if}
 
   {#if message}<p class="bad">{message}</p>{/if}
@@ -360,6 +453,16 @@
   .hint {
     opacity: 0.75;
     font-size: 0.9em;
+  }
+  .note {
+    padding: 0.5rem;
+    border-left: 3px solid #0969da;
+    background: color-mix(in srgb, #0969da 10%, transparent);
+  }
+  .roles {
+    border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+    padding: 0.25rem 0.75rem;
+    margin: 0.5rem 0;
   }
   .ok,
   .passed {

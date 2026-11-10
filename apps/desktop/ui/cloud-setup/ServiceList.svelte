@@ -16,6 +16,13 @@
     return used.length ? used.join("、") : "未使用（全部維持地端）";
   }
 
+  function provides(s) {
+    const p = [];
+    if (s.llm_model) p.push("文字模型");
+    if (s.asr_model) p.push("語音辨識");
+    return p.length ? p.join("、") : "尚未設定模型";
+  }
+
   async function testOne(s) {
     message = "";
     busyId = s.id;
@@ -68,6 +75,7 @@
           <strong>{s.label}</strong> <span class="id">{s.id}</span>
         </div>
         <div class="meta">
+          {#if s.kind === "open_ai_compat"}提供：{provides(s)}<br />{/if}
           用途：{routed(s)}<br />
           {#if s.kind === "open_ai_compat" || s.base_url}端點：{s.effective_base_url}<br />{/if}
           {#if s.asr_model}語音辨識模型：{s.asr_model}<br />{/if}
