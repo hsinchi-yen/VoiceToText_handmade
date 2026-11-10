@@ -546,10 +546,20 @@ pub async fn test_draft(
     Ok((result, probe))
 }
 
-/// Unique id for a new service of `kind` (`gemini`, `gemini-2`, ...).
+/// Unique id for a new service of `kind` (`gemini`, `gemini-2`, ...). An id equal to an
+/// existing service's display name (case-insensitive) is also skipped, so a new service
+/// never shows up looking like a named one. Existing ids never change.
 fn new_id(kind: CloudKind, cfg: &Config) -> String {
     let base = id_base(kind);
-    let taken = |id: &str| id == LOCAL || cfg.cloud_service(id).is_some();
+    let taken = |id: &str| {
+        id == LOCAL
+            || cfg.cloud_service(id).is_some()
+            || cfg.cloud.iter().any(|s| {
+                s.name
+                    .as_deref()
+                    .is_some_and(|n| n.trim().to_lowercase() == id.to_lowercase())
+            })
+    };
     if !taken(base) {
         return base.to_owned();
     }
@@ -1662,6 +1672,18 @@ b"
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("name ="), "{text}");
         assert!(text.contains("# keep this comment"));
+    }
+
+    #[test]
+    fn new_id_skips_ids_used_as_names() {
+        let mut cfg = Config::with_defaults();
+        let mut named = compat_service("custom");
+        named.name = Some("Custom-2".into());
+        cfg.cloud.push(named);
+        assert_eq!(new_id(CloudKind::OpenAiCompat, &cfg), "custom-3");
+        // Existing ids are untouched; other kinds are unaffected.
+        assert_eq!(cfg.cloud[0].id, "custom");
+        assert_eq!(new_id(CloudKind::Gemini, &cfg), "gemini");
     }
 
     #[test]
