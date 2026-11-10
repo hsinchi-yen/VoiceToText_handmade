@@ -147,6 +147,13 @@ impl Pipeline {
 - `sherpa-rs` 或 sherpa-onnx 官方 C API 綁定 **【實作前確認】**；輸出簡體，靠 `zh_tw` 轉換。
 - 選擇邏輯：設定 `asr = "auto"` 時，偵測到 CUDA 且 Breeze 模型存在 → Breeze，否則 SenseVoice。
 
+**TEA-ASR-1.1（GPU，手動選用；T1.12）**
+- 模型：`JacobLinCool/TEA-ASR-1.1`（MIT，以 Qwen3-ASR-1.7B 微調，台灣華語＋中英夾雜，輸出繁體台灣用語）。用社群轉好的 GGUF：`dorajim15/TEA-ASR-1.1-transcribe-cpp` 的 `TEA-ASR-1.1-Q8_0.gguf`（2.18 GB）。
+- 推論：`transcribe-cpp` crate（transcribe.cpp 的 Rust 綁定），feature `cuda`＋`shared`（DLL，避免與 whisper-rs 的 ggml 符號衝突）。**【實作前確認】** Windows＋CUDA 建置。
+- 輸入 16 kHz 單聲道、每段 ≤30 秒；語言固定 `zh`；輸出移除 U+E000–U+F8FF；不做簡轉繁；幾乎沒有標點，由潤飾補上。
+- 選擇邏輯：只有 `asr = "tea_asr"` 才用；GPU 不允許、無 CUDA、模型不存在時改用 SenseVoice。`auto` 不變。VRAM 管理規則與 Breeze 相同（5.1）。
+- 作者自測 MER（%，CommonVoice zh-TW／ASCEND 中英夾雜）：TEA-ASR-1.1 3.58／9.60，Breeze-ASR-25 8.03／17.53。尚未在本機實測。
+
 ### 5.1 顯示卡記憶體（VRAM）管理
 
 **你這台電腦的現況**（2026-11-08 以 `nvidia-smi` 查得）：RTX 2060 Max-Q 共 6144 MiB，**正在負責畫面輸出**（2560×1440，display_active = Enabled）；平常桌面程式（Chrome、Teams、Edge、Docker Desktop、Telegram 等）已經用掉約 1.4 GB，剩約 4.5 GB。另有 AMD 內顯與 Trigger 6 USB 顯示卡。

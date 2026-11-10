@@ -69,6 +69,7 @@
   - [x] 審查修正：只允許一個執行個體、沒有模型或剛重啟時一定顯示主視窗、匯入與下載的暫存檔分開、manifest 一定要有 size、README 用字（2026-11-09 合併，a38f3fe）
   - [ ] 延後處理：熱鍵錄製（平台層目前只支援右 Ctrl，所以只顯示不能改）；下載模型後改用重新啟動，等之後新增 `Engine::rescan_models()`；Breeze 下載網址等你上傳到 Hugging Face
   - [ ] 🧑 Sandbox 乾淨安裝、實機安裝、Defender、VS 授權確認（見 human-checklist）
+- [ ] W7b T1.12 TEA-ASR-1.1 第三個地端語音辨識引擎（設定頁可選）
 - [ ] **檢查點 1**：日常使用一週，問題記在 `dogfood-windows.md`
 
 ## Phase 2 — Android
