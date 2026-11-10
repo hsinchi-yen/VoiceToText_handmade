@@ -93,4 +93,9 @@
 - [ ] W12 T3.3 既有 LLM 串接＋端到端模擬
 - [ ] W13 T3.2 剪貼簿注入（RemoteDesktop＋Clipboard portal）
 - [ ] W14 T3.4 通知提示＋打包
+  - [x] `linux::notify::{notification_for, Notifier, DbusNotifier}`：狀態（錄音中／辨識中／潤飾中／完成／已複製請按 Ctrl+V／權限不足、不支援剪貼簿、熱鍵無法使用等錯誤）→ 通知內容的純函式，只有固定 UI 字串、不含辨識文字；`Notify` 以 `replaces_id` 更新同一個泡泡，進度狀態加 `transient`；D-Bus 失敗回傳可忽略的錯誤（mock 測試）
+  - [x] `tools/build-linux.sh`：`--check` 列出缺少的依賴與 `apt` 指令並以非 0 結束（不自動安裝）；建置 .deb／AppImage → 複製到 `releases/` → 更新 `SHA256SUMS.txt`。本機 `--check` 實測：缺 webkit2gtk-4.1、libsoup-3、gtk3、ayatana-appindicator、librsvg、cmake、clang、libclang，exit 1
+  - [ ] 🧑 安裝 Tauri Linux 依賴後執行 `bash tools/build-linux.sh`
+  - [ ] 🧑 實機看通知（`cargo test -p v2c-platform -- --ignored linux_real_notify`）
+  - [ ] 🧑 核准 `tauri.conf.json` 的 Linux 打包設定與合併 T3.4
 - [ ] **檢查點 3**：第一版交付
