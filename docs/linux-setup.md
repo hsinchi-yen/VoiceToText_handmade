@@ -1,0 +1,186 @@
+# Linux 設定說明（Phase 3，開發中）
+
+這份文件說明在 Linux（目前以 Ubuntu 22.04／GNOME 42 Wayland 開發）上，怎麼把 v2c 的**潤飾**、**中翻英**接到你已經架好的 OpenAI 相容文字模型伺服器（例如 llama.cpp `llama-server`、vLLM、Ollama、另一台電腦的 LM Studio），以及語音辨識有哪些選項。
+
+> 狀態：Linux 版桌面 App 還沒完成（熱鍵 T3.1、注入 T3.2、通知與打包 T3.4 進行中）。下面的設定格式和 Windows 版共用同一份 `config.toml`，已用自動測試驗證（`crates/v2c-platform/tests/linux_*.rs`）。Linux 上設定檔的位置在 T3.4 打包時確定（預計 `~/.config/v2c/config.toml`，**未確認**）。手動改設定檔後要重新啟動 v2c 才會生效。
+
+文中的 `192.168.1.50` 是範例 IP，請換成你伺服器的位址。
+
+## 1. 這台開發機的限制
+
+| 項目 | 狀況 | 影響 |
+|------|------|------|
+| 顯示卡 | 沒有 NVIDIA（Intel 內顯） | 不能用 Breeze-ASR-25（需要 CUDA）；設定 `[gpu] enabled = false` |
+| 麥克風 | 沒有任何錄音裝置 | 無法實機錄音；目前只能用模擬音訊與 mock 語音辨識測試 |
+| 建置工具 | 沒有 cmake／clang | `v2c-asr-local`（whisper-rs）、`v2c-cli`、Tauri 桌面 App 在這台機器上編不過；`v2c-core`、`v2c-platform` 可以 |
+| 熱鍵／注入 | GNOME 42 沒有 GlobalShortcuts、Clipboard portal | 見 `tasks/plan.md` 第 9 節 |
+| 既有文字模型 | llama.cpp，Qwen3 27B，不需金鑰 | 可做潤飾、中翻英；**不能做語音辨識**（沒有音訊能力，`/v1/audio/transcriptions` 回 501） |
+
+## 2. 潤飾、中翻英接既有的文字模型
+
+有兩種寫法，選一種即可。
+
+### 方法 A：`[local]`（當成「本機的 LM Studio」）
+
+```toml
+[local]
+llm_base_url = "http://192.168.1.50:8000/v1"   # 伺服器的 OpenAI 相容 API 根目錄（含 /v1）
+llm_model = "Qwen3.8-27B-UD-Q6_K_L"            # 伺服器的模型 id；不填 = 伺服器目前載入的模型
+
+[polish]
+enabled = true
+timeout_ms = 1000      # 潤飾超過這個時間就改用規則式去贅字
+
+[gpu]
+enabled = false        # 沒有 NVIDIA：關閉顯示卡記憶體管理
+```
+
+- 不送金鑰（`[local]` 沒有金鑰欄位）。
+- 潤飾的時間預算是 `[polish] timeout_ms`（預設 1 秒，長句會依字數加長，最多 8 秒）；中翻英最多等 8 秒。
+- 伺服器連不上或出錯時：潤飾改用規則式去贅字後照樣輸出；中翻英回報錯誤（不會把中文原文當成翻譯輸出）。
+
+### 方法 B：`[[cloud]]` 自訂相容端點
+
+```toml
+[route]
+polish = "lan-llm"
+translate = "lan-llm"
+cloud_fallback_to_local = true    # 這個服務失敗時改用地端（[local]）
+
+[timeouts]
+llm_cloud_ms = 3000               # 潤飾、中翻英的時間上限
+
+[gpu]
+enabled = false
+
+[[cloud]]
+id = "lan-llm"                    # 自己取的名稱；[route] 用它指定
+kind = "open_ai_compat"
+base_url = "http://192.168.1.50:8000/v1"
+llm_model = "Qwen3.8-27B-UD-Q6_K_L"   # 自訂端點沒有預設模型，一定要填
+```
+
+- 自訂端點可以用 `http://`（區網伺服器）；需要金鑰時在設定視窗的「雲端服務」頁貼上，存在系統金鑰庫，不寫進設定檔。不需要金鑰就留空。
+- 走這條路時，潤飾的時間預算是 `[timeouts] llm_cloud_ms`（預設 3 秒），比方法 A 的 1 秒寬鬆，比較適合較慢的大模型。
+
+### 會「思考」的模型（Qwen3 等）
+
+這台開發機的 llama.cpp 預設會先「思考」再回答（回應裡有獨立的 `reasoning_content` 欄位；v2c 只取 `content`，也會去掉夾在內容裡的 `<think>…</think>`）。2026-11-10 實測（合成測試句，思考開啟）：
+
+| 項目 | 結果 |
+|------|------|
+| 潤飾（直接呼叫，等 15 秒） | 成功，約 2.5～2.7 秒 |
+| 潤飾（經過管線，預設 1 秒預算） | **逾時**，改用規則式去贅字 |
+| 中翻英 | **時好時壞**：思考用掉的 token 會吃掉 v2c 給的輸出上限（約「字數×3＋64」），回應被截斷（`finish_reason=length`、`content` 為空），v2c 回報錯誤；成功時約 3.7 秒 |
+
+關閉思考（請求加上 `"chat_template_kwargs": {"enable_thinking": false}`）實測約 0.23 秒。
+
+> **0.1.3 起（main 分支 commit d7e6875）**：OpenAI 相容請求已一律送出 `chat_template_kwargs: {"enable_thinking": false}`，不需要設定。上表是這個分支（尚未包含該修改）的實測結果。
+
+#### 待核准：可設定的額外請求欄位
+
+如果之後需要讓使用者自己決定（例如某台伺服器不接受未知欄位，或想對某個模型保留思考），提案如下。這屬於 `v2c-core` 公開設定的變更，**待核准，尚未實作**：
+
+```toml
+[local]
+llm_base_url = "http://192.168.1.50:8000/v1"
+llm_model = "Qwen3.8-27B-UD-Q6_K_L"
+# 原樣併入 /chat/completions 請求本文的 JSON 物件（不可覆蓋 model、messages、max_tokens、stream）
+llm_extra_body = { chat_template_kwargs = { enable_thinking = false } }
+
+[[cloud]]
+id = "lan-llm"
+kind = "open_ai_compat"
+base_url = "http://192.168.1.50:8000/v1"
+llm_model = "Qwen3.8-27B-UD-Q6_K_L"
+llm_extra_body = { chat_template_kwargs = { enable_thinking = false } }
+```
+
+- 欄位：`LocalConfig::llm_extra_body` 與 `CloudService::llm_extra_body`，型別 `Option<toml::Table>`（序列化成 JSON 物件），只用於 `open_ai_compat`／`[local]`。
+- 預設：不填 = 使用內建預設（0.1.3 起為關閉思考）；填 `{}` = 不送任何額外欄位。
+- `OpenAiCompatLlm` 需要新增一個建構選項（例如 `with_extra_body(serde_json::Map)`），屬公開 API 變更。
+
+## 3. 語音辨識的選項
+
+文字模型伺服器**不能**當語音辨識用（它不收音訊）。Linux 上可以選：
+
+| 方案 | 說明 | 狀態 |
+|------|------|------|
+| SenseVoice-Small（CPU，本機） | 需要 sherpa-onnx 共享庫與約 160 MB 模型 | **未驗證**（這台機器沒有下載，也沒有麥克風） |
+| 遠端相容語音辨識端點 | 任何提供 `POST /v1/audio/transcriptions`（OpenAI 格式）的伺服器，例如 whisper.cpp `whisper-server`（見 `docs/lan-server-guide.md`） | 格式已用 mock 測試驗證；**實機未驗證**（目前的伺服器需要金鑰，尚未取得） |
+| Breeze-ASR-25（GPU） | 需要 NVIDIA＋CUDA | 這台機器不可用 |
+
+### 遠端語音辨識端點
+
+```toml
+[route]
+asr = "lan-asr"
+cloud_fallback_to_local = true
+
+[timeouts]
+asr_cloud_ms = 5000
+
+[[cloud]]
+id = "lan-asr"
+kind = "open_ai_compat"
+base_url = "http://192.168.1.50:8002/v1"
+asr_model = "breeze-asr-25"     # 伺服器的模型名稱；自訂端點沒有預設值，不填則不會使用這個服務
+```
+
+- v2c 送出 multipart：`file`（16 kHz 單聲道 WAV）、`model`、`response_format=json`，有個人詞彙時加 `prompt`；預期回應 `{"text": "..."}`。
+- 伺服器要求金鑰時，在設定視窗「雲端服務」頁貼上（存在系統金鑰庫）。金鑰錯誤會顯示「金鑰錯誤」（HTTP 401），端點不支援語音會顯示「端點不支援音訊」（404／405／501）。
+- 失敗時改用本機語音辨識的動作由桌面 App 執行（`cloud_fallback_to_local = true`）；本機沒有可用的語音辨識模型時，這次輸入會顯示錯誤。
+
+## 4. 完整範例：兩台遠端服務（語音辨識 :8002、文字模型 :8000）
+
+```toml
+[route]
+asr = "lan-asr"
+polish = "lan-llm"
+translate = "lan-llm"
+cloud_fallback_to_local = true
+
+[polish]
+enabled = true
+
+[timeouts]
+asr_cloud_ms = 5000
+llm_cloud_ms = 3000
+
+[gpu]
+enabled = false
+
+[[cloud]]
+id = "lan-asr"
+kind = "open_ai_compat"
+base_url = "http://192.168.1.50:8002/v1"
+asr_model = "breeze-asr-25"
+
+[[cloud]]
+id = "lan-llm"
+kind = "open_ai_compat"
+base_url = "http://192.168.1.50:8000/v1"
+llm_model = "Qwen3.8-27B-UD-Q6_K_L"
+```
+
+這份範例由測試 `two_remote_services_config_routes_every_purpose`（`crates/v2c-platform/tests/linux_asr.rs`）確認三種用途都會導向對應的服務。
+
+## 5. 自己測試連線（開發者）
+
+自動測試預設不連任何真實伺服器。要對真實伺服器跑一次（只送合成測試句或合成音訊，輸出只有長度與耗時，不印出文字）：
+
+```sh
+# 文字模型
+V2C_TEST_LLM_BASE_URL=http://192.168.1.50:8000/v1 \
+V2C_TEST_LLM_MODEL=Qwen3.8-27B-UD-Q6_K_L \
+cargo test -p v2c-platform --test linux_llm -- --ignored llm_real --nocapture --test-threads=1
+
+# 語音辨識（金鑰放在檔案裡，測試不會印出；不給 WAV 時送 1 秒合成音，只檢查連線與格式）
+V2C_TEST_ASR_BASE_URL=http://192.168.1.50:8002/v1 \
+V2C_TEST_ASR_MODEL=breeze-asr-25 \
+V2C_TEST_ASR_KEY_FILE=$HOME/.config/v2c-test/asr.key \
+V2C_TEST_ASR_WAV=tests/fixtures/audio/sample.wav \
+cargo test -p v2c-platform --test linux_asr -- --ignored asr_real --nocapture
+```
+
+選填：`V2C_TEST_LLM_TIMEOUT_MS`（預設 15000）、`V2C_TEST_ASR_TIMEOUT_MS`（預設 30000）。

@@ -86,6 +86,14 @@
   - [ ] 🧑 核准 T3.0（卡片＋第 9 節）
 - [ ] W12 T3.1 能力偵測＋熱鍵（portal → evdev → 不可用）
 - [ ] W12 T3.3 既有 LLM 串接＋端到端模擬
+  - [x] wiremock 測試（由 `Config` 建 provider：`[local]`／`[[cloud]]`；連線被拒、逾時、401、500、501、`finish_reason=length`、壞 JSON、`reasoning_content`、`<think>`；潤飾失敗退回去贅字、翻譯回報錯誤）：`crates/v2c-platform/tests/linux_llm.rs`
+  - [x] 遠端相容 ASR（`CompatAsr`）wiremock 測試與兩台遠端服務設定：`crates/v2c-platform/tests/linux_asr.rs`
+  - [x] 端到端模擬（熱鍵事件 → 狀態機 → 管線 → 注入計畫 → 記錄用 Injector；mock ASR 與 CompatAsr 兩種）＋日誌不含文字：`crates/v2c-platform/tests/linux_e2e_sim.rs`
+  - [x] `docs/linux-setup.md`
+  - [x] 真實 LLM（`llm_real`）實測：潤飾直接呼叫成功約 2.5 秒；經管線 1 秒預算逾時並退回；中翻英時好時壞（思考吃掉 max_tokens → `finish_reason=length`）
+  - [ ] 真實 ASR（`asr_real`）：等待金鑰
+  - [ ] T3.2 合併後接上真正的 `LinuxInjector`
+  - [ ] 🧑 核准「LLM 額外請求欄位」設定提案（見 `docs/linux-setup.md`；main 0.1.3 已內建關閉思考）
 - [ ] W13 T3.2 剪貼簿注入（RemoteDesktop＋Clipboard portal）
 - [ ] W14 T3.4 通知提示＋打包
 - [ ] **檢查點 3**：第一版交付

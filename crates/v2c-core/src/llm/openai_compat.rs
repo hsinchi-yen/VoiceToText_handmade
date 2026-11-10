@@ -713,6 +713,33 @@ mod wire_tests {
         assert_eq!(kind(status(429).await), ProviderErrorKind::RateLimited);
         assert_eq!(kind(status(500).await), ProviderErrorKind::Server);
         assert_eq!(kind(status(400).await), ProviderErrorKind::BadResponse);
+        // llama.cpp answers 501 for operations it does not implement.
+        assert_eq!(kind(status(501).await), ProviderErrorKind::Unsupported);
+    }
+
+    #[tokio::test]
+    async fn llama_cpp_reasoning_content_field_is_ignored() {
+        // llama.cpp (default `--reasoning-format`) returns the reasoning in its own field.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "reasoning_content": "The user said 嗯; drop it.",
+                        "content": "我們明天見。"
+                    }
+                }]
+            })))
+            .mount(&server)
+            .await;
+        let out = llm(&server, None, None)
+            .complete(SYSTEM, USER)
+            .await
+            .unwrap();
+        assert_eq!(out, "我們明天見。");
     }
 
     #[tokio::test]

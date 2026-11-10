@@ -5812,9 +5812,15 @@ dependencies = [
 name = "v2c-platform"
 version = "0.1.2"
 dependencies = [
+ "async-trait",
+ "serde_json",
  "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
  "v2c-core",
  "windows-sys 0.61.2",
+ "wiremock",
 ]
 
 [[package]]
