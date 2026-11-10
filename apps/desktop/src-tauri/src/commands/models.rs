@@ -12,6 +12,8 @@
 //!   URL as well.
 //! - Breeze import: a `.bin` produced by `tools/convert-breeze` is checked for the whisper.cpp
 //!   GGML magic and its quantisation (q5_0 / q8_0, read from the header), then copied in.
+//! - TEA-ASR (T1.12): a single GGUF file; after the SHA-256 check its `GGUF` magic is checked
+//!   too, then it is moved to `<models>\TEA-ASR-1.1-Q8_0.gguf`.
 //!
 //! Progress goes to the main window only as [`MODEL_PROGRESS_EVENT`]. Logs carry model ids,
 //! byte counts, and error codes. Every command refuses callers other than the main window.
@@ -56,6 +58,8 @@ pub enum ModelKind {
     SensevoiceArchive,
     /// whisper.cpp GGML `.bin` for Breeze-ASR-25.
     BreezeGgml,
+    /// transcribe.cpp GGUF for TEA-ASR-1.1 (installed as [`paths::TEA_MODEL_FILE`]).
+    TeaGguf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,6 +155,11 @@ pub fn breeze_present(paths: &Paths, quant: BreezeQuant) -> bool {
     paths::find_model(paths::breeze_model_file(quant), &paths.model_search_dirs()).is_some()
 }
 
+/// The TEA-ASR GGUF file exists in a model directory.
+pub fn tea_present(paths: &Paths) -> bool {
+    paths::find_model(paths::TEA_MODEL_FILE, &paths.model_search_dirs()).is_some()
+}
+
 /// A SenseVoice directory with both model files.
 pub fn sensevoice_present(paths: &Paths) -> bool {
     paths
@@ -172,6 +181,7 @@ fn installed(paths: &Paths, e: &ModelEntry) -> bool {
         (ModelKind::SensevoiceArchive, _) => sensevoice_present(paths),
         (ModelKind::BreezeGgml, Some(q)) => breeze_present(paths, q),
         (ModelKind::BreezeGgml, None) => false,
+        (ModelKind::TeaGguf, _) => tea_present(paths),
     }
 }
 
@@ -181,6 +191,7 @@ fn part_path(models: &Path, e: &ModelEntry) -> PathBuf {
         (ModelKind::BreezeGgml, Some(q)) => {
             models.join(format!("{}.part", paths::breeze_model_file(q)))
         }
+        (ModelKind::TeaGguf, _) => models.join(format!("{}.part", paths::TEA_MODEL_FILE)),
         _ => models
             .join(SENSEVOICE_DL_DIR)
             .join(format!("{SENSEVOICE_ARCHIVE}.part")),
@@ -469,6 +480,11 @@ pub fn ggml_quant(header: &[u8]) -> Result<BreezeQuant, &'static str> {
     }
 }
 
+/// GGUF files start with the ASCII magic `GGUF`.
+pub fn is_gguf(header: &[u8]) -> bool {
+    header.starts_with(b"GGUF")
+}
+
 fn read_header(path: &Path) -> Result<Vec<u8>, &'static str> {
     let mut f = std::fs::File::open(path).map_err(|_| "storage")?;
     let mut buf = vec![0u8; GGML_HEADER_LEN];
@@ -607,6 +623,7 @@ pub struct ModelsStatus {
     pub sensevoice: bool,
     pub breeze_q5_0: bool,
     pub breeze_q8_0: bool,
+    pub tea_asr: bool,
     pub manifest: ManifestSource,
     pub entries: Vec<EntryView>,
 }
@@ -636,6 +653,7 @@ pub fn status(paths: &Paths) -> ModelsStatus {
         sensevoice: sensevoice_present(paths),
         breeze_q5_0: breeze_present(paths, BreezeQuant::Q5_0),
         breeze_q8_0: breeze_present(paths, BreezeQuant::Q8_0),
+        tea_asr: tea_present(paths),
         manifest: source,
         entries,
     }
@@ -772,6 +790,17 @@ async fn install(
             std::fs::rename(&part, models.join(paths::breeze_model_file(q))).map_err(|_| "storage")
         }
         (ModelKind::BreezeGgml, None) => Err("manifest_invalid"),
+        (ModelKind::TeaGguf, _) => {
+            let part = part_path(&models, e);
+            let progress = progress_emitter(app.clone(), e.id.clone(), "download");
+            dl.download(&e.url, &part, &expect, &progress, cancel)
+                .await?;
+            if !is_gguf(&read_header(&part)?) {
+                let _ = std::fs::remove_file(&part);
+                return Err("not_gguf");
+            }
+            std::fs::rename(&part, models.join(paths::TEA_MODEL_FILE)).map_err(|_| "storage")
+        }
     }
 }
 
@@ -876,6 +905,45 @@ mod tests {
             assert!(b.placeholder && !b.downloadable(), "{id}");
             assert!(b.quant.is_some());
         }
+        let tea = m.entry("tea-asr").unwrap();
+        assert_eq!(tea.kind, ModelKind::TeaGguf);
+        assert!(tea.downloadable());
+        assert_eq!(tea.quant, None);
+        assert_eq!(
+            tea.sha256.as_deref(),
+            Some(v2c_asr_local::tea::MODEL_SHA256)
+        );
+        assert_eq!(tea.size, Some(v2c_asr_local::tea::MODEL_SIZE));
+        assert!(tea.url.ends_with(&format!("/{}", paths::TEA_MODEL_FILE)));
+    }
+
+    #[test]
+    fn gguf_magic() {
+        assert!(is_gguf(b"GGUF\x03\x00\x00\x00"));
+        assert!(!is_gguf(b"lmgg"));
+        assert!(!is_gguf(b""));
+    }
+
+    #[test]
+    fn tea_presence_and_part_path() {
+        let dir = temp_dir("tea");
+        let paths = Paths {
+            data_dir: dir.clone(),
+            local_data_dir: dir.clone(),
+        };
+        let models = paths.models_dir();
+        std::fs::create_dir_all(&models).unwrap();
+        let (m, _) = load_manifest(&paths);
+        let e = m.entry("tea-asr").unwrap();
+        assert_eq!(
+            part_path(&models, e),
+            models.join("TEA-ASR-1.1-Q8_0.gguf.part")
+        );
+        std::fs::write(models.join(paths::TEA_MODEL_FILE), b"GGUF").unwrap();
+        assert!(tea_present(&paths));
+        assert!(installed(&paths, e));
+        assert!(status(&paths).tea_asr);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

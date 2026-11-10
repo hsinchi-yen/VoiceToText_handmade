@@ -123,6 +123,14 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
   5. **Defender**：在測試機執行 `"%ProgramFiles%\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -File <安裝檔>`；有誤報就記下來（README 已寫處理方式）
   6. **Breeze 下載網址**：把轉好的 GGML 上傳到你的 Hugging Face repo 後，把 url、sha256、size 填進 `apps/desktop/src-tauri/models.json`（目前是 `PLACEHOLDER-HF-USER`，App 會顯示「尚未提供下載」）
   7. 要分享給 RTX 30／40 系列使用者時，告訴 agent 加入更多 CUDA 架構（目前只建 sm_75，新顯示卡第一次載入較慢）
+- [ ] T1.12 TEA-ASR-1.1（用新建的 CUDA 安裝檔；`tools\build-installer.ps1` 已會設定 `/utf-8` 並檢查 `transcribe.dll` 等 DLL 有被打包）
+  1. 設定頁「地端語音模型 → TEA-ASR-1.1 模型 → 下載」（約 2.18 GB；或照 `docs/local-setup.md` 手動放 `TEA-ASR-1.1-Q8_0.gguf`）
+  2. 「辨識引擎」選「TEA-ASR-1.1（顯示卡）」，不用重開；幾秒後日誌（`%APPDATA%\v2c\logs`）出現 `GPU ASR active asr="tea_asr"`
+  3. 按住右 Ctrl 實際聽寫中文、英文、中英夾雜各數句；日誌每句出現 `providers for utterance ... asr="tea_asr"`；開著潤飾時有標點，關掉潤飾時照原樣（幾乎沒有標點）
+  4. 辨識時畫面不卡頓（TEA 約佔 2.0～2.6 GB 顯存；開著 LM Studio 3B 時 6 GB 顯示卡可能很緊，必要時把 LM Studio 改小模型或 CPU）
+  5. 全螢幕程式或 `heavy_apps` 在前景時改用 SenseVoice（浮動標籤提示），離開後約 20 秒載回 TEA
+  6. 切回「自動」或 Breeze → TEA 立即卸載、改載 Breeze；切換的那幾秒內說話，浮動標籤顯示「切換模型中…」，那句話等新模型載入後才出字
+  7. 同一時間只有一個模型：用 `nvidia-smi -l 1` 看，讓路時 GPU 用量降回來（SenseVoice 在 CPU）；工作管理員裡 v2c 的記憶體不會同時有兩個模型的量
 - [ ] 各卡的實機驗收（見各卡「🧑 需人工」）
 - [ ] 檢查點 1：日常使用一週，問題記在 `tasks/dogfood-windows.md`
 

@@ -157,6 +157,8 @@ pub enum LocalAsr {
     Auto,
     Breeze,
     SenseVoice,
+    /// TEA-ASR-1.1 on GPU (only when selected explicitly; `auto` never picks it).
+    TeaAsr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

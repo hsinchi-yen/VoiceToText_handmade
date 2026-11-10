@@ -70,6 +70,11 @@
   - [ ] 延後處理：熱鍵錄製（平台層目前只支援右 Ctrl，所以只顯示不能改）；下載模型後改用重新啟動，等之後新增 `Engine::rescan_models()`；Breeze 下載網址等你上傳到 Hugging Face
   - [ ] 🧑 Sandbox 乾淨安裝、實機安裝、Defender、VS 授權確認（見 human-checklist）
 - [ ] W7b T1.12 TEA-ASR-1.1 第三個地端語音辨識引擎（設定頁可選）
+  - [x] 程式完成（2026-11-11，分支 `t1.12-tea-asr`）：`LocalAsr::TeaAsr`（`tea_asr`）、transcribe.cpp 0.4.1（CUDA＋shared DLL，和 whisper-rs 同一個執行檔共存）、`select.rs` 新規則與測試、VRAM 管理沿用 Breeze 規則、30 秒切段、`v2c-cli bench --asr tea`、設定頁選項與模型下載、`models.json`、安裝檔附 `transcribe.dll`＋`ggml*.dll`、`docs/local-setup.md`
+  - [x] 追加（2026-11-11）：同一時間只載入一個辨識模型（`local_asr.rs` 單一槽位，先卸載、確認釋放再載入；讓路時 SenseVoice 暫代、恢復後換回；不再常駐 SenseVoice），含「任一時刻最多一個模型」測試
+  - [x] 實測：fixtures 平均 CER 1.0%（Breeze q8_0 3.6%）、每段約 240 ms（Breeze 693 ms）、VRAM 載入後約 2.0 GB／辨識時約 2.6 GB
+  - [ ] 延後處理：初次設定頁（`onboarding/ModelStep.svelte`，不在本卡範圍）有 NVIDIA 時會列出 `tea-asr` 項目但沒有中文名稱；設定頁 VRAM 條（`commands/gpu.rs`，不在本卡範圍）的 v2c 用量仍以 Breeze 估計；`docs/build-guide.md` 補上 `/utf-8` 環境變數
+  - [ ] 🧑 實機聽寫驗收（見 human-checklist）
 - [ ] **檢查點 1**：日常使用一週，問題記在 `dogfood-windows.md`
 
 ## Phase 2 — Android

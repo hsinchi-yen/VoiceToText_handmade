@@ -280,6 +280,10 @@ pub struct SettingsView {
     pub sensevoice: bool,
     pub breeze_q5_0: bool,
     pub breeze_q8_0: bool,
+    /// The TEA-ASR GGUF is installed (T1.12).
+    pub tea_asr: bool,
+    /// This binary can run TEA-ASR (built with the `tea` and `cuda` features).
+    pub tea_build: bool,
 }
 
 fn view(app: &AppHandle, config: Config, file_error: Option<&'static str>) -> SettingsView {
@@ -307,6 +311,8 @@ fn view(app: &AppHandle, config: Config, file_error: Option<&'static str>) -> Se
         sensevoice: models::sensevoice_present(paths),
         breeze_q5_0: models::breeze_present(paths, BreezeQuant::Q5_0),
         breeze_q8_0: models::breeze_present(paths, BreezeQuant::Q8_0),
+        tea_asr: models::tea_present(paths),
+        tea_build: v2c_asr_local::tea::tea_enabled() && v2c_asr_local::breeze::cuda_enabled(),
     }
 }
 

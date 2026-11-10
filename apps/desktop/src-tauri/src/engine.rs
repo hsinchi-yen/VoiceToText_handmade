@@ -7,8 +7,14 @@
 //! - async task [`Engine::lm_check_loop`]: LM Studio `GET /models` every
 //!   [`providers::LM_CHECK_INTERVAL`] (and right after a config reload).
 //!
-//! Config reload ([`Engine::reload`]) swaps the config, rebuilds providers, and drops Breeze
-//! only when the model file (quantisation) changed; other ASR changes go through the guard.
+//! Config reload ([`Engine::reload`]) swaps the config, rebuilds providers, and asks the guard
+//! to poll right away, so ASR changes take effect within a second; a GPU model whose file
+//! changed (Breeze quantisation, or Breeze <-> TEA-ASR) is unloaded first.
+//!
+//! Only one local ASR model is in memory at a time (`local_asr.rs`, plan section 5).
+//!
+//! "GPU engine" is Breeze-ASR-25, or TEA-ASR-1.1 when `[local] asr = "tea_asr"` (T1.12). Both
+//! follow the same selection and VRAM rules (`v2c_asr_local::{select, gpu_guard}`).
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -19,8 +25,8 @@ use tokio::sync::{broadcast, watch, Notify};
 use tracing::{debug, info, warn};
 use v2c_asr_local::gpu_guard::POLL_INTERVAL;
 use v2c_asr_local::{
-    breeze_vram_estimate_mb, pick_with_reason, ForegroundInfo, GpuGuard, GpuInfo, GpuMonitor,
-    GuardInput, LocalAsrKind,
+    gpu_engine, gpu_vram_estimate_mb, pick_with_reason, ForegroundInfo, GpuGuard, GpuInfo,
+    GpuMonitor, GuardInput, LocalAsrKind,
 };
 use v2c_core::asr::AsrProvider;
 use v2c_core::config::Config;
@@ -33,15 +39,15 @@ use v2c_core::Mode;
 
 use crate::app_state::pipeline_config;
 use crate::controller::{Backend, Prepared, StatusEvent};
-use crate::gpu_task::{self, guard_step, GuardStep, NoticeLatch};
+use crate::gpu_task::{self, NoticeLatch, Target as SlotTarget};
 use crate::local_asr::{self, LocalEngines, Startup};
 use crate::paths::Paths;
 use crate::providers::{self, select, wrap_asr, wrap_llm, LmHealth, Providers};
 
 /// How long an utterance waits for the local engine that is still loading.
 const ASR_LOAD_WAIT: Duration = Duration::from_secs(30);
-/// After a failed Breeze load, the guard does not retry for this long.
-const BREEZE_RETRY_AFTER: Duration = Duration::from_secs(300);
+/// After a failed GPU engine load, the guard does not retry for this long.
+const GPU_RETRY_AFTER: Duration = Duration::from_secs(300);
 
 pub struct Engine {
     paths: Paths,
@@ -59,10 +65,15 @@ pub struct Engine {
     http: Option<CloudHttp>,
     busy: Arc<AtomicUsize>,
     last_use: Mutex<Instant>,
-    breeze_failed_at: Mutex<Option<Instant>>,
+    gpu_failed_at: Mutex<Option<Instant>>,
     /// Personal vocabulary (`vocab.txt`), for the ASR prompt and the LLM prompts.
     vocabulary: RwLock<Arc<Vec<String>>>,
-    sensevoice_loading: AtomicBool,
+    /// Set by `reload`: poll the guard now instead of waiting for the next interval.
+    poll_now: AtomicBool,
+    /// Set by `reload` when the GPU model file changed: a loaded GPU model is stale.
+    gpu_stale: AtomicBool,
+    /// A hotkey-triggered load is about to start or running (`on_press`).
+    press_loading: AtomicBool,
     stop: AtomicBool,
 }
 
@@ -119,9 +130,11 @@ impl Engine {
             http,
             busy: Arc::new(AtomicUsize::new(0)),
             last_use: Mutex::new(Instant::now()),
-            breeze_failed_at: Mutex::new(None),
+            gpu_failed_at: Mutex::new(None),
             vocabulary: RwLock::new(Arc::new(vocabulary)),
-            sensevoice_loading: AtomicBool::new(false),
+            poll_now: AtomicBool::new(false),
+            gpu_stale: AtomicBool::new(false),
+            press_loading: AtomicBool::new(false),
             stop: AtomicBool::new(false),
         })
     }
@@ -152,8 +165,14 @@ impl Engine {
         let _ = self.status.send(StatusEvent::Error { code });
     }
 
-    fn cuda_available(&self) -> bool {
-        v2c_asr_local::breeze::cuda_enabled() && self.monitor.available()
+    /// A CUDA device is usable for the config's GPU engine: built with `cuda` (and `tea` for
+    /// TEA-ASR) and NVML found an NVIDIA GPU.
+    fn cuda_available(&self, cfg: &Config) -> bool {
+        let built = match gpu_engine(cfg) {
+            LocalAsrKind::TeaAsr => v2c_asr_local::tea::tea_enabled(),
+            _ => true,
+        };
+        built && v2c_asr_local::breeze::cuda_enabled() && self.monitor.available()
     }
 
     /// Stops the background loops (at app exit).
@@ -163,30 +182,36 @@ impl Engine {
     }
 
     // ---- local engines ---------------------------------------------------------------
+    //
+    // One model in memory at a time (`local_asr.rs`). Startup loads the picked model; the
+    // guard poll (`gpu_task::target`) switches between the GPU model and the SenseVoice
+    // stand-in; a hotkey press loads a model when the slot is empty (idle / on demand).
 
-    /// Picks and loads the local engines (blocking). SenseVoice is always loaded when its
-    /// model exists: it is the CPU engine the guard falls back to.
+    /// Picks and loads the one local model (blocking).
     pub fn startup_blocking(&self) {
         let cfg = self.config();
-        let breeze = local_asr::breeze_model(&cfg, &self.paths);
+        let gpu_model = local_asr::gpu_model(&cfg, &self.paths);
         let sensevoice = local_asr::sensevoice_model(&self.paths);
         let snap = self.monitor.snapshot();
         let gpu = GpuInfo {
-            cuda_available: self.cuda_available(),
+            cuda_available: self.cuda_available(&cfg),
             free_vram_mb: snap.map_or(0, |s| s.free_mb),
             total_vram_mb: snap.map_or(0, |s| s.total_mb),
-            breeze_model_present: breeze.is_some(),
-            breeze_vram_mb: breeze_vram_estimate_mb(cfg.local.breeze_quant),
+            breeze_model_present: gpu_model.is_some(),
+            breeze_vram_mb: gpu_vram_estimate_mb(&cfg),
         };
         let pick = pick_with_reason(&cfg, &gpu);
         info!(
             engine = ?pick.kind,
+            asr = pick.kind.provider_name(),
             reason = ?pick.reason,
             cuda_feature = v2c_asr_local::breeze::cuda_enabled(),
+            tea_feature = v2c_asr_local::tea::tea_enabled(),
             nvml = self.monitor.available(),
             free_vram_mb = gpu.free_vram_mb,
             total_vram_mb = gpu.total_vram_mb,
-            breeze_model = gpu.breeze_model_present,
+            gpu_engine = gpu_engine(&cfg).provider_name(),
+            gpu_model = gpu.breeze_model_present,
             sensevoice_model = sensevoice.is_some(),
             "local ASR selected"
         );
@@ -197,25 +222,25 @@ impl Engine {
         }
 
         let mut error = None;
-        if pick.kind == LocalAsrKind::Breeze && !self.load_breeze_blocking("startup") {
-            error = Some("model_load_failed");
+        if pick.kind != LocalAsrKind::SenseVoice {
+            if let Err(code) = self.switch_to(Some(pick.kind), "startup") {
+                error = Some(code);
+            }
         }
-        match &sensevoice {
-            Some(dir) => match local_asr::load_sensevoice(dir) {
-                Ok(sv) => self.local.set_sensevoice(sv),
-                Err(code) => {
-                    error.get_or_insert(code);
-                }
-            },
-            None => info!("SenseVoice model not found"),
+        if self.local.current().is_none() && sensevoice.is_some() {
+            // Picked SenseVoice, or the GPU model failed: SenseVoice is the one model.
+            if let Err(code) = self.switch_to(Some(LocalAsrKind::SenseVoice), "startup") {
+                error = Some(code);
+            }
+        } else if sensevoice.is_none() && pick.kind == LocalAsrKind::SenseVoice {
+            info!("SenseVoice model not found");
         }
-        let ready = self.local.breeze_loaded() || self.local.sensevoice_loaded();
-        let code = startup_code(ready, breeze.is_some() || sensevoice.is_some(), error);
+        let ready = self.local.current().is_some();
+        let code = startup_code(ready, gpu_model.is_some() || sensevoice.is_some(), error);
         self.local.set_startup(Startup::Done(code));
         match code {
             None => info!(
-                breeze = self.local.breeze_loaded(),
-                sensevoice = self.local.sensevoice_loaded(),
+                asr = self.local.current().map(|k| k.provider_name()),
                 "speech recognition ready"
             ),
             Some(code) => {
@@ -228,50 +253,72 @@ impl Engine {
         }
     }
 
-    /// Loads Breeze and makes it the active engine (blocking). `false` if it did not load.
-    fn load_breeze_blocking(&self, why: &'static str) -> bool {
-        if !self.local.begin_breeze_load() {
-            return false;
-        }
+    /// Switches the one local model to `kind` (`None` = unload), blocking: the old model is
+    /// released first (see `LocalEngines::switch_model`). For a GPU model, the VRAM drop is
+    /// recorded for the guard; a model whose config changed while loading is discarded.
+    fn switch_to(&self, kind: Option<LocalAsrKind>, why: &'static str) -> Result<(), &'static str> {
         let cfg = self.config();
-        let Some(model) = local_asr::breeze_model(&cfg, &self.paths) else {
-            self.local.end_breeze_load(None);
-            return false;
-        };
-        let estimate = breeze_vram_estimate_mb(cfg.local.breeze_quant);
-        let before = self.monitor.snapshot();
-        let result = local_asr::load_breeze(&cfg, &model);
-        let after = self.monitor.snapshot();
-        if result.is_ok() && !quant_still_current(&cfg, &self.config()) {
-            // The config switched the model file while loading: this one is stale. The guard
-            // loads the right one on its next poll.
-            info!(why, "Breeze quantisation changed while loading; discarding");
-            drop(result);
-            self.local.end_breeze_load(None);
-            return false;
-        }
+        let from = self.local.current();
+        let started = Instant::now();
+        let gpu = kind.filter(|k| *k != LocalAsrKind::SenseVoice);
+        let estimate = gpu_vram_estimate_mb(&cfg);
+        let mut snaps = (None, None);
+        let result = self.local.switch_model(kind, local_asr::RELEASE_WAIT, || {
+            let kind = kind.expect("load is only called with a model");
+            snaps.0 = gpu.and_then(|_| self.monitor.snapshot());
+            let asr = local_asr::load_model(kind, &cfg, &self.paths)?;
+            snaps.1 = gpu.and_then(|_| self.monitor.snapshot());
+            let now = self.config();
+            if gpu.is_some() && (gpu_engine(&now) != kind || !gpu_model_still_current(&cfg, &now)) {
+                // The config switched the GPU model while loading: this one is stale. The
+                // guard loads the right one on its next poll.
+                return Err("model_stale");
+            }
+            Ok(asr)
+        });
+        let asr = kind.map(|k| k.provider_name());
+        let from = from.map(|k| k.provider_name());
         match result {
-            Ok(b) => {
+            Ok(()) if gpu.is_some() => {
                 let mut guard = lock(&self.guard);
-                guard.record_load(estimate, before, after, Instant::now());
+                guard.record_load(estimate, snaps.0, snaps.1, Instant::now());
                 info!(
                     why,
+                    asr,
+                    from,
+                    load_ms = started.elapsed().as_millis() as u64,
+                    vram_estimate_mb = estimate,
                     vram_need_mb = guard.breeze_need_mb(estimate),
-                    "Breeze active"
+                    "GPU ASR active"
                 );
                 drop(guard);
+                *lock(&self.gpu_failed_at) = None;
                 if lock(&self.notices).reset() {
                     // Back on the GPU after a yield the user was told about.
                     self.emit(gpu_task::GPU_RESTORED);
                 }
-                self.local.end_breeze_load(Some(b));
-                true
+                Ok(())
+            }
+            Ok(()) => {
+                info!(
+                    why,
+                    asr,
+                    from,
+                    load_ms = started.elapsed().as_millis() as u64,
+                    "local ASR model switched"
+                );
+                Ok(())
+            }
+            Err(code @ ("switch_running" | "model_busy" | "model_stale")) => {
+                info!(why, asr, from, code, "local ASR switch skipped");
+                Err(code)
             }
             Err(code) => {
-                warn!(why, code, "Breeze unavailable; using the CPU engine");
-                *lock(&self.breeze_failed_at) = Some(Instant::now());
-                self.local.end_breeze_load(None);
-                false
+                warn!(why, asr, from, code, "local ASR model unavailable");
+                if gpu.is_some() {
+                    *lock(&self.gpu_failed_at) = Some(Instant::now());
+                }
+                Err(code)
             }
         }
     }
@@ -292,19 +339,33 @@ impl Engine {
 
     /// One guard poll and its consequences.
     fn poll_guard(&self) {
+        if self.local.switching() || self.local.startup() == Startup::Loading {
+            return;
+        }
         let cfg = self.config();
+        let gpu = gpu_engine(&cfg);
+        if self.gpu_stale.swap(false, Ordering::SeqCst)
+            && self
+                .local
+                .current()
+                .is_some_and(|k| k != LocalAsrKind::SenseVoice)
+        {
+            info!("GPU model file changed; unloading the loaded one");
+            let _ = self.switch_to(None, "config");
+        }
+        let current = self.local.current();
         let fg = Self::foreground();
         let idle = lock(&self.last_use).elapsed();
         let input = GuardInput {
             gpu: self.monitor.snapshot(),
-            cuda_available: self.cuda_available(),
-            breeze_model_present: local_asr::breeze_model(&cfg, &self.paths).is_some(),
-            breeze_vram_mb: breeze_vram_estimate_mb(cfg.local.breeze_quant),
+            cuda_available: self.cuda_available(&cfg),
+            breeze_model_present: local_asr::gpu_model(&cfg, &self.paths).is_some(),
+            breeze_vram_mb: gpu_vram_estimate_mb(&cfg),
             foreground: fg.as_ref().map(|(exe, fullscreen)| ForegroundInfo {
                 exe,
                 fullscreen: *fullscreen,
             }),
-            breeze_loaded: self.local.breeze_loaded(),
+            breeze_loaded: current == Some(gpu),
             busy: self.busy.load(Ordering::SeqCst) > 0,
             idle,
             now: Instant::now(),
@@ -314,18 +375,28 @@ impl Engine {
             info!(code, "GPU yield notice");
             self.emit(code);
         }
-        let recently_failed =
-            lock(&self.breeze_failed_at).is_some_and(|t| t.elapsed() < BREEZE_RETRY_AFTER);
-        let blocked = self.local.breeze_loading() || recently_failed;
-        match guard_step(action, self.local.sensevoice_loaded(), blocked) {
-            GuardStep::Nothing => {}
-            GuardStep::Load => {
-                self.load_breeze_blocking("guard");
-            }
-            GuardStep::Unload(reason) => {
-                if self.local.unload_breeze() {
-                    info!(?reason, "Breeze unloaded; using the CPU engine");
+        let gpu_blocked = lock(&self.gpu_failed_at).is_some_and(|t| t.elapsed() < GPU_RETRY_AFTER);
+        let has_cpu = local_asr::sensevoice_model(&self.paths).is_some();
+        match gpu_task::target(action, current, gpu, has_cpu, gpu_blocked) {
+            SlotTarget::Keep => {}
+            SlotTarget::Load(kind) => {
+                info!(
+                    ?action,
+                    asr = kind.provider_name(),
+                    "guard switches the local model"
+                );
+                if self.switch_to(Some(kind), "guard").is_err()
+                    && kind != LocalAsrKind::SenseVoice
+                    && has_cpu
+                    && self.local.current().is_none()
+                {
+                    // The GPU model failed to load: SenseVoice stands in.
+                    let _ = self.switch_to(Some(LocalAsrKind::SenseVoice), "guard");
                 }
+            }
+            SlotTarget::Unload => {
+                info!(?action, "guard unloads the local model");
+                let _ = self.switch_to(None, "guard");
             }
         }
     }
@@ -343,17 +414,21 @@ impl Engine {
                 if self.stop.load(Ordering::SeqCst) {
                     return;
                 }
+                if self.poll_now.swap(false, Ordering::SeqCst) {
+                    break;
+                }
                 std::thread::sleep(Duration::from_millis(200));
             }
             self.poll_guard();
         }
     }
 
-    /// Hotkey pressed: Breeze unloaded (idle, on demand) but allowed now -> load it in the
-    /// background. If it is not ready when the utterance ends, SenseVoice transcribes it.
+    /// Hotkey pressed with no model loaded (idle / on demand): load one in the background.
+    /// The GPU model when the guard allows it now, otherwise SenseVoice. The utterance waits
+    /// for it (`local_asr`).
     fn on_press(self: &Arc<Self>) {
         *lock(&self.last_use) = Instant::now();
-        if self.local.breeze_loaded() || self.local.breeze_loading() {
+        if self.local.current().is_some() || self.local.switching() {
             return;
         }
         if self.local.startup() == Startup::Loading {
@@ -363,23 +438,31 @@ impl Engine {
         if p.purpose(Purpose::Asr).target != Target::Local && p.cloud_asr.is_some() {
             return;
         }
+        if self.press_loading.swap(true, Ordering::SeqCst) {
+            return;
+        }
         let me = Arc::clone(self);
-        let _ = std::thread::Builder::new()
-            .name("v2c-breeze-load".into())
-            .spawn(move || me.load_on_demand());
+        let spawned = std::thread::Builder::new()
+            .name("v2c-asr-load".into())
+            .spawn(move || {
+                me.load_on_demand();
+                me.press_loading.store(false, Ordering::SeqCst);
+            });
+        if spawned.is_err() {
+            self.press_loading.store(false, Ordering::SeqCst);
+        }
     }
 
     fn load_on_demand(&self) {
         let cfg = self.config();
-        if local_asr::breeze_model(&cfg, &self.paths).is_none() {
-            return;
-        }
+        let has_cpu = local_asr::sensevoice_model(&self.paths).is_some();
+        let gpu_present = local_asr::gpu_model(&cfg, &self.paths).is_some();
         let fg = Self::foreground();
         let input = GuardInput {
             gpu: self.monitor.snapshot(),
-            cuda_available: self.cuda_available(),
-            breeze_model_present: true,
-            breeze_vram_mb: breeze_vram_estimate_mb(cfg.local.breeze_quant),
+            cuda_available: self.cuda_available(&cfg),
+            breeze_model_present: gpu_present,
+            breeze_vram_mb: gpu_vram_estimate_mb(&cfg),
             foreground: fg.as_ref().map(|(exe, fullscreen)| ForegroundInfo {
                 exe,
                 fullscreen: *fullscreen,
@@ -389,22 +472,42 @@ impl Engine {
             idle: Duration::ZERO,
             now: Instant::now(),
         };
-        match lock(&self.guard).can_load(&cfg, &input) {
-            Ok(()) => {}
-            Err(reason) => {
-                debug!(?reason, "Breeze not loaded on demand");
+        let gpu_blocked = lock(&self.gpu_failed_at).is_some_and(|t| t.elapsed() < GPU_RETRY_AFTER);
+        let allowed = lock(&self.guard).can_load(&cfg, &input);
+        let kind = match allowed {
+            Ok(()) if !gpu_blocked => gpu_engine(&cfg),
+            Ok(()) | Err(_) if has_cpu => LocalAsrKind::SenseVoice,
+            other => {
+                debug!(?other, "no local model to load on demand");
                 return;
             }
+        };
+        if self.switch_to(Some(kind), "hotkey").is_err()
+            && kind != LocalAsrKind::SenseVoice
+            && has_cpu
+            && self.local.current().is_none()
+        {
+            let _ = self.switch_to(Some(LocalAsrKind::SenseVoice), "hotkey");
         }
-        self.load_breeze_blocking("hotkey");
     }
 
-    /// The local engine, waiting while it is still loading.
+    /// The local engine, waiting while it is still loading or switching. Tells the user once
+    /// per utterance when it waits for a switch ("切換模型中").
     async fn local_asr(&self, wait: bool) -> Result<Arc<dyn AsrProvider>, &'static str> {
         let deadline = Instant::now() + ASR_LOAD_WAIT;
+        let mut told = false;
         loop {
             match self.local.active() {
-                Err("asr_loading") if wait && Instant::now() < deadline => {
+                // Loading or switching, or the hotkey-triggered load has not started yet.
+                Err(code)
+                    if wait
+                        && Instant::now() < deadline
+                        && (code == "asr_loading" || self.press_loading.load(Ordering::SeqCst)) =>
+                {
+                    if !told && self.local.switching() {
+                        told = true;
+                        self.emit(gpu_task::ASR_SWITCHING);
+                    }
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
                 r => return r,
@@ -519,7 +622,8 @@ impl Engine {
             fell_back.store(true, Ordering::SeqCst);
         }
 
-        debug!(
+        // Provider names only.
+        info!(
             ?mode,
             asr = asr.name(),
             llm = llm.as_ref().map(|l| l.name()).unwrap_or("-"),
@@ -553,28 +657,12 @@ impl Engine {
             *self.providers.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(built);
             self.lm_wake.notify_one();
         }
-        if diff.breeze_model && self.local.unload_breeze() {
-            info!("Breeze unloaded: the model file changed");
-        }
         self.reload_vocab();
-        if !self.local.sensevoice_loaded() && self.local.startup() != Startup::Loading {
-            if let Some(dir) = local_asr::sensevoice_model(&self.paths) {
-                if !self.sensevoice_loading.swap(true, Ordering::SeqCst) {
-                    let me = Arc::clone(self);
-                    let spawned = std::thread::Builder::new()
-                        .name("v2c-sv-load".into())
-                        .spawn(move || {
-                            if let Ok(sv) = local_asr::load_sensevoice(&dir) {
-                                me.local.set_sensevoice(sv);
-                            }
-                            me.sensevoice_loading.store(false, Ordering::SeqCst);
-                        });
-                    if spawned.is_err() {
-                        self.sensevoice_loading.store(false, Ordering::SeqCst);
-                    }
-                }
-            }
+        if diff.breeze_model {
+            self.gpu_stale.store(true, Ordering::SeqCst);
         }
+        // ASR choice, GPU settings, or a model that was just downloaded: decide now.
+        self.poll_now.store(true, Ordering::SeqCst);
         if diff.audio {
             warn!("audio settings change: restart required");
         }
@@ -585,9 +673,9 @@ impl Engine {
     }
 }
 
-/// The Breeze model file chosen by `started` is still the one `now` wants.
-fn quant_still_current(started: &Config, now: &Config) -> bool {
-    started.local.breeze_quant == now.local.breeze_quant
+/// The GPU model file chosen by `started` is still the one `now` wants.
+fn gpu_model_still_current(started: &Config, now: &Config) -> bool {
+    local_asr::gpu_model_key(started) == local_asr::gpu_model_key(now)
 }
 
 /// Error code after startup, or `None` when an engine is ready.
@@ -630,7 +718,8 @@ pub struct ConfigDiff {
     pub providers: bool,
     /// `[local] asr`, `[gpu]`: handled by the VRAM guard on its next poll.
     pub local_asr: bool,
-    /// `[local] breeze_quant`: a loaded Breeze is the wrong file and is dropped.
+    /// The GPU engine's model file changed (`[local] breeze_quant`, or `asr` switched between
+    /// TEA-ASR and Breeze / auto): a loaded GPU engine is the wrong one and is dropped.
     pub breeze_model: bool,
     /// `[audio]`: needs a restart (the recorder keeps its stream).
     pub audio: bool,
@@ -652,7 +741,7 @@ impl ConfigDiff {
             hotkey: a.hotkey != b.hotkey,
             providers,
             local_asr: a.local.asr != b.local.asr || a.gpu != b.gpu,
-            breeze_model: a.local.breeze_quant != b.local.breeze_quant,
+            breeze_model: local_asr::gpu_model_key(a) != local_asr::gpu_model_key(b),
             audio: a.audio != b.audio,
             history: a.history != b.history,
             other: a.polish != b.polish || a.apps != b.apps,
@@ -743,11 +832,38 @@ mod tests {
     fn breeze_loaded_for_an_old_quant_is_stale() {
         let a = Config::with_defaults();
         let mut b = a.clone();
-        assert!(quant_still_current(&a, &b));
+        assert!(gpu_model_still_current(&a, &b));
         b.polish.enabled = false;
-        assert!(quant_still_current(&a, &b));
+        assert!(gpu_model_still_current(&a, &b));
         b.local.breeze_quant = BreezeQuant::Q8_0;
-        assert!(!quant_still_current(&a, &b));
+        assert!(!gpu_model_still_current(&a, &b));
+    }
+
+    #[test]
+    fn switching_between_breeze_and_tea_drops_the_gpu_engine() {
+        let a = Config::with_defaults();
+        let mut tea = a.clone();
+        tea.local.asr = LocalAsr::TeaAsr;
+        assert!(!gpu_model_still_current(&a, &tea));
+        let d = ConfigDiff::between(&a, &tea);
+        assert!(d.local_asr && d.breeze_model && !d.providers);
+        // Back to Breeze (forced) too.
+        let mut breeze = a.clone();
+        breeze.local.asr = LocalAsr::Breeze;
+        assert!(ConfigDiff::between(&tea, &breeze).breeze_model);
+        // auto <-> breeze keep the same Breeze file.
+        assert!(!ConfigDiff::between(&a, &breeze).breeze_model);
+        // auto -> SenseVoice: the guard unloads Breeze (config reason). SenseVoice -> TEA-ASR:
+        // a Breeze still loaded is the wrong engine and is dropped right away.
+        let mut sv = a.clone();
+        sv.local.asr = LocalAsr::SenseVoice;
+        assert!(!ConfigDiff::between(&a, &sv).breeze_model);
+        assert!(ConfigDiff::between(&sv, &tea).breeze_model);
+        // A quantisation change does not touch a loaded TEA-ASR.
+        let mut tea8 = tea.clone();
+        tea8.local.breeze_quant = BreezeQuant::Q8_0;
+        assert!(gpu_model_still_current(&tea, &tea8));
+        assert!(!ConfigDiff::between(&tea, &tea8).breeze_model);
     }
 
     #[test]

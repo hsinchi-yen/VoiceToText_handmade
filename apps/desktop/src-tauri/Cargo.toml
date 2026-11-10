@@ -11,9 +11,10 @@ name = "v2c"
 path = "src/main.rs"
 
 [features]
-# Build Breeze (whisper.cpp) with CUDA. Off by default so `cargo test --workspace` works without
-# the CUDA Toolkit. Release builds enable it: `npm run tauri:build:cuda` (see package.json).
-cuda = ["v2c-asr-local/cuda"]
+# Build Breeze (whisper.cpp) with CUDA, plus TEA-ASR (transcribe.cpp, GPU-only, T1.12). Off by
+# default so `cargo test --workspace` works without the CUDA Toolkit. Release builds enable it:
+# `npm run tauri:build:cuda` (see package.json).
+cuda = ["v2c-asr-local/cuda", "v2c-asr-local/tea", "dep:transcribe-cpp-sys"]
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }
@@ -60,6 +61,16 @@ version = "1.1"
 # so build.rs can stage them for the installer. Same version and features as v2c-asr-local's.
 [target.'cfg(windows)'.dependencies.sherpa-onnx-sys]
 version = "=2.0.1"
+default-features = false
+features = ["shared"]
+
+# Not used from Rust either: with `cuda`, a direct dependency on the `links = "transcribe"`
+# package runs its build script before ours and hands us `DEP_TRANSCRIBE_RUNTIME_DIR`, the
+# folder with transcribe.dll + its ggml DLLs, so build.rs can stage them. Same version and
+# features as v2c-asr-local's `transcribe-cpp` (shared).
+[target.'cfg(windows)'.dependencies.transcribe-cpp-sys]
+version = "=0.4.1"
+optional = true
 default-features = false
 features = ["shared"]
 

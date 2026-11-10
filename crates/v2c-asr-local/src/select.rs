@@ -1,19 +1,24 @@
-//! Chooses the local ASR engine (Breeze on GPU or SenseVoice on CPU) from config and GPU state.
+//! Chooses the local ASR engine (Breeze or TEA-ASR on the GPU, or SenseVoice on the CPU) from
+//! config and GPU state.
 //!
 //! Pure logic, no I/O: the caller measures the GPU and fills [`GpuInfo`] (T1.10b reads it from
 //! NVML via [`crate::gpu_monitor`]). Runtime unload / yield decisions live in
-//! [`crate::gpu_guard`]. Rules (`tasks/plan.md` sections 5 and 5.1):
+//! [`crate::gpu_guard`]. Rules (`tasks/plan.md` section 5 and 5.1):
 //!
+//! 0. The *GPU engine* of a config is TEA-ASR when `[local] asr = "tea_asr"`, otherwise Breeze
+//!    ([`gpu_engine`]). [`GpuInfo`]'s and the guard's `breeze_*` fields describe that engine
+//!    (the names predate TEA-ASR).
 //! 1. `[local] asr = "sense_voice"` -> SenseVoice.
 //! 2. GPU disallowed (`[gpu] enabled = false` or `profile = "cpu_only"`) -> SenseVoice, even when
-//!    `asr = "breeze"`: Breeze is only supported on the GPU (it is far too slow on CPU).
-//! 3. Breeze model file missing -> SenseVoice.
+//!    `asr = "breeze"` / `"tea_asr"`: both run only on the GPU (far too slow on CPU).
+//! 3. The GPU engine's model file missing -> SenseVoice.
 //! 4. No usable CUDA device -> SenseVoice.
-//! 5. `asr = "breeze"` (explicit) -> Breeze without the VRAM check (the user forced it).
+//! 5. `asr = "breeze"` / `"tea_asr"` (explicit) -> that engine without the VRAM check (the user
+//!    forced it).
 //! 6. `asr = "auto"` -> Breeze only when `free_vram_mb >= vram_reserve_mb + breeze_vram_mb`;
-//!    otherwise SenseVoice.
+//!    otherwise SenseVoice. `auto` never picks TEA-ASR.
 //!
-//! `low_vram` behaves like `balanced` here: both run Breeze on the GPU (they differ in the LM
+//! `low_vram` behaves like `balanced` here: both run the GPU engine (they differ in the LM
 //! Studio model, which is not chosen here).
 
 use v2c_core::config::{Config, GpuProfile, LocalAsr};
@@ -25,6 +30,29 @@ pub enum LocalAsrKind {
     Breeze,
     /// SenseVoice-Small via sherpa-onnx on the CPU.
     SenseVoice,
+    /// TEA-ASR-1.1 (Qwen3-ASR fine-tune) via transcribe.cpp on the GPU.
+    TeaAsr,
+}
+
+impl LocalAsrKind {
+    /// Provider name used in logs (`asr="..."`).
+    pub fn provider_name(self) -> &'static str {
+        match self {
+            LocalAsrKind::Breeze => crate::breeze::PROVIDER_NAME,
+            LocalAsrKind::SenseVoice => crate::sensevoice::PROVIDER_NAME,
+            LocalAsrKind::TeaAsr => crate::tea::PROVIDER_NAME,
+        }
+    }
+}
+
+/// The GPU engine this config runs: TEA-ASR when `asr = "tea_asr"`, otherwise Breeze (`auto`
+/// and `breeze`; for `sense_voice` the answer is not used).
+pub fn gpu_engine(config: &Config) -> LocalAsrKind {
+    if config.local.asr == LocalAsr::TeaAsr {
+        LocalAsrKind::TeaAsr
+    } else {
+        LocalAsrKind::Breeze
+    }
 }
 
 /// GPU and model state at decision time. Plain data so it is easy to fill and to test.
@@ -37,11 +65,12 @@ pub struct GpuInfo {
     pub free_vram_mb: u64,
     /// Total VRAM, in MiB. Informational (settings UI); not used by [`pick`].
     pub total_vram_mb: u64,
-    /// The Breeze GGML file for the configured `breeze_quant` exists on disk.
+    /// The model file of the GPU engine ([`gpu_engine`]) exists on disk: the Breeze GGML for
+    /// the configured `breeze_quant`, or the TEA-ASR GGUF when `asr = "tea_asr"`.
     pub breeze_model_present: bool,
-    /// VRAM Breeze needs once loaded, in MiB (weights + compute buffers) for the configured
-    /// quantisation. Until T0.1 measures it, use [`crate::gpu_guard::breeze_vram_estimate_mb`];
-    /// it is not a config value because it depends on the model file.
+    /// VRAM the GPU engine needs once loaded, in MiB (weights + compute buffers). Use
+    /// [`crate::gpu_guard::gpu_vram_estimate_mb`]; it is not a config value because it depends
+    /// on the model file.
     pub breeze_vram_mb: u64,
 }
 
@@ -56,6 +85,8 @@ pub enum PickReason {
     CpuOnlyProfile,
     /// The Breeze model file is missing.
     BreezeModelMissing,
+    /// The TEA-ASR model file is missing (`asr = "tea_asr"`).
+    TeaModelMissing,
     /// No usable CUDA device (or built without the `cuda` feature).
     NoCuda,
     /// Not enough free VRAM after keeping `vram_reserve_mb` free.
@@ -71,12 +102,13 @@ pub struct Pick {
     pub reason: PickReason,
 }
 
-/// Rules 1-4: whether config and environment allow Breeze at all, before looking at VRAM.
-/// `Err` carries the reason SenseVoice must be used. Shared with [`crate::gpu_guard`].
+/// Rules 1-4: whether config and environment allow the GPU engine at all, before looking at
+/// VRAM. `gpu_model_present`: the [`gpu_engine`]'s model file exists. `Err` carries the reason
+/// SenseVoice must be used. Shared with [`crate::gpu_guard`].
 pub fn gpu_eligibility(
     config: &Config,
     cuda_available: bool,
-    breeze_model_present: bool,
+    gpu_model_present: bool,
 ) -> Result<(), PickReason> {
     if config.local.asr == LocalAsr::SenseVoice {
         return Err(PickReason::Configured);
@@ -87,8 +119,11 @@ pub fn gpu_eligibility(
     if config.gpu.profile == GpuProfile::CpuOnly {
         return Err(PickReason::CpuOnlyProfile);
     }
-    if !breeze_model_present {
-        return Err(PickReason::BreezeModelMissing);
+    if !gpu_model_present {
+        return Err(match gpu_engine(config) {
+            LocalAsrKind::TeaAsr => PickReason::TeaModelMissing,
+            _ => PickReason::BreezeModelMissing,
+        });
     }
     if !cuda_available {
         return Err(PickReason::NoCuda);
@@ -103,7 +138,7 @@ pub fn pick(config: &Config, gpu: &GpuInfo) -> LocalAsrKind {
 
 /// Like [`pick`], with the reason.
 pub fn pick_with_reason(config: &Config, gpu: &GpuInfo) -> Pick {
-    use LocalAsrKind::{Breeze, SenseVoice};
+    use LocalAsrKind::{Breeze, SenseVoice, TeaAsr};
     let sv = |reason| Pick {
         kind: SenseVoice,
         reason,
@@ -112,9 +147,14 @@ pub fn pick_with_reason(config: &Config, gpu: &GpuInfo) -> Pick {
     if let Err(reason) = gpu_eligibility(config, gpu.cuda_available, gpu.breeze_model_present) {
         return sv(reason);
     }
-    if config.local.asr == LocalAsr::Breeze {
+    let forced = match config.local.asr {
+        LocalAsr::Breeze => Some(Breeze),
+        LocalAsr::TeaAsr => Some(TeaAsr),
+        LocalAsr::Auto | LocalAsr::SenseVoice => None,
+    };
+    if let Some(kind) = forced {
         return Pick {
-            kind: Breeze,
+            kind,
             reason: PickReason::Configured,
         };
     }
@@ -302,5 +342,91 @@ mod tests {
             p(&cfg(LocalAsr::Breeze), &missing),
             (LocalAsrKind::SenseVoice, PickReason::BreezeModelMissing)
         );
+    }
+
+    #[test]
+    fn gpu_engine_is_tea_only_when_selected() {
+        assert_eq!(gpu_engine(&cfg(LocalAsr::Auto)), LocalAsrKind::Breeze);
+        assert_eq!(gpu_engine(&cfg(LocalAsr::Breeze)), LocalAsrKind::Breeze);
+        assert_eq!(gpu_engine(&cfg(LocalAsr::TeaAsr)), LocalAsrKind::TeaAsr);
+    }
+
+    #[test]
+    fn explicit_tea_skips_vram_check() {
+        let starved = GpuInfo {
+            free_vram_mb: 0,
+            ..good_gpu()
+        };
+        assert_eq!(
+            p(&cfg(LocalAsr::TeaAsr), &starved),
+            (LocalAsrKind::TeaAsr, PickReason::Configured)
+        );
+        assert_eq!(
+            p(&cfg(LocalAsr::TeaAsr), &good_gpu()),
+            (LocalAsrKind::TeaAsr, PickReason::Configured)
+        );
+    }
+
+    #[test]
+    fn tea_falls_back_to_sensevoice_with_a_reason() {
+        let c = cfg(LocalAsr::TeaAsr);
+        let no_cuda = GpuInfo {
+            cuda_available: false,
+            ..good_gpu()
+        };
+        assert_eq!(
+            p(&c, &no_cuda),
+            (LocalAsrKind::SenseVoice, PickReason::NoCuda)
+        );
+        let missing = GpuInfo {
+            breeze_model_present: false,
+            ..good_gpu()
+        };
+        assert_eq!(
+            p(&c, &missing),
+            (LocalAsrKind::SenseVoice, PickReason::TeaModelMissing)
+        );
+        let mut off = c.clone();
+        off.gpu.enabled = false;
+        assert_eq!(
+            p(&off, &good_gpu()),
+            (LocalAsrKind::SenseVoice, PickReason::GpuDisabled)
+        );
+        let mut cpu = c.clone();
+        cpu.gpu.profile = GpuProfile::CpuOnly;
+        assert_eq!(
+            p(&cpu, &good_gpu()),
+            (LocalAsrKind::SenseVoice, PickReason::CpuOnlyProfile)
+        );
+    }
+
+    #[test]
+    fn auto_never_picks_tea() {
+        // Even with plenty of VRAM, auto means Breeze (or SenseVoice), never TEA-ASR.
+        let g = GpuInfo {
+            free_vram_mb: 100_000,
+            ..good_gpu()
+        };
+        assert_eq!(pick(&cfg(LocalAsr::Auto), &g), LocalAsrKind::Breeze);
+    }
+
+    #[test]
+    fn tea_asr_config_round_trips_and_old_files_still_load() {
+        let c = Config::from_toml_str("[local]\nasr = \"tea_asr\"\n").unwrap();
+        assert_eq!(c.local.asr, LocalAsr::TeaAsr);
+        let back = Config::from_toml_str(&c.to_toml_string().unwrap()).unwrap();
+        assert_eq!(back.local.asr, LocalAsr::TeaAsr);
+        // A config.toml written before TEA-ASR existed.
+        let old =
+            Config::from_toml_str("[local]\nasr = \"breeze\"\nbreeze_quant = \"q8_0\"\n").unwrap();
+        assert_eq!(old.local.asr, LocalAsr::Breeze);
+        assert_eq!(Config::from_toml_str("").unwrap().local.asr, LocalAsr::Auto);
+    }
+
+    #[test]
+    fn provider_names() {
+        assert_eq!(LocalAsrKind::Breeze.provider_name(), "breeze");
+        assert_eq!(LocalAsrKind::SenseVoice.provider_name(), "sensevoice");
+        assert_eq!(LocalAsrKind::TeaAsr.provider_name(), "tea_asr");
     }
 }

@@ -10,10 +10,13 @@ publish.workspace = true
 # CUDA is opt-in so that `cargo build --workspace` works on machines without the CUDA Toolkit.
 # The release desktop build enables it: `cargo build --release -p v2c-cli --features cuda`.
 default = []
-cuda = ["whisper-rs/cuda"]
+cuda = ["whisper-rs/cuda", "transcribe-cpp?/cuda"]
 # SenseVoice-Small (CPU) via the official sherpa-onnx Rust API. Opt-in because its build script
 # downloads ~40 MB of prebuilt libraries from GitHub; the desktop app enables it.
 sensevoice = ["dep:sherpa-onnx"]
+# TEA-ASR-1.1 (Qwen3-ASR fine-tune, GGUF) via transcribe.cpp (T1.12). GPU-only in practice: pair
+# it with `cuda`. Opt-in because it compiles a second ggml tree with CMake.
+tea = ["dep:transcribe-cpp"]
 
 [dependencies]
 v2c-core.workspace = true
@@ -29,6 +32,11 @@ sherpa-onnx = { version = "=2.0.1", optional = true, default-features = false, f
 # NVML VRAM reader (T1.10b). Pure Rust; loads nvml.dll / libnvidia-ml.so.1 at runtime via
 # libloading, so no build-time NVIDIA dependency and no feature gate is needed.
 nvml-wrapper.workspace = true
+# TEA-ASR runtime. `shared`: transcribe.cpp and its own ggml live in transcribe.dll + ggml*.dll,
+# so they never meet whisper-rs's statically linked ggml at link time (duplicate symbols).
+# No default features: the default `metal` is Apple-only. The DLLs must sit next to the
+# executable; the -sys build script copies them into target/<profile>/.
+transcribe-cpp = { version = "=0.4.1", optional = true, default-features = false, features = ["shared"] }
 
 [dev-dependencies]
 # WAV reading in the ignored SenseVoice smoke test.

@@ -1,8 +1,47 @@
 # 地端模型設定：顯示卡記憶體（VRAM）
 
-v2c 預設全部在你自己的電腦上執行：語音辨識用 Breeze-ASR-25（NVIDIA 顯示卡）或 SenseVoice-Small（CPU），潤飾用你自己開的 LM Studio。這份文件說明 v2c 怎麼和畫面輸出、遊戲、剪片軟體分享顯示卡記憶體，以及 LM Studio 和 NVIDIA 驅動的建議設定。
+v2c 預設全部在你自己的電腦上執行：語音辨識用 Breeze-ASR-25 或 TEA-ASR-1.1（NVIDIA 顯示卡）或 SenseVoice-Small（CPU），潤飾用你自己開的 LM Studio。這份文件說明 v2c 怎麼和畫面輸出、遊戲、剪片軟體分享顯示卡記憶體，以及 LM Studio 和 NVIDIA 驅動的建議設定。
 
 > **注意：本文的 VRAM 數字都是估計值**，要等 T0.1 用 `nvidia-smi` 實測後回填（見 `tasks/spike-results.md`）。實測前請以設定頁的即時使用條為準。
+
+## 三個語音辨識引擎
+
+在設定頁「地端語音模型 → 辨識引擎」選擇，或在 `config.toml` 寫 `[local] asr = "..."`。改了立即生效（幾秒內換好引擎，不用重新啟動）。
+
+| 引擎 | 設定值 | 跑在哪裡 | 特色 | 顯存（實測） |
+|------|--------|----------|------|--------------|
+| 自動（預設） | `auto` | 有 NVIDIA 且放得下 → Breeze；否則 SenseVoice | 不會自動選 TEA-ASR | — |
+| Breeze-ASR-25 | `breeze` | 顯示卡 | 台灣華語，輸出大多是繁體、有標點 | q5_0 約 1.7 GB；q8_0 約 2.1 GB |
+| TEA-ASR-1.1 | `tea_asr` | 顯示卡（只支援 GPU） | 以 Qwen3-ASR-1.7B 微調，台灣華語與中英夾雜較準，輸出繁體台灣用語（偶爾夾一個簡體字，例如「还」，會被 v2c 的繁體檢查改正）；**幾乎不加標點**，靠潤飾補上（潤飾關閉時照原樣輸出） | 約 2.0 GB（載入後），辨識時最高約 2.6 GB（Q8_0） |
+| SenseVoice-Small | `sense_voice` | CPU | 不需要顯示卡；輸出簡體，v2c 會轉成繁體 | 0 |
+
+- **同一時間只載入一個模型**：Breeze、TEA-ASR、SenseVoice 三者最多一個在記憶體裡。換模型時（改設定、讓路、恢復）一定先卸載舊的、確認釋放後才載入新的；這段期間按熱鍵說的話會等新模型載入完再辨識（浮動標籤顯示「切換模型中…」，TEA-ASR 約 10 秒、Breeze 約 3 秒）。SenseVoice 只在用得到時才載入（你選了它，或 GPU 模型讓路時暫代），GPU 恢復後就換回 GPU 模型並卸載 SenseVoice。
+- 選了 `breeze` 或 `tea_asr` 時，v2c 不先檢查可用顯存（你手動指定的），但全螢幕程式、`heavy_apps` 名單、閒置卸載的規則（見下方）照樣適用；讓路時改用 SenseVoice。
+- 選了 `tea_asr` 但「不用顯卡」方案、沒有 NVIDIA／CUDA、或模型檔不在，也改用 SenseVoice，日誌會寫原因（例如 `TeaModelMissing`）。
+- 本機實測（2026-11-11，RTX 2060 6 GB，`tests/fixtures/audio` 的錄音）：10 段錄音（中文、英文、中英夾雜，各約 5～8 秒）平均 CER：TEA-ASR **1.0%**、Breeze q8_0 **3.6%**；每段辨識時間 TEA-ASR 平均 240 ms、Breeze q8_0 平均 693 ms（`--lang zh`，和 App 相同）。TEA-ASR 載入約 9.6 秒（Breeze 約 2～3 秒），之後常駐。63 秒的長錄音切成 3 段，CER 1.8%、辨識 2.4 秒。
+
+### 安裝 TEA-ASR-1.1 模型
+
+- 來源：Hugging Face [dorajim15/TEA-ASR-1.1-transcribe-cpp](https://huggingface.co/dorajim15/TEA-ASR-1.1-transcribe-cpp)（社群把 [JacobLinCool/TEA-ASR-1.1](https://huggingface.co/JacobLinCool/TEA-ASR-1.1) 轉成 transcribe.cpp 用的 GGUF；MIT）
+- 檔案：`TEA-ASR-1.1-Q8_0.gguf`，2,184,763,808 bytes（約 2.18 GB）
+- SHA-256：`2e4aeb45c9e7f421d99909e29e49a54e204d70ed0e77bebc3f18a135d78298d0`
+
+**方法一：在設定頁下載**。設定頁「地端語音模型」下方的「TEA-ASR-1.1 模型 → 下載」，會下載到 `%LOCALAPPDATA%\v2c\models\` 並驗證 SHA-256；中斷可以按「繼續下載」接著下載。
+
+**方法二：手動放置**：
+
+```powershell
+$dst = "$env:LOCALAPPDATA\v2c\models"
+New-Item -ItemType Directory -Force $dst | Out-Null
+curl.exe -L -o "$dst\TEA-ASR-1.1-Q8_0.gguf" https://huggingface.co/dorajim15/TEA-ASR-1.1-transcribe-cpp/resolve/main/TEA-ASR-1.1-Q8_0.gguf
+(Get-FileHash "$dst\TEA-ASR-1.1-Q8_0.gguf" -Algorithm SHA256).Hash   # 要和上面的 SHA-256 一樣
+```
+
+檔名必須是 `TEA-ASR-1.1-Q8_0.gguf`，直接放在 `models` 資料夾裡（不要再包一層資料夾）。
+
+**選用**：設定頁「地端語音模型 → 辨識引擎」選「TEA-ASR-1.1（顯示卡）」（「潤飾與用途 → 語音辨識」要是「地端」）。日誌（`%APPDATA%\v2c\logs`）會出現 `GPU ASR active asr="tea_asr"`，之後每句話出現 `providers for utterance ... asr="tea_asr"`。
+
+技術細節：TEA-ASR 由 transcribe.cpp 執行（安裝檔附 `transcribe.dll` 與它自己的 `ggml*.dll`，和 Breeze 的 whisper.cpp 分開）；超過 30 秒的錄音會在最安靜的地方切段、依序辨識再接起來；語言固定為中文（中英夾雜時英文照樣保留）。
 
 ## 三種方案
 

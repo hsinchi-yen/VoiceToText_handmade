@@ -1,4 +1,4 @@
-//! `v2c-cli transcribe <wav> --asr breeze|sensevoice --model <path>`: recognise one WAV file
+//! `v2c-cli transcribe <wav> --asr breeze|sensevoice|tea --model <path>`: recognise one WAV file
 //! and print the text.
 //!
 //! Printing recognised text to stdout is intentional here: this is a developer tool run on the
@@ -9,8 +9,8 @@ use std::time::Instant;
 
 use anyhow::{bail, Context};
 use v2c_asr_local::{
-    sensevoice, BreezeAsr, BreezeOptions, BreezeOutput, DecodeLang, LanguageMode, SenseVoiceAsr,
-    SenseVoiceLanguage, SenseVoiceOptions, Transcript,
+    sensevoice, tea, BreezeAsr, BreezeOptions, BreezeOutput, DecodeLang, LanguageMode,
+    SenseVoiceAsr, SenseVoiceLanguage, SenseVoiceOptions, TeaAsr, TeaOptions, Transcript,
 };
 use v2c_core::{
     asr::AsrContext, audio::AudioClip, audio::SAMPLE_RATE, postprocess::zh_tw::to_zh_tw,
@@ -20,10 +20,11 @@ use v2c_core::{
 pub struct Args {
     /// 16 kHz mono WAV file.
     pub wav: PathBuf,
-    /// ASR provider: breeze | sensevoice | <cloud id>.
+    /// ASR provider: breeze | sensevoice | tea | <cloud id>.
     #[arg(long, default_value = "breeze")]
     pub asr: String,
-    /// Model for local providers: the GGML file for breeze, the model directory for sensevoice.
+    /// Model for local providers: the GGML file for breeze, the model directory for sensevoice,
+    /// the GGUF file for tea (TEA-ASR-1.1-Q8_0.gguf).
     #[arg(long)]
     pub model: Option<PathBuf>,
     /// Vocabulary file (one entry per line) for the ASR initial prompt.
@@ -34,7 +35,8 @@ pub struct Args {
 }
 
 /// Breeze tuning flags shared by `transcribe` and `bench`. SenseVoice uses `--lang`
-/// (`detect`/`auto` = model auto-detect) and `--threads`; the other flags are Breeze-only.
+/// (`detect`/`auto` = model auto-detect) and `--threads`; TEA-ASR uses `--cpu` only (language is
+/// always `zh`); the other flags are Breeze-only.
 #[derive(clap::Args, Clone)]
 pub struct BreezeArgs {
     /// Decode language: `detect` (detect first; en -> en, else zh), `zh`, or `en`.
@@ -85,12 +87,17 @@ impl BreezeArgs {
         }
         Ok(o)
     }
+
+    pub fn tea_options(&self) -> TeaOptions {
+        TeaOptions { use_gpu: !self.cpu }
+    }
 }
 
 /// A loaded local ASR engine.
 pub enum Engine {
     Breeze(BreezeAsr),
     SenseVoice(SenseVoiceAsr),
+    TeaAsr(TeaAsr),
 }
 
 /// Result of one recognition with a timing/language summary (the summary holds no text).
@@ -113,7 +120,10 @@ impl EngineOutput {
 
 impl Engine {
     /// Recognises `clip`; the text comes back converted with `zh_tw` (see
-    /// [`EngineOutput::with_zh_tw`]), so CER and the simplified check match the app.
+    /// [`EngineOutput::with_zh_tw`]), exactly as the app pipeline does for every ASR provider,
+    /// so CER and the simplified check match the app. The providers themselves do not convert;
+    /// `zh_tw` only rewrites Simplified-only characters, so Traditional text (TEA-ASR's normal
+    /// output) passes unchanged, while the odd Simplified character TEA-ASR emits is fixed.
     pub fn run(&self, clip: &AudioClip, ctx: &AsrContext) -> v2c_core::Result<EngineOutput> {
         self.run_raw(clip, ctx).map(EngineOutput::with_zh_tw)
     }
@@ -133,6 +143,17 @@ impl Engine {
                 total_ms: o.decode_ms,
                 transcript: o.transcript,
             }),
+            Engine::TeaAsr(t) => t.transcribe_blocking(clip, ctx).map(|o| EngineOutput {
+                summary: format!(
+                    "asr {} ms (tea_asr, {}), {} chunk(s), lang {:?}",
+                    o.decode_ms,
+                    if t.options().use_gpu { "cuda" } else { "cpu" },
+                    o.chunks,
+                    o.transcript.lang
+                ),
+                total_ms: o.decode_ms,
+                transcript: o.transcript,
+            }),
         }
     }
 }
@@ -141,8 +162,42 @@ impl Engine {
 pub fn load_engine(asr: &str, model: Option<&Path>, args: &BreezeArgs) -> anyhow::Result<Engine> {
     match asr {
         "sensevoice" => load_sensevoice(model, args).map(Engine::SenseVoice),
+        "tea" | "tea_asr" => load_tea(model, args).map(Engine::TeaAsr),
         _ => load_breeze(asr, model, args).map(Engine::Breeze),
     }
+}
+
+/// Loads TEA-ASR-1.1 from its GGUF file, printing load time.
+pub fn load_tea(model: Option<&Path>, args: &BreezeArgs) -> anyhow::Result<TeaAsr> {
+    const HINT: &str = "download TEA-ASR-1.1-Q8_0.gguf from \
+        https://huggingface.co/dorajim15/TEA-ASR-1.1-transcribe-cpp";
+    if !tea::tea_enabled() {
+        bail!("this v2c-cli was built without TEA-ASR; rebuild with `--features tea,cuda`");
+    }
+    let Some(model) = model else {
+        bail!(
+            "--model <path> is required for tea (the {} file; {HINT})",
+            tea::MODEL_FILE
+        );
+    };
+    if !model.is_file() {
+        bail!("model file not found: {} ({HINT})", model.display());
+    }
+    let opts = args.tea_options();
+    if opts.use_gpu && !v2c_asr_local::breeze::cuda_enabled() {
+        bail!("TEA-ASR runs on the GPU only; rebuild with `--features tea,cuda` (or pass --cpu to test on CPU)");
+    }
+    let t = Instant::now();
+    let tea = TeaAsr::load(model, opts).context("loading TEA-ASR model")?;
+    eprintln!(
+        "loaded {} in {} ms (gpu: {}, language: {}, max chunk: {} s)",
+        model.display(),
+        t.elapsed().as_millis(),
+        tea.options().use_gpu,
+        tea::LANGUAGE,
+        tea::MAX_CHUNK_SECS,
+    );
+    Ok(tea)
 }
 
 /// Loads SenseVoice from a sherpa-onnx model directory, printing load time.
@@ -189,7 +244,7 @@ pub fn load_breeze(
     args: &BreezeArgs,
 ) -> anyhow::Result<BreezeAsr> {
     if asr != "breeze" {
-        bail!("ASR provider `{asr}` is not available in the CLI yet (only `breeze`, `sensevoice`)");
+        bail!("ASR provider `{asr}` is not available in the CLI yet (only `breeze`, `sensevoice`, `tea`)");
     }
     let Some(model) = model else {
         bail!(
@@ -449,6 +504,29 @@ mod tests {
             assert!(err.contains("not found"), "{err}");
         } else {
             assert!(err.contains("--features sensevoice"), "{err}");
+        }
+    }
+
+    #[test]
+    fn tea_load_errors_are_clear() {
+        let args = BreezeArgs {
+            lang: "detect".into(),
+            cpu: false,
+            no_flash_attn: false,
+            audio_ctx: None,
+            threads: None,
+        };
+        assert!(args.tea_options().use_gpu);
+        let err = load_engine("tea", None, &args).err().unwrap().to_string();
+        if tea::tea_enabled() {
+            assert!(err.contains("--model"), "{err}");
+            let err = load_engine("tea", Some(Path::new("no/such/model.gguf")), &args)
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(err.contains("not found"), "{err}");
+        } else {
+            assert!(err.contains("--features tea"), "{err}");
         }
     }
 

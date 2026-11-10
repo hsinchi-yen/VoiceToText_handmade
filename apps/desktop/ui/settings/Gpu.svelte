@@ -39,6 +39,9 @@
   const pct = (mb) => (usage && usage.total_mb ? `${(mb / usage.total_mb) * 100}%` : "0%");
   const others = $derived(usage ? Math.max(0, usage.used_mb - (usage.v2c_mb ?? 0)) : 0);
   const roomForBreeze = $derived(usage ? usage.free_mb - usage.reserve_mb >= usage.breeze_need_mb : false);
+  // TEA-ASR-1.1 Q8_0, measured (docs/local-setup.md); matches gpu_guard::TEA_ASR_Q8_0_VRAM_MB.
+  const TEA_NEED_MB = 2600;
+  const tea = $derived(view.config.local.asr === "tea_asr");
 
   async function saveNumber(e, field, old) {
     const ok = await save([{ field, value: Number(e.currentTarget.value) }]);
@@ -66,8 +69,12 @@
       <span class="sw reserve-sw"></span>保留 {usage.reserve_mb} MB
     </p>
     <p class="hint">
-      Breeze（{view.config.local.breeze_quant}）約需 {usage.breeze_need_mb} MB：
-      {roomForBreeze ? "目前放得下。" : "目前可用量扣掉保留額度後放不下，會改用 CPU。"}
+      {#if tea}
+        TEA-ASR-1.1 約需 {TEA_NEED_MB} MB：已手動指定，不先檢查可用量；全螢幕或重度程式在前景時改用 CPU。
+      {:else}
+        Breeze（{view.config.local.breeze_quant}）約需 {usage.breeze_need_mb} MB：
+        {roomForBreeze ? "目前放得下。" : "目前可用量扣掉保留額度後放不下，會改用 CPU。"}
+      {/if}
       {usage.cuda_build ? "" : "這個版本未啟用 CUDA。"}
     </p>
   {/if}

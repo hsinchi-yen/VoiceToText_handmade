@@ -40,14 +40,19 @@
 //!
 //! Profiles: `cpu_only` (or `enabled = false`) always means CPU; `balanced` and `low_vram` are
 //! identical here (they differ only in the LM Studio model, see `docs/local-setup.md`).
-//! `[local] asr = "breeze"` (forced) skips the VRAM checks, like [`crate::select::pick`], but
-//! still yields to heavy apps and unloads when idle.
+//! `[local] asr = "breeze"` or `"tea_asr"` (forced) skips the VRAM checks, like
+//! [`crate::select::pick`], but still yields to heavy apps and unloads when idle.
+//!
+//! TEA-ASR (T1.12) is guarded exactly like Breeze: "Breeze" in this module means the GPU engine
+//! of the config ([`crate::select::gpu_engine`]), and [`gpu_vram_estimate_mb`] gives its need.
+//! [`GpuGuard::record_load`] keys its measurement by the estimate, so the two engines (which
+//! have different estimates) never share a measured value.
 
 use std::time::{Duration, Instant};
 
 use v2c_core::config::{BreezeQuant, Config, KeepLoaded, LocalAsr};
 
-use crate::select::{gpu_eligibility, PickReason};
+use crate::select::{gpu_eligibility, gpu_engine, LocalAsrKind, PickReason};
 
 /// How often the caller should call [`GpuGuard::decide`] (plan 5.1: every 5 seconds).
 pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -59,12 +64,26 @@ pub const BREEZE_Q5_0_VRAM_MB: u64 = 1536;
 /// Estimated VRAM for Breeze-ASR-25 q8_0, MiB (plan 5.1: about 0.6 GB more than q5_0).
 pub const BREEZE_Q8_0_VRAM_MB: u64 = 2150;
 
+/// Estimated VRAM TEA-ASR-1.1 Q8_0 needs (2.18 GB GGUF + compute buffers), MiB. Measured on
+/// 2026-11-11 (RTX 2060 6 GB, transcribe.cpp 0.4.1 CUDA): about 2050 MiB after loading, about
+/// 2580 MiB peak while recognising. At runtime the guard prefers its own (load-time) measurement.
+pub const TEA_ASR_Q8_0_VRAM_MB: u64 = 2600;
+
 /// VRAM estimate for a Breeze quantisation; fills [`crate::select::GpuInfo::breeze_vram_mb`]
 /// and [`GuardInput::breeze_vram_mb`].
 pub fn breeze_vram_estimate_mb(quant: BreezeQuant) -> u64 {
     match quant {
         BreezeQuant::Q5_0 => BREEZE_Q5_0_VRAM_MB,
         BreezeQuant::Q8_0 => BREEZE_Q8_0_VRAM_MB,
+    }
+}
+
+/// VRAM estimate for the GPU engine of `config` ([`crate::select::gpu_engine`]): TEA-ASR when
+/// `asr = "tea_asr"`, otherwise Breeze with the configured quantisation.
+pub fn gpu_vram_estimate_mb(config: &Config) -> u64 {
+    match gpu_engine(config) {
+        LocalAsrKind::TeaAsr => TEA_ASR_Q8_0_VRAM_MB,
+        _ => breeze_vram_estimate_mb(config.local.breeze_quant),
     }
 }
 
@@ -282,7 +301,7 @@ impl GpuGuard {
         if let Some(reason) = Self::should_yield(config, input.foreground.as_ref()) {
             return Err(reason);
         }
-        if config.local.asr == LocalAsr::Breeze {
+        if matches!(config.local.asr, LocalAsr::Breeze | LocalAsr::TeaAsr) {
             // Forced by the user: no VRAM check (same as `select::pick`).
             return Ok(());
         }
@@ -512,6 +531,12 @@ mod tests {
     fn estimates_follow_quant() {
         assert_eq!(breeze_vram_estimate_mb(BreezeQuant::Q5_0), 1536);
         assert_eq!(breeze_vram_estimate_mb(BreezeQuant::Q8_0), 2150);
+        let mut c = Config::with_defaults();
+        assert_eq!(gpu_vram_estimate_mb(&c), 1536);
+        c.local.breeze_quant = BreezeQuant::Q8_0;
+        assert_eq!(gpu_vram_estimate_mb(&c), 2150);
+        c.local.asr = LocalAsr::TeaAsr;
+        assert_eq!(gpu_vram_estimate_mb(&c), TEA_ASR_Q8_0_VRAM_MB);
         assert_eq!(
             breeze_vram_estimate_mb(cfg().local.breeze_quant),
             BREEZE_Q5_0_VRAM_MB
@@ -1132,5 +1157,62 @@ mod tests {
             i.busy = true;
             assert_eq!(g().decide(&c, &i), GuardAction::Keep);
         }
+    }
+
+    #[test]
+    fn forced_tea_is_guarded_like_forced_breeze() {
+        let t = Instant::now();
+        let mut c = cfg();
+        c.local.asr = LocalAsr::TeaAsr;
+        // No VRAM check when forced ...
+        assert_eq!(g().can_load(&c, &input(t, 0, false)), Ok(()));
+        let mut i = input(t, 0, false);
+        i.gpu = None;
+        assert_eq!(g().can_load(&c, &i), Ok(()));
+        // ... but heavy apps and fullscreen still move it to the CPU engine.
+        let mut i = input(t, 6000, true);
+        i.foreground = fg("blender.exe", false);
+        assert_eq!(
+            g().decide(&c, &i),
+            GuardAction::Unload(GuardReason::HeavyApp)
+        );
+        let mut i = input(t, 6000, false);
+        i.foreground = fg("game.exe", true);
+        assert_eq!(
+            g().decide(&c, &i),
+            GuardAction::UseCpu(GuardReason::Fullscreen)
+        );
+        // Missing TEA model or no CUDA -> SenseVoice, with the TEA reason.
+        let mut i = input(t, 6000, true);
+        i.breeze_model_present = false;
+        assert_eq!(
+            g().decide(&c, &i),
+            GuardAction::Unload(GuardReason::Engine(PickReason::TeaModelMissing))
+        );
+        // Idle unload applies too.
+        let mut i = input(t, 6000, true);
+        i.idle = Duration::from_secs(16 * 60);
+        assert_eq!(g().decide(&c, &i), GuardAction::Unload(GuardReason::Idle));
+    }
+
+    #[test]
+    fn measurements_do_not_leak_between_breeze_and_tea() {
+        let t = Instant::now();
+        let mut guard = g();
+        let before = GpuSnapshot {
+            free_mb: 5000,
+            total_mb: 6144,
+            used_by_us_mb: None,
+        };
+        let after = GpuSnapshot {
+            free_mb: 2200,
+            ..before
+        };
+        guard.record_load(TEA_ASR_Q8_0_VRAM_MB, Some(before), Some(after), t);
+        assert_eq!(guard.breeze_need_mb(TEA_ASR_Q8_0_VRAM_MB), 2800);
+        assert_eq!(
+            guard.breeze_need_mb(BREEZE_Q5_0_VRAM_MB),
+            BREEZE_Q5_0_VRAM_MB
+        );
     }
 }

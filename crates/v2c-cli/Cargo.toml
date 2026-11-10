@@ -16,6 +16,9 @@ cuda = ["v2c-asr-local/cuda"]
 # SenseVoice-Small on CPU via sherpa-onnx (downloads prebuilt sherpa-onnx libs at build time):
 # `cargo run -p v2c-cli --release --features sensevoice -- bench --asr sensevoice --model <dir> ...`
 sensevoice = ["v2c-asr-local/sensevoice"]
+# TEA-ASR-1.1 via transcribe.cpp (GPU; use with `cuda`):
+# `cargo run -p v2c-cli --release --features tea,cuda -- bench --asr tea --model <gguf> ...`
+tea = ["v2c-asr-local/tea"]
 
 [dependencies]
 v2c-core.workspace = true
