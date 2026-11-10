@@ -75,7 +75,7 @@ llm_model = "Qwen3.8-27B-UD-Q6_K_L"   # 自訂端點沒有預設模型，一定�
 
 關閉思考（請求加上 `"chat_template_kwargs": {"enable_thinking": false}`）實測約 0.23 秒。
 
-> **0.1.3 起（main 分支 commit d7e6875）**：OpenAI 相容請求已一律送出 `chat_template_kwargs: {"enable_thinking": false}`，不需要設定。上表是這個分支（尚未包含該修改）的實測結果。
+> **0.1.3 起（main 分支 commit d7e6875）**：OpenAI 相容請求已一律送出 `chat_template_kwargs: {"enable_thinking": false}`，不需要設定。上表是尚未包含該修改時的實測結果；套用後同一組測試：潤飾直接呼叫約 0.66 秒、經管線約 0.77 秒（1 秒預算內，沒有退回）、中翻英約 0.66～1.0 秒，全部成功。
 
 #### 待核准：可設定的額外請求欄位
 
@@ -107,7 +107,7 @@ llm_extra_body = { chat_template_kwargs = { enable_thinking = false } }
 | 方案 | 說明 | 狀態 |
 |------|------|------|
 | SenseVoice-Small（CPU，本機） | 需要 sherpa-onnx 共享庫與約 160 MB 模型 | **未驗證**（這台機器沒有下載，也沒有麥克風） |
-| 遠端相容語音辨識端點 | 任何提供 `POST /v1/audio/transcriptions`（OpenAI 格式）的伺服器，例如 whisper.cpp `whisper-server`（見 `docs/lan-server-guide.md`） | 格式已用 mock 測試驗證；**實機未驗證**（目前的伺服器需要金鑰，尚未取得） |
+| 遠端相容語音辨識端點 | 任何提供 `POST /v1/audio/transcriptions`（OpenAI 格式）的伺服器，例如 whisper.cpp `whisper-server`（見 `docs/lan-server-guide.md`） | 已實測（英文合成語音，見下方）；**中文辨識未驗證** |
 | Breeze-ASR-25（GPU） | 需要 NVIDIA＋CUDA | 這台機器不可用 |
 
 ### 遠端語音辨識端點
@@ -118,14 +118,25 @@ asr = "lan-asr"
 cloud_fallback_to_local = true
 
 [timeouts]
-asr_cloud_ms = 5000
+asr_cloud_ms = 8000             # 預設 5000；實測這台伺服器一句約 5.6 秒，見下方
 
 [[cloud]]
 id = "lan-asr"
 kind = "open_ai_compat"
 base_url = "http://192.168.1.50:8002/v1"
-asr_model = "breeze-asr-25"     # 伺服器的模型名稱；自訂端點沒有預設值，不填則不會使用這個服務
+asr_model = "breeze-asr-25"     # 伺服器的模型名稱（GET /v1/models 列出的 id）；自訂端點沒有預設值，不填則不會使用這個服務
 ```
+
+2026-11-10 實測（Breeze-ASR-25 伺服器，需要金鑰；音訊是 3.1 秒的英文合成語音 "Please send the meeting notes to the team by Friday."，不是真人錄音）：
+
+| 項目 | 結果 |
+|------|------|
+| 辨識結果 | 與原句相同（忽略大小寫與標點，字元錯誤率 0） |
+| 每次辨識耗時 | 約 5.6～5.7 秒（連跑 3 次都一樣，不是冷啟動） |
+| 預設逾時 `asr_cloud_ms = 5000` | **每次都逾時**；要用這台伺服器，請把 `asr_cloud_ms` 調到 8000 左右 |
+| 端到端（辨識 → 潤飾 → 注入計畫） | 辨識約 5.7 秒；潤飾在思考開啟時 1 秒預算逾時並退回去贅字（總計約 6.7 秒），關閉思考（0.1.3）時約 0.4～0.6 秒成功（總計約 6.1～6.3 秒） |
+
+中文辨識沒有驗證：這台機器的合成語音工具（flite）只能產生英文，也沒有麥克風可以錄中文。
 
 - v2c 送出 multipart：`file`（16 kHz 單聲道 WAV）、`model`、`response_format=json`，有個人詞彙時加 `prompt`；預期回應 `{"text": "..."}`。
 - 伺服器要求金鑰時，在設定視窗「雲端服務」頁貼上（存在系統金鑰庫）。金鑰錯誤會顯示「金鑰錯誤」（HTTP 401），端點不支援語音會顯示「端點不支援音訊」（404／405／501）。
@@ -144,7 +155,7 @@ cloud_fallback_to_local = true
 enabled = true
 
 [timeouts]
-asr_cloud_ms = 5000
+asr_cloud_ms = 8000    # 見第 3 節實測：5000 對這台語音伺服器太短
 llm_cloud_ms = 3000
 
 [gpu]
@@ -179,8 +190,12 @@ cargo test -p v2c-platform --test linux_llm -- --ignored llm_real --nocapture --
 V2C_TEST_ASR_BASE_URL=http://192.168.1.50:8002/v1 \
 V2C_TEST_ASR_MODEL=breeze-asr-25 \
 V2C_TEST_ASR_KEY_FILE=$HOME/.config/v2c-test/asr.key \
-V2C_TEST_ASR_WAV=tests/fixtures/audio/sample.wav \
+V2C_TEST_ASR_WAV=tests/tmp/sample.wav \
+V2C_TEST_ASR_EXPECT="Please send the meeting notes to the team by Friday." \
 cargo test -p v2c-platform --test linux_asr -- --ignored asr_real --nocapture
+
+# 端到端（真實語音辨識 → 管線 → 真實潤飾 → 注入計畫）：同時設定上面兩組變數
+cargo test -p v2c-platform --test linux_e2e_sim -- --ignored e2e_real --nocapture
 ```
 
-選填：`V2C_TEST_LLM_TIMEOUT_MS`（預設 15000）、`V2C_TEST_ASR_TIMEOUT_MS`（預設 30000）。
+選填：`V2C_TEST_LLM_TIMEOUT_MS`（預設 15000）、`V2C_TEST_ASR_TIMEOUT_MS`（預設為設定檔預設值 5000）、`V2C_TEST_ASR_RUNS`（預設 2）。`V2C_TEST_ASR_EXPECT` 只用來在測試裡比對，輸出只有「是否相同」與字元錯誤率。
