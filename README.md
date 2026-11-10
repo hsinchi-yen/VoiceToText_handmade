@@ -78,8 +78,10 @@ v2c 就會自動使用。建議設定與顯示卡記憶體的分配請看 [docs/
 ## 雲端服務（選用）
 
 可以在「雲端服務」頁用精靈串接 Gemini、OpenAI、Claude 或自訂的 OpenAI 相容端點，並指定把語音辨識／潤飾／中翻英哪些交給雲端。
-雲端服務會依用量向你收費。步驟與各家取得金鑰的方法請看 [docs/cloud-setup.md](docs/cloud-setup.md)。
+雲端服務會依用量向你收費。步驟與各家取得金鑰的方法請看 [docs/cloud-setup.md](docs/cloud-setup.md)，各家推薦的模型與設定請看 [docs/cloud-models.md](docs/cloud-models.md)。
 系統列選單的「全部改用地端」可以隨時一鍵切回。
+
+想把模型放在區網裡另一台 Ubuntu 電腦（Breeze 語音辨識＋Qwen／GLM 文字模型，CPU 或 NVIDIA GPU），讓多台電腦共用，請看 [docs/lan-server-guide.md](docs/lan-server-guide.md)。
 
 ## 隱私
 
