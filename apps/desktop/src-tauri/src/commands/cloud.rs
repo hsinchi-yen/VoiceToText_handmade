@@ -11,14 +11,15 @@
 //! - `cloud_save(draft, purposes)`: key → OS keyring, service + `[route]` → `config.toml`,
 //!   then `v2c:config-changed`.
 //! - `cloud_remove(id)`: deletes the key and the service; routes using it go back to local.
-//!
-//! Display names (T1.13): a compatible endpoint may carry a user-chosen `name` (e.g.
-//! 「區網 Qwen」); [`display_name`] is the one display rule (name, else `id`). Names are
-//! checked by [`normalize_name`] and must not clash with another service's name or id
-//! (case-insensitive). The `id`, `[route]`, and keyring entry never change on rename, and
-//! logs keep using the `id` only.
 //! - `cloud_open_key_page(kind)`: opens the vendor's API-key page (fixed allow-list) in the
 //!   default browser, so the webview needs no opener permission.
+//!
+//! Display names (T1.13): a compatible endpoint may carry a user-chosen `name` (e.g.
+//! 「區網 Qwen」); [`display_name`] is the one display rule (name for compatible endpoints,
+//! else `id`). Names are checked by [`normalize_name`] (`local` is reserved) and must not
+//! clash with another service's name or id (case-insensitive); [`new_id`] skips ids already
+//! used as names. The `id`, `[route]`, and keyring entry never change on rename, and logs
+//! keep using the `id` only.
 //!
 //! Key hygiene: keys come in only inside [`CloudDraft`] (`Debug` redacted, zeroized on drop),
 //! go out only to the keyring and the request header, and never appear in results, errors,
@@ -265,11 +266,16 @@ pub const NAME_MAX_CHARS: usize = 32;
 
 /// The one display rule: the user's name if set, else the id (`custom`, `custom-2`, ...).
 pub fn display_name(svc: &CloudService) -> &str {
-    svc.name
-        .as_deref()
-        .map(str::trim)
-        .filter(|n| !n.is_empty())
-        .unwrap_or(&svc.id)
+    shown_name(svc).unwrap_or(&svc.id)
+}
+
+/// The name that counts: compatible endpoints only (a hand-edited `name` on another kind is
+/// ignored), trimmed, non-empty.
+fn shown_name(svc: &CloudService) -> Option<&str> {
+    if svc.kind != CloudKind::OpenAiCompat {
+        return None;
+    }
+    svc.name.as_deref().map(str::trim).filter(|n| !n.is_empty())
 }
 
 /// Trims a display name; empty means "no name". Only compatible endpoints keep one.
@@ -286,6 +292,9 @@ fn normalize_name(kind: CloudKind, name: &Option<String>) -> Result<Option<Strin
     if n.chars().any(char::is_control) {
         return Err("invalid_name");
     }
+    if n.to_lowercase() == LOCAL {
+        return Err("name_reserved");
+    }
     Ok(Some(n))
 }
 
@@ -295,7 +304,7 @@ fn check_name_unique(name: &str, id: &str, services: &[CloudService]) -> Result<
     let taken = services
         .iter()
         .filter(|s| s.id != id)
-        .any(|s| clash(&s.id) || s.name.as_deref().is_some_and(clash));
+        .any(|s| clash(&s.id) || shown_name(s).is_some_and(clash));
     if taken {
         Err("name_taken")
     } else {
@@ -554,11 +563,10 @@ fn new_id(kind: CloudKind, cfg: &Config) -> String {
     let taken = |id: &str| {
         id == LOCAL
             || cfg.cloud_service(id).is_some()
-            || cfg.cloud.iter().any(|s| {
-                s.name
-                    .as_deref()
-                    .is_some_and(|n| n.trim().to_lowercase() == id.to_lowercase())
-            })
+            || cfg
+                .cloud
+                .iter()
+                .any(|s| shown_name(s).is_some_and(|n| n.to_lowercase() == id.to_lowercase()))
     };
     if !taken(base) {
         return base.to_owned();
@@ -579,7 +587,7 @@ fn view(svc: &CloudService, cfg: &Config, stored: &dyn SecretStore) -> ServiceVi
     };
     ServiceView {
         id: svc.id.clone(),
-        name: svc.name.clone(),
+        name: shown_name(svc).map(str::to_owned),
         display_name: display_name(svc).to_owned(),
         kind: svc.kind,
         label: kind_label(svc.kind),
@@ -1545,13 +1553,9 @@ future_option = 42  # unknown key
         assert_eq!(n(compat, &"字".repeat(32)), Ok(Some("字".repeat(32))));
         assert_eq!(n(compat, &"字".repeat(33)), Err("name_too_long"));
         assert_eq!(n(compat, &"a".repeat(33)), Err("name_too_long"));
-        assert_eq!(
-            n(
-                compat, "a
-b"
-            ),
-            Err("invalid_name")
-        );
+        assert_eq!(n(compat, "a\nb"), Err("invalid_name"));
+        assert_eq!(n(compat, " Local "), Err("name_reserved"));
+        assert_eq!(n(compat, "local LLM"), Ok(Some("local LLM".into())));
         for kind in [CloudKind::Gemini, CloudKind::OpenAi, CloudKind::Claude] {
             assert_eq!(n(kind, "My Gemini"), Ok(None));
         }
@@ -1562,6 +1566,19 @@ b"
         assert_eq!(display_name(&svc), "區網 Qwen");
         svc.name = Some("  ".into());
         assert_eq!(display_name(&svc), "custom-2");
+        // A name on another kind (hand-edited config) is never shown.
+        let mut cfg = Config::with_defaults();
+        cfg.cloud.push(CloudService {
+            id: "gemini".into(),
+            name: Some("Mine".into()),
+            kind: CloudKind::Gemini,
+            base_url: None,
+            asr_model: None,
+            llm_model: None,
+        });
+        assert_eq!(display_name(&cfg.cloud[0]), "gemini");
+        let row = view(&cfg.cloud[0], &cfg, &MemorySecretStore::new());
+        assert_eq!((row.name, row.display_name.as_str()), (None, "gemini"));
     }
 
     fn compat_service(id: &str) -> CloudService {
