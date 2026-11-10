@@ -2,7 +2,7 @@
 
 這份文件說明在 Linux（目前以 Ubuntu 22.04／GNOME 42 Wayland 開發）上，怎麼把 v2c 的**潤飾**、**中翻英**接到你已經架好的 OpenAI 相容文字模型伺服器（例如 llama.cpp `llama-server`、vLLM、Ollama、另一台電腦的 LM Studio），以及語音辨識有哪些選項。
 
-> 狀態：Linux 版桌面 App 還沒完成（熱鍵 T3.1、注入 T3.2、通知與打包 T3.4 進行中）。下面的設定格式和 Windows 版共用同一份 `config.toml`，已用自動測試驗證（`crates/v2c-platform/tests/linux_*.rs`）。Linux 上設定檔的位置在 T3.4 打包時確定（預計 `~/.config/v2c/config.toml`，**未確認**）。手動改設定檔後要重新啟動 v2c 才會生效。
+> 狀態：Linux 版桌面 App 已可在這台機器編譯、啟動（T3.6，見第 6 節），但**還沒有實機按住說話驗證**（沒有麥克風、v2c 輸入法元件尚未安裝）。下面的設定格式和 Windows 版共用同一份 `config.toml`，已用自動測試驗證（`crates/v2c-platform/tests/linux_*.rs`）。Linux 上設定檔在 `~/.config/v2c/config.toml`（見第 6.1 節）。手動改設定檔後要重新啟動 v2c 才會生效。
 
 文中的 `192.168.1.50` 是範例 IP，請換成你伺服器的位址。
 
@@ -12,7 +12,7 @@
 |------|------|------|
 | 顯示卡 | 沒有 NVIDIA（Intel 內顯） | 不能用 Breeze-ASR-25（需要 CUDA）；設定 `[gpu] enabled = false` |
 | 麥克風 | 沒有任何錄音裝置 | 無法實機錄音；目前只能用模擬音訊與 mock 語音辨識測試 |
-| 建置工具 | 沒有 cmake／clang | `v2c-asr-local`（whisper-rs）、`v2c-cli`、Tauri 桌面 App 在這台機器上編不過；`v2c-core`、`v2c-platform` 可以 |
+| 建置工具 | 2026-11-10 已安裝 cmake、clang、webkit2gtk-4.1 等（`bash tools/build-linux.sh --check` 通過） | 整個 workspace（含 Tauri 桌面 App、whisper-rs CPU 版）可以編譯與測試 |
 | 熱鍵／注入 | GNOME 42 沒有 GlobalShortcuts、Clipboard portal | 見 `tasks/plan.md` 第 9 節 |
 | 既有文字模型 | llama.cpp，Qwen3 27B，不需金鑰 | 可做潤飾、中翻英；**不能做語音辨識**（沒有音訊能力，`/v1/audio/transcriptions` 回 501） |
 
@@ -199,3 +199,54 @@ cargo test -p v2c-platform --test linux_e2e_sim -- --ignored e2e_real --nocaptur
 ```
 
 選填：`V2C_TEST_LLM_TIMEOUT_MS`（預設 15000）、`V2C_TEST_ASR_TIMEOUT_MS`（預設為設定檔預設值 5000）、`V2C_TEST_ASR_RUNS`（預設 2）。`V2C_TEST_ASR_EXPECT` 只用來在測試裡比對，輸出只有「是否相同」與字元錯誤率。
+
+## 6. 桌面 App（T3.6）
+
+### 6.1 檔案位置
+
+v2c 自己決定路徑（`apps/desktop/src-tauri/src/paths.rs`），不使用 Tauri 的 `app_config_dir()`：
+
+| 內容 | 位置 |
+|------|------|
+| 設定 `config.toml`、個人詞庫 `vocab.txt`、輸入紀錄 `history.db`、日誌 `logs/` | `$XDG_CONFIG_HOME/v2c/`，沒設定時為 `~/.config/v2c/` |
+| 語音模型 `models/` | `$XDG_DATA_HOME/v2c/models/`，沒設定時為 `~/.local/share/v2c/models/` |
+| 全部改到同一個資料夾（測試、可攜版） | 環境變數 `V2C_DATA_DIR=/某個/資料夾` |
+| 額外的模型搜尋資料夾 | 環境變數 `V2C_MODEL_DIR` |
+| API 金鑰、輸入紀錄的加密金鑰 | 系統金鑰庫（Secret Service，GNOME 是「登入」鑰匙圈）；紀錄金鑰的項目是 service `v2c-history`／user `history-key` |
+| 網頁介面（WebKitGTK）的快取 | 由 Tauri／WebKit 決定，預計在 `~/.local/share/tw.v2c.desktop/`、`~/.cache/tw.v2c.desktop/`（**未實測**） |
+
+第一次啟動時建立的 `config.toml` 在 Linux 上預設 `[gpu] enabled = false`（Linux 不走 Breeze GPU；語音辨識用設定的遠端端點或 SenseVoice CPU）。Windows 的預設值不變。
+
+### 6.2 熱鍵與文字輸出：IBus 優先，否則備援
+
+| 情況 | 熱鍵 | 文字輸出 |
+|------|------|----------|
+| v2c 輸入法元件已安裝（`/usr/share/ibus/component/v2c.xml`，T3.7 的 .deb 會裝），而且連得上 ibus-daemon | IBus 引擎收到的右 Ctrl（**只在輸入來源切到 v2c、且有輸入框焦點時**） | IBus `CommitText`；沒有可輸入的框時改用下一列的剪貼簿方式（有的話） |
+| 元件沒安裝、IBus 連不上、或 `V2C_IBUS=off` | GlobalShortcuts portal（GNOME ≥ 48）→ evdev（要加入 `input` 群組） | 剪貼簿＋Ctrl+V（Clipboard portal，GNOME ≥ 45）；這台 GNOME 42 沒有，文字只會保留（見 6.3） |
+
+- IBus 連不上時會跳出通知「v2c 輸入法無法啟動」，並改用備援。
+- ibus-daemon 重新啟動（例如 `ibus restart`、重新登入）時，v2c 會跳出「輸入法連線中斷」並在背景重新連線（1、2、5、10 秒，之後每 30 秒）；連上後通知自動關閉。
+- 環境變數 `V2C_IBUS`：`off`＝完全不碰 IBus；`launched`＝一律以已安裝元件的名稱連上；`dynamic`＝開發用，在執行時動態註冊元件（**注意**：ibus 1.5.26 移除動態元件時，可能把目前輸入框的全域引擎拔掉，所以 v2c 不會自動這樣做）。不設定＝元件已安裝就連，沒安裝就用備援。
+
+#### `v2c --ibus` 與單一執行個體
+
+元件 XML 的 `<exec>` 是 `/usr/bin/v2c --ibus`：當你切到 v2c 輸入來源而 v2c 還沒在執行，ibus-daemon 會啟動它。
+
+- 這個行程就是一般的 v2c（在背景執行、**不開主視窗**），並以元件名稱 `org.freedesktop.IBus.V2c` 連上 IBus。
+- v2c 已經在執行時（例如開機自動啟動），新行程由單一執行個體機制交給既有的 v2c 後立刻結束；既有的 v2c 只會（重新）連上 IBus，不會打開視窗。所以同時只有一個引擎、一個熱鍵來源，不會重複輸入。
+- 你自己從選單開 v2c 時，若元件已安裝，v2c 會直接以元件名稱連上，之後 ibus-daemon 不需要再啟動另一個。
+
+### 6.3 文字沒有輸入時
+
+IBus 只會把文字送進「輸入來源是 v2c、有焦點、而且焦點後收到過按鍵」的輸入框；不符合時（或備援方式也不支援、權限被拒）文字**不會丟掉**：
+
+1. 寫進加密的輸入紀錄（紀錄開啟、金鑰庫可用時）；
+2. 否則只保留在記憶體（最多 20 筆，結束 v2c 就消失，不寫入硬碟），列在主視窗「輸入紀錄」頁最上方，標示「未輸入」；
+3. 兩種情況都會跳出通知「文字沒有輸入」，主畫面顯示原因（「沒有使用 v2c 輸入法的輸入框」或「v2c 輸入法連線中斷」）。
+
+「輸入紀錄」頁的「複製」在 Linux 上由視窗本身複製到剪貼簿（GNOME 42 背景程式不能設定剪貼簿）；「重新輸出」在 Linux 尚未支援。日誌只記字數與原因，不記文字。
+
+### 6.4 狀態通知
+
+Wayland 下不顯示浮動標籤，改用桌面通知（同一則通知依序更新：錄音中 → 辨識中 → 潤飾中 → 完成）。錯誤（麥克風、辨識失敗、熱鍵）會另外顯示；潤飾退回、雲端退回等提示只顯示在主視窗。X11 工作階段仍使用浮動標籤，只有 IBus 與「文字沒有輸入」的通知。
+

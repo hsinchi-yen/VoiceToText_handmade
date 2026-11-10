@@ -125,10 +125,20 @@
   - [ ] `Registration::Launched`（由 ibus-daemon 依 component XML 啟動、RequestName）尚未實測（要先安裝 XML）
   - [ ] 🧑 在 GNOME 設定加入 v2c 輸入來源，在 gedit／Firefox／終端機實機按住右 Ctrl 說話（含：吞掉右 Ctrl 後右 Ctrl+C 是否仍是複製、ForwardKeyEvent 的 Enter／Shift+Enter 在各 App 的效果）
   - [ ] 🧑 核准合併 T3.5
-- [ ] W16 T3.6 桌面 App 支援 Linux（等 🧑 安裝建置套件）
+- [ ] W16 T3.6 桌面 App 支援 Linux
   - [x] A 部分（不需 Tauri 依賴）：`linux::secret::install_default_store()` 以 `zbus-secret-service-keyring-store` 1.0.1（`crypto-rust`，純 Rust zbus、不需 libdbus；相容 keyring-core 1.0.1）安裝 Secret Service 為 keyring-core 預設 store；`linux::secret::probe()` 唯讀狀態；`linux::protect::SecretServiceProtector`：AES-256-GCM（ring 0.17，Cargo.lock 已有）、隨機 96-bit nonce、格式 `[01][nonce][密文+tag]`，256-bit 金鑰首次使用時產生並存進 Secret Service（service `v2c-history`／user `history-key`），絕不覆寫既有金鑰：只有在「沒有項目」、政策為 `CreateIfMissing`、且解鎖預設 collection 後再查仍找不到時才產生，寫入後重讀並採用存下的值（多個行程同時首次使用會收斂）；紀錄庫已有資料時桌面版用 `MustExist`；金鑰與解密緩衝以 zeroize 清除；取金鑰失敗後 10 秒內快速失敗（避免重複跳解鎖視窗）；`KeySource` trait＋記憶體金鑰的 mock 測試（往返、竄改、錯金鑰、版本位元組、空輸入、nonce 不重複、Debug／錯誤不含明文或金鑰）
   - [x] 本機唯讀實測 `-- --ignored secret_real`：Secret Service 在 session bus 上，`login`（預設、未鎖定）與 `session` 兩個 collection；寫入測試需另設 `V2C_SECRET_REAL_WRITE=1`，**未執行**
-  - [ ] B 部分：`apps/desktop` 的 Linux `cfg` 分支已寫好但**尚未在 Linux 編譯**（缺 webkit2gtk-4.1 等）；IBus 接線等 T3.5 合併
+  - [x] B 部分（2026-11-10，分支 `t3.6b-linux-desktop`）：建置套件裝好後 `cargo build/test -p v2c-desktop` 在 Linux 通過（先前寫好的 Linux `cfg` 分支不用改就能編譯）；`cargo build/test/clippy --workspace`、`fmt --check` 全部通過（whisper-rs CPU 版，`sensevoice` feature 照常編譯，sherpa-onnx 的 `.so` 已在 target 內）
+  - [x] IBus 接線（`apps/desktop/src-tauri/src/linux_app/`）：IBus 引擎為主要熱鍵＋注入，連不上或 `V2C_IBUS=off` 時退回 T3.1 portal／evdev 熱鍵與 T3.2 portal 注入；IBus 注入沒打出字時改走 portal（有的話）；元件 XML 已安裝 → `Registration::Launched`，沒安裝 → 不碰 IBus（`Dynamic` 只在 `V2C_IBUS=dynamic` 時，避免 1.5.26 拔掉全域引擎）；`on_disconnect` → 通知「輸入法連線中斷」＋背景重新連線（1/2/5/10/30 秒），啟動時連不上也會在背景重試，連上後停掉備援熱鍵（不會重複收鍵）
+  - [x] `v2c --ibus`：以背景模式啟動（不開主視窗）並以元件名稱連上；v2c 已在執行時由單一執行個體外掛交給既有行程（只重新連 IBus、不開視窗），新行程立刻結束——實測（私人 D-Bus＋Xvfb）第二個行程 45 ms 結束、第一個行程收到並立即重試
+  - [x] 文字保留：注入失敗時寫進加密紀錄；紀錄關閉／金鑰庫不可用時保留在記憶體（最多 20 筆，不落地），列在「輸入紀錄」頁最上方（負數 id）；通知「文字沒有輸入」；新狀態碼 `inject_no_input`、`ime_disconnected`；日誌只記字數（有日誌測試）
+  - [x] Wayland：狀態事件 → `DbusNotifier`（一次說話一則通知原地更新；潤飾退回等提示不跳通知）；通知在獨立執行緒，Secret Service 連線也移到背景執行緒（實測：沒有 keyring daemon 時啟動原本會卡 25 秒等 D-Bus 啟動）
+  - [x] 修正：Linux X11 下浮動標籤在建立時呼叫 `set_ignore_cursor_events` 會讓 tao `unwrap()` 而整個程式中止（實測），改成每次顯示後再設定；`build.rs` 在 Linux 加 rpath `$ORIGIN:$ORIGIN/../lib/v2c`（否則 `target/debug/v2c` 找不到 `libsherpa-onnx-c-api.so`）
+  - [x] Linux 預設 `[gpu] enabled = false`；路徑：`~/.config/v2c/`（設定、紀錄、日誌、詞庫）、`~/.local/share/v2c/models/`（寫進 `docs/linux-setup.md` 第 6 節）
+  - [x] 實際啟動（私人 D-Bus、不允許服務啟動、Xvfb、暫存 HOME、`V2C_IBUS=off`／`launched`）：X11 與 Wayland 兩種工作階段都能啟動並跑到 controller、fallback 熱鍵回報 `hotkey_failed`、沒有麥克風回報 `mic_config_failed`，無 panic；沒有碰使用者的 ibus-daemon、輸入來源、鑰匙圈、通知
+  - [ ] 🧑 Windows 上重新建置與測試，確認沒有回歸（共用檔案的改動見 T3.6 報告）
+  - [ ] 🧑 安裝 `tools/ibus/v2c.xml` 後實測 `Registration::Launched`、`v2c --ibus` 由 ibus-daemon 啟動、`ibus restart` 後自動重新連線
+  - [ ] 🧑 核准合併 T3.6
   - [ ] 🧑 實機寫入測試：`V2C_SECRET_REAL_WRITE=1 cargo test -p v2c-platform -- --ignored secret_real_write`（會在登入鑰匙圈建立再刪除一個 `v2c-test` 項目）
 - [ ] W17 T3.7 .deb／AppImage 交付到 `releases/`
 - [ ] **檢查點 3**：第一版交付
