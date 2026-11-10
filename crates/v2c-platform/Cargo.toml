@@ -35,3 +35,12 @@ features = [
 zbus = "5.19"
 # `poll()` with a timeout so evdev reader threads exit promptly on stop (already in Cargo.lock).
 libc = "0.2"
+
+# T3.3: Linux LLM/ASR integration and end-to-end simulation tests (tests/linux_*.rs).
+[dev-dependencies]
+async-trait.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+wiremock.workspace = true
