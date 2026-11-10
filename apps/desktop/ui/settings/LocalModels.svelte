@@ -23,7 +23,7 @@
     try {
       result = await api.testLocalAsr();
     } catch (code) {
-      testError = api.describe(code);
+      testError = code === "already_running" ? "測試進行中，請稍候" : api.describe(code);
     } finally {
       testing = false;
     }

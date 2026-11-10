@@ -576,6 +576,7 @@ pub fn cpu_reason_text(reason: CpuReason, cfg: &Config, cuda_build: bool) -> Opt
     };
     let text = match reason {
         CpuReason::LoadFailed => "Breeze 載入失敗，改用 SenseVoice（原因見記錄檔）。".to_owned(),
+        CpuReason::Loading => "Breeze 還在載入中，這次先用 SenseVoice。".to_owned(),
         CpuReason::Guard(GuardReason::Engine(p)) => match p {
             PickReason::Configured | PickReason::BreezeFits => return None,
             PickReason::GpuDisabled => {
@@ -864,6 +865,12 @@ pub fn local_test_view(run: &LocalTestRun, cfg: &Config, cuda_build: bool) -> Lo
             status: "failed",
             latency_ms: None,
             detail: Some("Breeze 載入失敗，改用 SenseVoice".to_owned()),
+        },
+        (None, Some(CpuReason::Loading)) => StepView {
+            label: LOAD,
+            status: "skipped",
+            latency_ms: None,
+            detail: Some("Breeze 載入中，這次先用 SenseVoice".to_owned()),
         },
         (None, _) => StepView {
             label: LOAD,
@@ -1348,6 +1355,13 @@ mod tests {
             ..run
         };
         assert_eq!(local_test_view(&failed, &c, true).steps[1].status, "failed");
+        let loading = LocalTestRun {
+            cpu_reason: Some(CpuReason::Loading),
+            ..failed
+        };
+        let v = local_test_view(&loading, &c, true);
+        assert_eq!(v.steps[1].status, "skipped");
+        assert!(v.fallback_reason.unwrap().contains("載入中"));
     }
 
     #[test]

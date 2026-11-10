@@ -78,6 +78,8 @@ pub enum CpuReason {
     Guard(GuardReason),
     /// Breeze was allowed but failed to load.
     LoadFailed,
+    /// Breeze is still being loaded by another path (hotkey, guard); SenseVoice is used now.
+    Loading,
 }
 
 /// The local engines as they are right now (settings page 「目前使用中」).
@@ -574,9 +576,7 @@ impl Engine {
     /// Errors: `busy` (an utterance is running), `already_running`, or the local engine error
     /// (`model_missing`, `asr_loading`, ...).
     pub async fn test_local_asr(self: &Arc<Self>) -> Result<LocalTestRun, &'static str> {
-        if self.busy.load(Ordering::SeqCst) > 0 {
-            return Err("busy");
-        }
+        // A second press reports the running test, not "dictating".
         if self.testing.swap(true, Ordering::SeqCst) {
             return Err("already_running");
         }
@@ -587,6 +587,9 @@ impl Engine {
             }
         }
         let _done = Done(&self.testing);
+        if self.busy.load(Ordering::SeqCst) > 0 {
+            return Err("busy");
+        }
         // Keeps the guard from unloading Breeze in the middle of the test.
         let _busy = BusyToken::new(&self.busy);
 
@@ -675,9 +678,25 @@ impl Engine {
             *lock(&self.cpu_reason) = Some(reason);
             return (None, Some(reason));
         }
+        // Another path (hotkey, guard) may be loading Breeze: wait for it (bounded).
+        let deadline = Instant::now() + ASR_LOAD_WAIT;
+        while self.local.breeze_loading() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if self.local.breeze_loaded() {
+            return (None, None);
+        }
+        if self.local.breeze_loading() {
+            return (None, Some(CpuReason::Loading));
+        }
         let t = Instant::now();
         if self.load_breeze_blocking("test") {
             (Some(t.elapsed().as_millis() as u64), None)
+        } else if self.local.breeze_loaded() {
+            // Another load finished first.
+            (None, None)
+        } else if self.local.breeze_loading() {
+            (None, Some(CpuReason::Loading))
         } else {
             (None, Some(CpuReason::LoadFailed))
         }
@@ -1170,6 +1189,12 @@ mod tests {
         assert_eq!(e.test_local_asr().await.err(), Some("busy"));
         drop(busy);
         assert!(!e.testing.load(Ordering::SeqCst));
+        // A test already running wins over "busy" (its own BusyToken counts as busy).
+        e.testing.store(true, Ordering::SeqCst);
+        let busy = BusyToken::new(&e.busy);
+        assert_eq!(e.test_local_asr().await.err(), Some("already_running"));
+        drop(busy);
+        e.testing.store(false, Ordering::SeqCst);
     }
 
     #[tokio::test]

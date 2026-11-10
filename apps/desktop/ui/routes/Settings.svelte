@@ -104,28 +104,55 @@
     return queue;
   }
 
-  /** 「儲存」: writes the whole draft. Returns true when nothing is left unsaved. */
-  async function commit() {
-    await queue;
+  /** Pending fields minus those `sent` with the same value (changes made meanwhile stay). */
+  function without(sent) {
+    const rest = { ...pending };
+    for (const [field, value] of Object.entries(sent)) {
+      if (field in rest && JSON.stringify(rest[field]) === JSON.stringify(value)) delete rest[field];
+    }
+    return rest;
+  }
+
+  /**
+   * 「儲存」: writes the draft. Runs in the same queue as `save`, so a control changed while
+   * saving is added to the draft after this finishes instead of being lost. Returns true when
+   * nothing is left unsaved.
+   */
+  function commit() {
+    queue = queue.then(doCommit);
+    return queue;
+  }
+
+  async function doCommit() {
     saving = true;
+    const sent = { ...pending };
+    let configSaved = false;
     try {
-      const changes = configChanges(pending);
+      const changes = configChanges(sent);
       if (changes.length) {
         const r = await api.apply(changes);
+        configSaved = true;
         saved = r.settings;
         if (r.restart_required) restartNote = true;
-        pending = AUTOSTART in pending ? { [AUTOSTART]: pending[AUTOSTART] } : {};
-        draft = saved;
+        const { [AUTOSTART]: _, ...configSent } = sent;
+        pending = without(configSent);
       }
-      if (AUTOSTART in pending) {
-        saved = { ...saved, autostart: await api.setAutostart(pending[AUTOSTART]) };
-        pending = {};
-        draft = saved;
+      if (AUTOSTART in sent) {
+        saved = { ...saved, autostart: await api.setAutostart(sent[AUTOSTART]) };
+        pending = without({ [AUTOSTART]: sent[AUTOSTART] });
       }
-      show("已儲存並套用");
-      return true;
+      let draftOk = true;
+      if (Object.keys(pending).length) draftOk = await setDraft({ ...pending });
+      else draft = saved;
+      if (draftOk) show("已儲存並套用");
+      return Object.keys(pending).length === 0;
     } catch (code) {
-      show("沒有儲存：" + api.describe(code) + "（變更仍保留，可修正後再按「儲存」）", true);
+      if (configSaved) {
+        draft = saved;
+        show("設定已儲存，但開機自動啟動無法變更：" + api.describe(code), true);
+      } else {
+        show("沒有儲存：" + api.describe(code) + "（變更仍保留，可修正後再按「儲存」）", true);
+      }
       return false;
     } finally {
       saving = false;
@@ -150,7 +177,14 @@
   async function keepDraft() {
     saved = incoming;
     incoming = null;
-    if (!(await setDraft({ ...pending }))) draft = saved;
+    const kept = { ...pending };
+    if (!(await setDraft(kept))) {
+      // The draft no longer fits the new settings: drop it so the page and the bar agree.
+      const reason = message;
+      pending = {};
+      draft = saved;
+      show(reason + "；草稿與新的設定衝突，已改為重新載入", true);
+    }
   }
 
   function reloadIncoming() {
