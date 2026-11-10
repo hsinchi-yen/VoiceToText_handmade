@@ -71,8 +71,10 @@
   - [ ] 🧑 Sandbox 乾淨安裝、實機安裝、Defender、VS 授權確認（見 human-checklist）
 - [ ] W7b T1.12 TEA-ASR-1.1 第三個地端語音辨識引擎（設定頁可選）
 - [ ] W7b T1.13 自訂相容端點別名（沒填顯示 custom）
+  - [x] 程式完成（2026-11-11，分支 `t1.13-cloud-alias`，審查通過）：`[[cloud]] name`（只限自訂相容端點，去空白、最多 32 字、不可與其他服務的名稱或代號重複）、精靈第 2 步「名稱（選填）」、服務清單「重新命名」、清單／用途摘要／設定頁用途選單顯示名稱、`docs/cloud-setup.md`
+  - [ ] 🧑 替現有的 `custom`、`custom-2` 取名並確認各畫面（見 human-checklist）
 - [ ] W7b T1.14 設定頁：儲存按鈕、目前使用中、直接選地端辨識引擎、地端語音模型測試
-  - [x] 程式完成（2026-11-11，分支 `t1.14-local-route-test`）：設定改為草稿＋「儲存」（`settings_preview` 驗證、`settings_apply` 一次寫入，未儲存欄位標示、離開前詢問、外部變更時可選重新載入或保留草稿）；「目前使用中」（`settings_runtime_status`）；語音辨識選單分成三個地端選項＋雲端；地端語音模型「測試」（`settings_test_local_asr`，不回傳辨識文字）；移除 LM Studio 區塊與 `settings_test_lm`
+  - [x] 程式完成（2026-11-11，分支 `t1.14-local-route-test`，審查通過）：設定改為草稿＋「儲存」（`settings_preview` 驗證、`settings_apply` 一次寫入，未儲存欄位標示、離開前詢問、外部變更時可選重新載入或保留草稿）；「目前使用中」（`settings_runtime_status`）；語音辨識選單分成三個地端選項＋雲端；地端語音模型「測試」（`settings_test_local_asr`，不回傳辨識文字）；移除 LM Studio 區塊與 `settings_test_lm`
   - [ ] 🧑 安裝新版後實機操作（見 human-checklist）
 - [ ] **檢查點 1**：日常使用一週，問題記在 `dogfood-windows.md`
 

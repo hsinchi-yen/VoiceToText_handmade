@@ -560,7 +560,11 @@ fn cloud_text(cfg: &Config, id: &str, asr: bool) -> String {
     } else {
         svc.llm_model.as_deref().or(suggested.llm)
     };
-    let mut text = format!("{}：{}", kind_label(svc.kind), svc.id);
+    let mut text = format!(
+        "{}：{}",
+        kind_label(svc.kind),
+        super::cloud::display_name(svc)
+    );
     if let Some(m) = model {
         text.push('・');
         text.push_str(m);
@@ -661,7 +665,7 @@ fn local_asr_view(cfg: &Config, local: &LocalStatus, cuda_build: bool) -> UseVie
 
 fn cloud_unusable(cfg: &Config, id: &str) -> String {
     let name = cfg.cloud_service(id).map_or(id.to_owned(), |s| {
-        format!("{}：{}", kind_label(s.kind), s.id)
+        format!("{}：{}", kind_label(s.kind), super::cloud::display_name(s))
     });
     format!("雲端服務「{name}」無法使用（金鑰或設定有誤）")
 }
@@ -972,6 +976,7 @@ mod tests {
         for (id, kind) in [("g", CloudKind::Gemini), ("c", CloudKind::Claude)] {
             c.cloud.push(CloudService {
                 id: id.into(),
+                name: None,
                 kind,
                 base_url: None,
                 asr_model: None,

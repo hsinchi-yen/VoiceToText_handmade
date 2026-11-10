@@ -1003,6 +1003,7 @@ mod tests {
         let mut b = a.clone();
         b.cloud.push(CloudService {
             id: "g".into(),
+            name: None,
             kind: CloudKind::Gemini,
             base_url: None,
             asr_model: None,
@@ -1117,6 +1118,7 @@ mod tests {
         let mut cfg = Config::with_defaults();
         cfg.cloud.push(CloudService {
             id: "g".into(),
+            name: None,
             kind: CloudKind::Gemini,
             base_url: None,
             asr_model: None,
@@ -1162,6 +1164,7 @@ mod tests {
             base_url: None,
             asr_model: None,
             llm_model: None,
+            name: None,
         });
         cfg.route.asr = "g".into();
         let e = engine(cfg);

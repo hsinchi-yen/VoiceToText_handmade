@@ -2,6 +2,7 @@
   // Hotkeys, polish, per-purpose routing, start with Windows. Changes go to the page's draft
   // (`save`); routes/Settings.svelte writes them on 「儲存」.
   import * as api from "./api.js";
+  import { displayName } from "../cloud-setup/api.js";
 
   let { view, save } = $props();
 
@@ -19,7 +20,9 @@
     if (!ok) e.currentTarget.value = old;
   }
 
-  const serviceLabel = (s) => `${api.kindLabels[s.kind] ?? s.kind}：${s.id}`;
+  // T1.13: show the service's display name (custom compatible endpoints may have one).
+  const serviceLabel = (s) =>
+    `${api.kindLabels[s.kind] ?? s.kind}：${displayName(cfg.cloud.find((c) => c.id === s.id) ?? s)}`;
 </script>
 
 <section class="settings-section">
