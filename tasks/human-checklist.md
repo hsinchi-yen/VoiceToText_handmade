@@ -145,7 +145,8 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
   - 本機目前**沒有接任何實體鍵盤**（`/proc/bus/input/devices` 只有電源鍵等），加入群組後還要接上實體鍵盤才能實測按住右 Ctrl
 - [ ] 接上麥克風（本機目前沒有任何擷取裝置），之後才能做實機語音輸入
 - [ ] Linux 建置依賴（本機缺少；Tauri 桌面 App 與 whisper-rs 需要）：`sudo apt install cmake clang libclang-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev`（Ubuntu 22.04 是否提供 `libwebkit2gtk-4.1-dev` 請在安裝時確認）
-- [ ] ASR：決定 Linux 用 SenseVoice CPU（需下載 sherpa-onnx 共享庫與約 160 MB 模型）或遠端相容 ASR 端點（現有 10.20.30.23:8000 不支援 `/audio/transcriptions`）
+- [x] ASR：2026-11-11 決定 Linux 用遠端 `tea-asr-1`（`:8001`）＋本機 SenseVoice 備援
+- [ ] T3.7 設定：在主視窗「雲端服務」頁貼上 `:8001` 語音辨識端點的金鑰（存進 GNOME 登入鑰匙圈）；確認 `~/.local/share/v2c/models/` 有 SenseVoice 模型；拔網路說一句，打開主視窗查看，應顯示「雲端服務失敗，已改用地端」且文字仍輸出
 - [ ] 檢查點 3：實機 GNOME Wayland 按住說話 → 文字出現在 gedit／Firefox／終端機
 - [ ] T3.1 熱鍵實機：加入 `input` 群組並接上鍵盤後，按住右 Ctrl 說話、雙擊免持、右 Ctrl+C 不誤觸、Shift 翻譯、Esc 取消；在 GNOME ≥ 48 的機器測 GlobalShortcuts（綁定的取消鍵會被系統攔截，不要選 Esc）
 - [ ] T3.2 注入實機（需 GNOME ≥ 45）：貼上到 gedit／Firefox／終端機，換行用 Shift+Enter 不送出；RemoteDesktop 同意對話框按「取消」時顯示權限不足；原剪貼簿文字被還原

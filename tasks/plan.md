@@ -317,7 +317,8 @@ Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫�
 | GPU | Intel Iris Xe，**沒有 NVIDIA** | 不用 CUDA／Breeze；第 5.1 節 VRAM 管理在 Linux 上停用（`gpu.enabled=false`） |
 | 工具鏈 | rustc／cargo 1.99.1、clippy、rustfmt、gcc、Node；**沒有 cmake、clang、libclang、gtk／webkit2gtk-4.1／libsoup-3 開發檔** | `whisper-rs-sys` 編不過 → `v2c-asr-local`、`v2c-cli`、Tauri 桌面 App 在本機無法建置；`v2c-core`、`v2c-platform` 可以 |
 | 實錄音 ASR（2026-11-10） | 你的 10 段錄音（4.4～7.7 秒）經 8002：每段約 5.6～6.1 秒；CER：zh 0～5.9%、en 0～2%、mix 0～4.3%、filler（對 raw）10.5%、vocab 41.9%（未帶詞庫）；加潤飾後 zh-01 0%、mix-01 4.3%、filler-01 20%，總耗時約 6.4～6.7 秒 | 準確度可用；延遲遠超過 ≤ 3 秒目標，需在 ASR 主機端改善 |
-| 既有 ASR | `http://10.20.30.23:8002/v1`（使用者提供）：OpenAI 相容 `/audio/transcriptions`，需要金鑰，模型 `breeze-asr-25`；英文合成句實測約 5.6 秒，超過預設 `asr_cloud_ms=5000` | Linux 設定建議 `asr_cloud_ms = 8000`；中文辨識未驗證（本機只有英文 TTS） |
+| 既有 ASR | `http://10.20.30.23:8002/v1`（使用者提供）：OpenAI 相容 `/audio/transcriptions`，需要金鑰，模型 `breeze-asr-25`；英文合成句實測約 5.6 秒，超過預設 `asr_cloud_ms=5000` | 用 breeze-asr-25 時需 `asr_cloud_ms = 8000`；2026-11-11 已改用同主機 `:8001` 的 `tea-asr-1`（見下一列） |
+| Linux ASR 定案（2026-11-11） | 使用者決定：遠端 `tea-asr-1`（`:8001`，10 段錄音平均 1.7 秒、CER 1.8%）＋本機 SenseVoice CPU 備援（約 0.4 秒、CER 7.9%）；本機 CPU 跑 TEA-ASR-1 每段約 157 秒，不採用 | `asr_cloud_ms = 5000`、`[local] asr = "sense_voice"`、`cloud_fallback_to_local = true`；設定範例見 `docs/linux-setup.md` 第 4 節 |
 | 既有 LLM | `http://10.20.30.23:8000/v1`：llama.cpp（build b10752）、模型 `Qwen3.8-27B-UD-Q6_K_L`、n_ctx 65536、不需金鑰；`/health` ok；`modalities.audio=false`；`/v1/audio/transcriptions` 回 501 | 只用於潤飾／翻譯，**不能做 ASR**；預設開啟思考，一句約 2.7 秒，關閉思考（`chat_template_kwargs.enable_thinking=false`）約 0.23 秒 |
 
 ### 9.2 設計（依查證結果調整）

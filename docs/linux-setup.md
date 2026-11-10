@@ -106,7 +106,7 @@ llm_extra_body = { chat_template_kwargs = { enable_thinking = false } }
 
 | 方案 | 說明 | 狀態 |
 |------|------|------|
-| SenseVoice-Small（CPU，本機） | 需要 sherpa-onnx 共享庫與約 160 MB 模型 | **未驗證**（這台機器沒有下載，也沒有麥克風） |
+| SenseVoice-Small（CPU，本機） | 需要 sherpa-onnx 共享庫（.deb 已內含）與約 230 MB 模型 | 已用 10 段真人錄音實測（見下方「Linux 建議方案」）；還沒在安裝好的 App 上用麥克風試過 |
 | 遠端相容語音辨識端點 | 任何提供 `POST /v1/audio/transcriptions`（OpenAI 格式）的伺服器，例如 whisper.cpp `whisper-server`（見 `docs/lan-server-guide.md`） | 已用 10 段真人錄音實測（見下方「兩種模型比較」） |
 | Breeze-ASR-25（GPU） | 需要 NVIDIA＋CUDA | 這台機器不可用 |
 
@@ -151,9 +151,35 @@ asr_model = "breeze-asr-25"     # 伺服器的模型名稱（GET /v1/models 列�
 | 純辨識平均 CER | 1.8% | 7.0% |
 | 預設 `asr_cloud_ms = 5000` 可用 | 可以 | 不行（要 ≥ 8000） |
 
-建議 Linux 預設用 `tea-asr-1`（下方範例的 `asr_model` 換成 `tea-asr-1`、埠號換成該服務的埠號，`asr_cloud_ms` 可維持 5000）。兩者都沒有帶詞庫；測試是用 v2c 的處理流程程式直接餵音檔，不是在安裝好的 App 上用麥克風說話。
+建議 Linux 用 `tea-asr-1`（`asr_cloud_ms` 可維持 5000；第 4 節範例已是這個設定）。兩者都沒有帶詞庫；測試是用 v2c 的處理流程程式直接餵音檔，不是在安裝好的 App 上用麥克風說話。
 
-## 4. 完整範例：兩台遠端服務（語音辨識 :8002、文字模型 :8000）
+### Linux 建議方案：遠端 TEA-ASR-1，本機 SenseVoice 備援
+
+日常用遠端 `tea-asr-1`；遠端失敗（網路斷線、伺服器沒回應、超過 `asr_cloud_ms`、金鑰錯誤）時，這一句自動改用本機 SenseVoice 辨識（`cloud_fallback_to_local = true`），主視窗會顯示「雲端服務失敗，已改用地端」。
+
+同一組 10 段真人錄音的實測（2026-11-11，這台 i7-1165G7 筆電，潤飾都用同一台 Qwen 文字模型）：
+
+| 方案 | 每段辨識平均耗時 | 純辨識平均 CER | 加潤飾後平均總耗時 | 潤飾後平均 CER |
+|------|------------------|----------------|--------------------|----------------|
+| 遠端 `tea-asr-1` | 約 1.7 秒 | 1.8% | 約 2.4 秒 | 1.5% |
+| 本機 SenseVoice（CPU） | 約 0.4 秒 | 7.9% | 約 1.0 秒 | 5.4% |
+
+SenseVoice 的錯誤集中在中英夾雜與專有名詞；潤飾能修掉大部分中英夾雜錯誤，專有名詞仍容易錯（之後可用個人詞庫改善）。不建議把 TEA-ASR-1 放在這類筆電的 CPU 上跑：實測每段約 157 秒（mini 版約 12 秒）。
+
+#### 放入 SenseVoice 模型
+
+v2c 在 `~/.local/share/v2c/models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/` 找模型（也可用環境變數 `V2C_MODEL_DIR` 指定上一層資料夾）：
+
+```sh
+mkdir -p ~/.local/share/v2c/models
+cd ~/.local/share/v2c/models
+curl -L -o sv.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2
+tar xjf sv.tar.bz2 && rm sv.tar.bz2
+```
+
+找不到模型時，遠端失敗的那一句會顯示錯誤，不會退回。v2c 剛啟動（或改設定後重新載入）、SenseVoice 還在載入時，那一句也不會退回，會直接顯示遠端的錯誤。
+
+## 4. 完整範例：遠端 TEA-ASR-1（:8001）＋ 遠端文字模型（:8000）＋ 本機 SenseVoice 備援
 
 ```toml
 [route]
@@ -166,8 +192,11 @@ cloud_fallback_to_local = true
 enabled = true
 
 [timeouts]
-asr_cloud_ms = 8000    # 見第 3 節實測：5000 對這台語音伺服器太短
+asr_cloud_ms = 5000    # tea-asr-1 平均約 1.7 秒；超過就改用本機 SenseVoice
 llm_cloud_ms = 3000
+
+[local]
+asr = "sense_voice"    # 遠端失敗時的本機備援（CPU）
 
 [gpu]
 enabled = false
@@ -175,8 +204,8 @@ enabled = false
 [[cloud]]
 id = "lan-asr"
 kind = "open_ai_compat"
-base_url = "http://192.168.1.50:8002/v1"
-asr_model = "breeze-asr-25"
+base_url = "http://192.168.1.50:8001/v1"
+asr_model = "tea-asr-1"
 
 [[cloud]]
 id = "lan-llm"
@@ -185,7 +214,7 @@ base_url = "http://192.168.1.50:8000/v1"
 llm_model = "Qwen3.8-27B-UD-Q6_K_L"
 ```
 
-這份範例由測試 `two_remote_services_config_routes_every_purpose`（`crates/v2c-platform/tests/linux_asr.rs`）確認三種用途都會導向對應的服務。
+這份範例由測試 `two_remote_services_config_routes_every_purpose`（`crates/v2c-platform/tests/linux_asr.rs`）確認三種用途都會導向對應的服務，而且都會在失敗時退回本機。要改用 `breeze-asr-25`：`base_url` 換成該服務的埠號、`asr_model = "breeze-asr-25"`，並把 `asr_cloud_ms` 調到 8000（見第 3 節）。
 
 ## 5. 自己測試連線（開發者）
 
@@ -256,7 +285,7 @@ IBus 只會把文字送進「輸入來源是 v2c、有焦點、而且焦點後�
 2. 否則只保留在記憶體（最多 20 筆，結束 v2c 就消失，不寫入硬碟），列在主視窗「輸入紀錄」頁最上方，標示「未輸入」；
 3. 兩種情況都會跳出通知「文字沒有輸入，已保留在 v2c 的「輸入紀錄」」（只在記憶體時註明「結束 v2c 後消失」），主畫面顯示原因（「沒有使用 v2c 輸入法的輸入框」或「v2c 輸入法連線中斷」）。
 
-已知限制：v2c 連上 IBus、但目前的輸入來源不是 v2c（例如切到注音）時，右 Ctrl 不會被 v2c 收到，也不會改用備援熱鍵。
+已知限制（刻意保留）：v2c 連上 IBus、但目前的輸入來源不是 v2c（例如切到注音、英文鍵盤）時，右 Ctrl 不會被 v2c 收到，也不會改用備援熱鍵，按了沒有任何反應。原因是 GNOME Wayland 只把按鍵交給目前選取的輸入法；備援熱鍵在這台機器上也收不到全域按鍵。要說話時先用 Super+空白鍵切到「v2c 語音輸入」。打字和說話可以都用 v2c 輸入來源：沒按右 Ctrl 時，按鍵照常送給應用程式（英文鍵盤配置）。
 
 「輸入紀錄」頁的「複製」在 Linux 上由視窗本身複製到剪貼簿（GNOME 42 背景程式不能設定剪貼簿）；「重新輸出」在 Linux 尚未支援。日誌只記字數與原因，不記文字。
 
@@ -298,7 +327,7 @@ ibus restart                                      # 讓 ibus-daemon 讀到新的
 ### 7.3 設定兩個遠端服務
 
 1. 先啟動一次 v2c，讓它建立 `~/.config/v2c/config.toml`（Linux 預設 `[gpu] enabled = false`）。
-2. 結束 v2c（系統匣圖示 → 結束），用文字編輯器打開 `~/.config/v2c/config.toml`，照第 4 節的範例加入 `[route]`、`[timeouts]` 與兩個 `[[cloud]]`（語音辨識 `:8002`、文字模型 `:8000`），把 IP 換成你的伺服器。
+2. 結束 v2c（系統匣圖示 → 結束），用文字編輯器打開 `~/.config/v2c/config.toml`，照第 4 節的範例加入 `[route]`、`[timeouts]`、`[local]` 與兩個 `[[cloud]]`（語音辨識 `:8001` 的 `tea-asr-1`、文字模型 `:8000`），把 IP 換成你的伺服器。並照第 3 節「放入 SenseVoice 模型」放好本機備援模型。
    也可以在主視窗「雲端服務」頁用「自訂相容端點」分別設定文字與語音端點。
 3. 伺服器需要金鑰時，在「雲端服務」頁貼上；金鑰存在 GNOME「登入」鑰匙圈，不寫進設定檔。
 4. 重新啟動 v2c（手動改設定檔後一定要重新啟動）。
