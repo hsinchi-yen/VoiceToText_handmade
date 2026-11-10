@@ -75,7 +75,7 @@ llm_model = "Qwen3.8-27B-UD-Q6_K_L"   # 自訂端點沒有預設模型，一定�
 
 關閉思考（請求加上 `"chat_template_kwargs": {"enable_thinking": false}`）實測約 0.23 秒。
 
-> **0.1.3 起（main 分支 commit d7e6875）**：OpenAI 相容請求已一律送出 `chat_template_kwargs: {"enable_thinking": false}`，不需要設定。上表是尚未包含該修改時的實測結果；套用後同一組測試：潤飾直接呼叫約 0.66 秒、經管線約 0.77 秒（1 秒預算內，沒有退回）、中翻英約 0.66～1.0 秒，全部成功。
+> **0.1.3 起**：OpenAI 相容請求已一律送出 `chat_template_kwargs: {"enable_thinking": false}`，不需要設定。上表是尚未包含該修改時的實測結果；套用後同一組測試：潤飾直接呼叫約 0.66 秒、經管線約 0.77 秒（1 秒預算內，沒有退回）、中翻英約 0.66～1.0 秒，全部成功。
 
 #### 待核准：可設定的額外請求欄位
 
@@ -139,7 +139,7 @@ asr_model = "breeze-asr-25"     # 伺服器的模型名稱（GET /v1/models 列�
 中文辨識沒有驗證：這台機器的合成語音工具（flite）只能產生英文，也沒有麥克風可以錄中文。
 
 - v2c 送出 multipart：`file`（16 kHz 單聲道 WAV）、`model`、`response_format=json`，有個人詞彙時加 `prompt`；預期回應 `{"text": "..."}`。
-- 伺服器要求金鑰時，在設定視窗「雲端服務」頁貼上（存在系統金鑰庫）。金鑰錯誤會顯示「金鑰錯誤」（HTTP 401），端點不支援語音會顯示「端點不支援音訊」（404／405／501）。
+- 伺服器要求金鑰時，在設定視窗「雲端服務」頁貼上（存在系統金鑰庫）。金鑰錯誤會顯示「金鑰錯誤」（HTTP 401），端點不支援語音會顯示「這個端點不支援語音辨識」（404／405／501）。
 - 失敗時改用本機語音辨識的動作由桌面 App 執行（`cloud_fallback_to_local = true`）；本機沒有可用的語音辨識模型時，這次輸入會顯示錯誤。
 
 ## 4. 完整範例：兩台遠端服務（語音辨識 :8002、文字模型 :8000）
@@ -189,8 +189,8 @@ cargo test -p v2c-platform --test linux_llm -- --ignored llm_real --nocapture --
 # 語音辨識（金鑰放在檔案裡，測試不會印出；不給 WAV 時送 1 秒合成音，只檢查連線與格式）
 V2C_TEST_ASR_BASE_URL=http://192.168.1.50:8002/v1 \
 V2C_TEST_ASR_MODEL=breeze-asr-25 \
-V2C_TEST_ASR_KEY_FILE=$HOME/.config/v2c-test/asr.key \
-V2C_TEST_ASR_WAV=tests/tmp/sample.wav \
+V2C_TEST_ASR_KEY_FILE="$PWD/tests/tmp/asr-key" \
+V2C_TEST_ASR_WAV="$PWD/tests/tmp/sample.wav" \
 V2C_TEST_ASR_EXPECT="Please send the meeting notes to the team by Friday." \
 cargo test -p v2c-platform --test linux_asr -- --ignored asr_real --nocapture
 

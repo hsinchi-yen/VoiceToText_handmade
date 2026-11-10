@@ -142,7 +142,14 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
   3. 改用 IBus 引擎輸出文字（與 `v2cplan.md`「非輸入法框架」的決策衝突，要先改決策）
 - [ ] 核准是否在 `v2c-core` 新增「LLM 額外請求欄位」設定（給 llama.cpp 的 `chat_template_kwargs.enable_thinking=false`；開著思考一句約 2.7 秒，會超過潤飾 1 秒的逾時而退回規則式去贅字）
 - [ ] evdev 熱鍵：`sudo usermod -aG input $USER`，登出再登入（這會讓同一使用者的程式都能讀鍵盤，請自行評估）
+  - 本機目前**沒有接任何實體鍵盤**（`/proc/bus/input/devices` 只有電源鍵等），加入群組後還要接上實體鍵盤才能實測按住右 Ctrl
 - [ ] 接上麥克風（本機目前沒有任何擷取裝置），之後才能做實機語音輸入
 - [ ] Linux 建置依賴（本機缺少；Tauri 桌面 App 與 whisper-rs 需要）：`sudo apt install cmake clang libclang-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev`（Ubuntu 22.04 是否提供 `libwebkit2gtk-4.1-dev` 請在安裝時確認）
 - [ ] ASR：決定 Linux 用 SenseVoice CPU（需下載 sherpa-onnx 共享庫與約 160 MB 模型）或遠端相容 ASR 端點（現有 10.20.30.23:8000 不支援 `/audio/transcriptions`）
 - [ ] 檢查點 3：實機 GNOME Wayland 按住說話 → 文字出現在 gedit／Firefox／終端機
+- [ ] T3.1 熱鍵實機：加入 `input` 群組並接上鍵盤後，按住右 Ctrl 說話、雙擊免持、右 Ctrl+C 不誤觸、Shift 翻譯、Esc 取消；在 GNOME ≥ 48 的機器測 GlobalShortcuts（綁定的取消鍵會被系統攔截，不要選 Esc）
+- [ ] T3.2 注入實機（需 GNOME ≥ 45）：貼上到 gedit／Firefox／終端機，換行用 Shift+Enter 不送出；RemoteDesktop 同意對話框按「取消」時顯示權限不足；原剪貼簿文字被還原
+- [ ] T3.3 中文語音辨識：把一段自己錄的中文 WAV 放到 `tests/tmp/`，依 `docs/linux-setup.md` 第 5 節執行 `asr_real`（目前只用英文合成句驗證過）
+- [ ] T3.4：依 `bash tools/build-linux.sh --check` 安裝缺少的套件後執行 `bash tools/build-linux.sh`；`apps/desktop` 尚未支援 Linux（金鑰庫只接 Windows、`build.rs` 只放 Windows DLL、controller 未接通知），預期會有編譯錯誤，需另開卡並核准 `tauri.conf.json` 的 Linux 設定
+- [ ] T3.4 通知實機：`cargo test -p v2c-platform -- --ignored linux_real_notify`（會在桌面跳出幾則測試通知）
+- [ ] 核准合併 `t3-linux-integration` 到 `main`（含 T3.0～T3.4；本機只合併到整合分支，沒有 push）

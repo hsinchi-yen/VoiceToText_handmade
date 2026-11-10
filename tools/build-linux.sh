@@ -167,6 +167,7 @@ for f in "${built[@]}"; do
     hash="$(sha256sum "$releases/$name" | cut -d' ' -f1)"
     # Replace an older line for the same file name, keep everything else.
     tmp="$(mktemp "$releases/.SHA256SUMS.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
     # (A trailing CR from a file last written on Windows is ignored when matching.)
     awk -v n="  $name" '{ l = $0; sub(/\r$/, "", l) } substr(l, length(l) - length(n) + 1) != n' \
         "$sums" >"$tmp"

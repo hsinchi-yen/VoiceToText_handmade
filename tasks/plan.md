@@ -312,9 +312,11 @@ Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫�
 | Clipboard portal | **沒有**（xdg-desktop-portal-gnome 45 才加入） | 背景程式無法設定剪貼簿 |
 | RemoteDesktop portal | 有，**version 1**，AvailableDeviceTypes=7 | 可送按鍵，但沒有 `persist_mode`，每次建立工作階段都會跳出同意對話框；Wayland 下 mutter 的 `NotifyKeyboardKeysym` 不送不在鍵盤配置裡的字元（中文無法逐字輸入） |
 | evdev | `/dev/input/event*` 屬 `root:input` 0660；使用者**不在** `input` 群組；`/dev/uinput` 為 root 0600 | evdev 熱鍵需要人工把使用者加入 `input` 群組 |
+| 鍵盤裝置 | `/proc/bus/input/devices` 只有電源鍵、Video Bus、HDMI 音訊，**沒有實體鍵盤**（T3.1 實測；推測經遠端桌面操作） | 即使加入 `input` 群組，evdev 熱鍵在本機也收不到按鍵 |
 | 音訊 | PulseAudio 伺服器；**沒有任何擷取裝置**（`arecord -l` 為空，唯一 source 是 HDMI monitor） | 無法實機錄音；ASR 只能用 mock 或 WAV |
 | GPU | Intel Iris Xe，**沒有 NVIDIA** | 不用 CUDA／Breeze；第 5.1 節 VRAM 管理在 Linux 上停用（`gpu.enabled=false`） |
 | 工具鏈 | rustc／cargo 1.99.1、clippy、rustfmt、gcc、Node；**沒有 cmake、clang、libclang、gtk／webkit2gtk-4.1／libsoup-3 開發檔** | `whisper-rs-sys` 編不過 → `v2c-asr-local`、`v2c-cli`、Tauri 桌面 App 在本機無法建置；`v2c-core`、`v2c-platform` 可以 |
+| 既有 ASR | `http://10.20.30.23:8002/v1`（使用者提供）：OpenAI 相容 `/audio/transcriptions`，需要金鑰，模型 `breeze-asr-25`；英文合成句實測約 5.6 秒，超過預設 `asr_cloud_ms=5000` | Linux 設定建議 `asr_cloud_ms = 8000`；中文辨識未驗證（本機只有英文 TTS） |
 | 既有 LLM | `http://10.20.30.23:8000/v1`：llama.cpp（build b10752）、模型 `Qwen3.8-27B-UD-Q6_K_L`、n_ctx 65536、不需金鑰；`/health` ok；`modalities.audio=false`；`/v1/audio/transcriptions` 回 501 | 只用於潤飾／翻譯，**不能做 ASR**；預設開啟思考，一句約 2.7 秒，關閉思考（`chat_template_kwargs.enable_thinking=false`）約 0.23 秒 |
 
 ### 9.2 設計（依查證結果調整）
