@@ -160,7 +160,7 @@ cd apps/desktop && npm run tauri:build:cuda             # 發行用 NSIS 安裝�
 cd apps/desktop && npm run tauri build                  # 不含 CUDA 的安裝檔（只用 SenseVoice／CPU）
 ```
 
-安裝檔輸出在 `<CARGO_TARGET_DIR 或 target>\release\bundle\nsis\`。
+用 `tools\build-installer.ps1` 建置時，安裝檔會放在 repo 的 `releases\`（不進 git）；手動執行 `npm run tauri build` 則在 `<CARGO_TARGET_DIR 或 target>\release\bundle\nsis\`。
 Breeze 模型的轉檔方式見 [tools/convert-breeze/README.md](tools/convert-breeze/README.md)。
 
 ## 授權

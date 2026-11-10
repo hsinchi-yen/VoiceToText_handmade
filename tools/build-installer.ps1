@@ -1,5 +1,6 @@
-# Builds the Windows NSIS installer (CUDA build by default), then prints SHA-256 hashes and runs
-# a Windows Defender scan on the installer and v2c.exe. See docs/build-guide.md.
+# Builds the Windows NSIS installer (CUDA build by default), moves it to <repo>\releases\,
+# records its SHA-256 in releases\SHA256SUMS.txt, and runs a Windows Defender scan on the
+# installer and v2c.exe. See docs/build-guide.md.
 #
 #   powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1
 #   powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1 -CpuOnly -Jobs 2
@@ -47,8 +48,21 @@ try {
 # Regex instead of ConvertFrom-Json: Windows PowerShell 5 rejects keys that differ only in case.
 $conf = Get-Content (Join-Path $repo 'apps\desktop\src-tauri\tauri.conf.json') -Raw
 $version = [regex]::Match($conf, '"version"\s*:\s*"([^"]+)"').Groups[1].Value
-$installer = Join-Path $TargetDir "release\bundle\nsis\v2c_${version}_x64-setup.exe"
+$name = "v2c_${version}_x64-setup.exe"
+$built = Join-Path $TargetDir "release\bundle\nsis\$name"
 $exe = Join-Path $TargetDir 'release\v2c.exe'
+
+# Deliverables go to <repo>\releases (git-ignored); the target dir keeps only build caches.
+$releases = Join-Path $repo 'releases'
+New-Item -ItemType Directory -Force $releases | Out-Null
+$installer = Join-Path $releases $name
+Move-Item -Force $built $installer
+$sums = Join-Path $releases 'SHA256SUMS.txt'
+$hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
+$lines = @()
+if (Test-Path $sums) { $lines = @(Get-Content $sums | Where-Object { $_ -notmatch [regex]::Escape("  $name") + '$' }) }
+($lines + "$hash  $name") | Set-Content -Encoding ascii $sums
+
 $defender = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
 foreach ($f in @($installer, $exe)) {
     $i = Get-Item $f

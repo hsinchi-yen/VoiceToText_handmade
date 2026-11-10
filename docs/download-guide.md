@@ -8,7 +8,7 @@ GitHub repo 只放原始碼與文件。下面這些檔案太大、或是你本�
 | Breeze-ASR-25 GGML q5_0 | 約 1.08 GB | GPU 語音辨識（預設） | 自己轉檔（見下方） |
 | Breeze-ASR-25 GGML q8_0 | 約 1.66 GB | GPU 語音辨識（稍準、多用約 0.5 GB 顯存） | 自己轉檔 |
 | LM Studio 語言模型 | 約 2 GB | 潤飾、中翻英（選用） | 在 LM Studio 裡下載 |
-| Windows 安裝檔 `v2c_<版本>_x64-setup.exe` | 約 439 MB | 安裝 v2c | 自己建置，見 [build-guide.md](build-guide.md) |
+| Windows 安裝檔 `v2c_<版本>_x64-setup.exe` | 約 439 MB | 安裝 v2c | 自己建置，見 [build-guide.md](build-guide.md)；建好的檔案在 repo 的 `releases\`（附 `SHA256SUMS.txt`） |
 | 測試錄音 `tests/fixtures/audio/*.wav` | 每個約 0.1～0.3 MB | `v2c-cli bench` 量測 | 自己錄，見 [tests/fixtures/audio/README.md](../tests/fixtures/audio/README.md) |
 
 ## 模型放哪裡

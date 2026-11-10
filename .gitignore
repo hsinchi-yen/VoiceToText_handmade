@@ -1,5 +1,7 @@
 # Build output
 target/
+# Built installers and their checksums (tools/build-installer.ps1) — never commit
+releases/
 node_modules/
 dist/
 apps/android/.gradle/

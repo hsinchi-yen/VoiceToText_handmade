@@ -54,7 +54,8 @@ Commands for things that don't exist yet are the intended ones; the task that cr
 3. **Local first.** Nothing may require an API key to work out of the box. Model names, endpoints, and thresholds go in config, not code.
 4. **Stay inside the card's scope.** Edit only the paths the card lists under "允許修改". To change a `v2c-core` public interface, stop and request approval (see Workflow).
 5. **Do not install system software** (CUDA, drivers, winget packages). Write the script or instructions; the human runs them.
-   Keep every test artifact (downloaded test models, generated WAVs, bench output, scratch dirs) under `tests/` in this repo — use `tests/tmp/` (git-ignored) for throwaway files. Never create test folders in the user's home directory. The only build directory outside the repo is `C:\Users\lance.tn\.v2ct` (`CARGO_TARGET_DIR`); share it instead of creating per-task target dirs.
+   Keep every test artifact (downloaded test models, generated WAVs, bench output, scratch dirs) under `tests/` in this repo — use `tests/tmp/` (git-ignored) for throwaway files. Never create test folders in the user's home directory. The only build directory outside the repo is `C:\Users\lance.tn\.v2ct` (`CARGO_TARGET_DIR`, build caches only); share it instead of creating per-task target dirs.
+   Every deliverable you build (installers, release binaries handed to the user) goes to `releases/` in this repo (git-ignored), with its SHA-256 in `releases/SHA256SUMS.txt`. `tools/build-installer.ps1` does this; never leave a deliverable only in the target dir.
 6. Verify any crate or external API marked 【實作前確認】 against its current docs before using it, and note the result in your report.
 
 ## Workflow

@@ -31,7 +31,10 @@ powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1 -CpuOnly  # �
 1. 設好 PATH（VS 內建的 CMake、cargo、Node、指定版本的 CUDA，並排除其他版本的 CUDA）與 `LIBCLANG_PATH`、`CUDA_PATH`、`CMAKE_CUDA_ARCHITECTURES`。
 2. 第一次執行時在 `apps/desktop` 跑 `npm ci`。
 3. 執行 `npm run tauri:build:cuda`（或 `-CpuOnly` 時的 `npm run tauri build`）。
-4. 印出安裝檔與 `v2c.exe` 的大小、SHA-256，並用 Windows Defender 掃描。
+4. 把安裝檔搬到 repo 的 `releases\`，SHA-256 寫進 `releases\SHA256SUMS.txt`。
+5. 印出安裝檔與 `v2c.exe` 的大小、SHA-256，並用 Windows Defender 掃描。
+
+**檔案整理規則：** 交付用的檔案（安裝檔）一律放在 repo 的 `releases\`；`%USERPROFILE%\.v2ct\` 只放編譯快取，可以隨時刪掉重建（下次建置會很久）。`releases\` 已列在 `.gitignore`，不會進 git。手動建置（第 5 節）時，也請把安裝檔搬到 `releases\`。
 
 參數：
 
@@ -48,7 +51,8 @@ powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1 -CpuOnly  # �
 
 | 檔案 | 位置 |
 |------|------|
-| 安裝檔 | `%USERPROFILE%\.v2ct\release\bundle\nsis\v2c_<版本>_x64-setup.exe`（約 439 MiB） |
+| 安裝檔 | repo 的 `releases\v2c_<版本>_x64-setup.exe`（約 439 MiB；腳本建好後從 `.v2ct\release\bundle\nsis\` 搬過來） |
+| 雜湊清單 | `releases\SHA256SUMS.txt`（每個版本一行，給別人核對下載的檔案） |
 | 主程式 | `%USERPROFILE%\.v2ct\release\v2c.exe` |
 | 開發工具 | `%USERPROFILE%\.v2ct\release\v2c-cli.exe`（用 `cargo build --release -p v2c-cli` 產生） |
 

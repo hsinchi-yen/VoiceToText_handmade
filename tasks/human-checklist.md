@@ -113,7 +113,7 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
   - polished 那行沒有改變語意、沒有多出或少掉內容、問句沒被回答、「幫我寫一封信…」這類請求沒被執行
   - filler-01 應得到「我們後天早上十點見面。」；沒有簡體字
   - 每段的 `PASS/FAIL asr+polish (… per 10 s, target <= 2500)` 與摘要的 `polish verdict`
-- [ ] T1.11 安裝檔與初次設定（安裝檔：`C:\Users\lance.tn\.v2ct\release\bundle\nsis\v2c_0.1.1_x64-setup.exe`，2026-11-10 建置的 0.1.1（修正放開右 Ctrl 的訊號遺失時卡在錄音中），約 439 MiB，SHA-256 `DCAE1A7D1432E426FD8707FBE34D47A947AC4768675C266CA1985BF36AF1B373`，建置機 Defender 掃描無威脅；重建方式見 `docs/build-guide.md`）
+- [ ] T1.11 安裝檔與初次設定（安裝檔：`C:\Users\lance.tn\AI Project\VoiceToText_handmade\releases\v2c_0.1.1_x64-setup.exe`，2026-11-10 建置的 0.1.1（修正放開右 Ctrl 的訊號遺失時卡在錄音中），約 439 MiB，SHA-256 `DCAE1A7D1432E426FD8707FBE34D47A947AC4768675C266CA1985BF36AF1B373`，建置機 Defender 掃描無威脅；重建方式見 `docs/build-guide.md`）
   1. **授權確認**：安裝檔隨附 VC++ 執行階段（`msvcp140.dll` 等），前提是你有有效的 Visual Studio（含 Build Tools／Community）授權；確認後打勾
   2. **Windows Sandbox（模擬沒有 NVIDIA 的乾淨電腦）**：把安裝檔複製進 Sandbox 執行 → SmartScreen 按「其他資訊 → 仍要執行」→ 不需要系統管理員權限即可安裝 → 啟動時沒有缺 DLL 的錯誤 → 自動進入初次設定
      - 偵測顯示卡應顯示「沒有偵測到 NVIDIA」→ 下載 SenseVoice（約 160 MB；試暫停與繼續）→ 自動重新啟動並從「麥克風」步驟接續 → 測試麥克風（Sandbox 需先開麥克風）→ 在文字框按住右 Ctrl 說一句
