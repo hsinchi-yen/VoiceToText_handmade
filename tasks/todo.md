@@ -83,7 +83,7 @@
 - [ ] W11 T3.0 重新查證並拆出 T3.1～T3.4 任務卡
   - [x] 2026-11-10：Linux 主機改為目前執行 agent 的電腦（使用者決定）；檢查點 2 **尚未通過**，使用者授權提前進行
   - [x] 唯讀查證本機（Ubuntu 22.04／GNOME 42 Wayland：沒有 GlobalShortcuts、Clipboard portal，RemoteDesktop v1；沒有麥克風、NVIDIA、cmake、webkit2gtk-4.1）與既有 LLM（llama.cpp Qwen3.8-27B，10.20.30.23:8000，不支援音訊），更新 plan.md 第 9 節並拆出 T3.1～T3.4
-  - [ ] 🧑 核准 T3.0（卡片＋第 9 節）
+  - [x] 🧑 核准 T3.0（卡片＋第 9 節）——2026-11-10 核准，`t3-linux-integration` 已併入本機 main（未 push）
 - [ ] W12 T3.1 能力偵測＋熱鍵（portal → evdev → 不可用）
   - [x] `linux::caps::{LinuxCaps, probe()}`（唯讀：環境變數、portal Introspect＋`version`、`/proc/bus/input/devices`、試開裝置）；`linux::hotkey::{HotkeyBackend, select_backend(), LinuxHotkey}`；evdev／portal 事件轉換＋mock 測試（自動重複、權限拒絕、後端順序、SYN_DROPPED、接上 `trigger` 跑按住說話／雙擊免持／Ctrl+C／Shift 翻譯／Esc）
   - [x] 本機唯讀實測（`-- --ignored linux_real`）：沒有 GlobalShortcuts、RemoteDesktop v1、沒有 Clipboard；`/dev/input/event0` 為 EACCES；本機**沒有接任何鍵盤裝置**（只有電源鈕／HDMI），後端判定為不可用
@@ -115,4 +115,7 @@
   - [ ] 🧑 實機看通知（`cargo test -p v2c-platform -- --ignored linux_real_notify`）
   - [ ] 🧑 核准 `tauri.conf.json` 的 Linux 打包設定與合併 T3.4
 - [x] 整合分支 `t3-linux-integration`（2026-11-10，基於 origin/main 0.1.3；T3.1～T3.4 各經獨立審查通過）：`cargo test -p v2c-core -p v2c-platform` 全部通過、clippy／fmt 通過；真實 LLM（8000）4/4、真實 ASR（8002，英文合成句）在預設 5 秒逾時下失敗、放寬到 15 秒通過（約 5.6 秒，CER 0）；**不代表真實 GNOME Wayland 端到端可用**
+- [ ] W15 T3.5 IBus 引擎（熱鍵＋CommitText 輸出）
+- [ ] W16 T3.6 桌面 App 支援 Linux（等 🧑 安裝建置套件）
+- [ ] W17 T3.7 .deb／AppImage 交付到 `releases/`
 - [ ] **檢查點 3**：第一版交付
