@@ -71,6 +71,7 @@
   - [ ] 🧑 Sandbox 乾淨安裝、實機安裝、Defender、VS 授權確認（見 human-checklist）
 - [ ] W7b T1.12 TEA-ASR-1.1 第三個地端語音辨識引擎（設定頁可選）
 - [ ] W7b T1.13 自訂相容端點別名（沒填顯示 custom）
+- [ ] W7b T1.14 設定頁直接選地端辨識引擎＋地端語音模型與 LM Studio 測試
 - [ ] **檢查點 1**：日常使用一週，問題記在 `dogfood-windows.md`
 
 ## Phase 2 — Android
