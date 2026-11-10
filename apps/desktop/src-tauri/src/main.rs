@@ -133,7 +133,9 @@ fn main() {
             let handle = app.handle();
             commands::history::init(handle); // before the controller reads the sinks
                                              // Before the background tasks so the overlay sees their first status events.
-            if let Err(e) = overlay::start(handle, &handle.state::<AppState>().status) {
+            if !overlay_enabled() {
+                info!("overlay disabled on Wayland (notifications instead)");
+            } else if let Err(e) = overlay::start(handle, &handle.state::<AppState>().status) {
                 error!(error = %e, "overlay window could not be created");
             }
             if let Err(e) = tray::start(handle) {
@@ -183,7 +185,23 @@ fn show_main_unless_autostart(app: &tauri::AppHandle) {
         }
     }
 }
-/// Windows Credential Manager as the keyring-core default store, for cloud API keys.
+/// The floating overlay: always on Windows; off on a Linux Wayland session, where a window
+/// cannot be placed near the cursor or kept from taking focus (T3.6).
+fn overlay_enabled() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use v2c_platform::linux::caps::SessionType;
+        let session = std::env::var("XDG_SESSION_TYPE").ok();
+        SessionType::from_env_value(session.as_deref()) != SessionType::Wayland
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
+/// Windows Credential Manager (Linux: Secret Service) as the keyring-core default store, for
+/// cloud API keys.
 fn install_keyring() -> Arc<dyn SecretStore> {
     #[cfg(windows)]
     match windows_native_keyring_store::Store::new() {
@@ -192,6 +210,12 @@ fn install_keyring() -> Arc<dyn SecretStore> {
             info!("keyring: Windows Credential Manager");
         }
         // Cloud services then report a key error; local use is unaffected.
+        Err(e) => warn!(error = %e, "keyring store unavailable"),
+    }
+    // T3.6: freedesktop Secret Service (GNOME Keyring / KWallet) over zbus.
+    #[cfg(target_os = "linux")]
+    match v2c_platform::linux::secret::install_default_store() {
+        Ok(()) => info!("keyring: Secret Service"),
         Err(e) => warn!(error = %e, "keyring store unavailable"),
     }
     Arc::new(v2c_core::secrets::KeyringSecretStore::new())
@@ -366,9 +390,102 @@ fn start_controller(state: &AppState, recorder: Arc<Recorder>) {
     info!("controller started");
 }
 
-#[cfg(not(windows))]
+/// Linux (T3.6, UNVERIFIED: not compiled yet). Uses the T3.1 hotkey (GlobalShortcuts portal
+/// or evdev) and the T3.2 injector (Clipboard + RemoteDesktop portals).
+///
+/// TODO(T3.5): prefer `IbusHotkey` / `IbusInjector` when the v2c IBus engine is active, and
+/// fall back to the backends below otherwise (with the T3.4 notification telling the user).
+/// Their API is not merged yet. The floating overlay stays off on Wayland (notifications
+/// replace it).
+#[cfg(target_os = "linux")]
 fn start_controller(state: &AppState, recorder: Arc<Recorder>) {
-    // Linux hotkey and injection arrive in Phase 3.
+    use std::time::Duration;
+
+    use v2c_core::trigger::Event;
+    use v2c_platform::linux::hotkey::{monotonic_ms, LinuxHotkey};
+    use v2c_platform::linux::inject::{portal_injector, InjectConfig};
+    use v2c_platform::{Hotkey, InjectError, Injector};
+
+    const TICK: Duration = Duration::from_millis(50);
+
+    /// No foreground-app detection on Wayland: app rules fall back to the defaults.
+    struct NoForeground;
+    impl v2c_platform::Foreground for NoForeground {
+        fn current_app(&self) -> Option<v2c_platform::AppInfo> {
+            None
+        }
+    }
+
+    /// Used when no injection backend works here: every run reports why.
+    struct UnsupportedInjector(InjectError);
+    impl Injector for UnsupportedInjector {
+        fn run(&self, _: &[v2c_core::inject_plan::Action]) -> Result<(), InjectError> {
+            Err(self.0.clone())
+        }
+    }
+
+    let caps = v2c_platform::linux::caps::probe();
+    let (events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+
+    let mut hook = LinuxHotkey::new(v2c_platform::linux::hotkey::select_backend(&caps));
+    let hook_tx = events_tx.clone();
+    match hook.start(Box::new(move |event| {
+        let _ = hook_tx.send(event);
+    })) {
+        Ok(()) => info!(backend = ?hook.backend(), "hotkey started"),
+        Err(e) => {
+            warn!(error = %e, "hotkey failed");
+            let _ = state.status.send(StatusEvent::Error {
+                code: "hotkey_failed",
+            });
+        }
+    }
+    if let Ok(mut keep) = state.keep_alive.lock() {
+        keep.push(Box::new(hook));
+    }
+
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(TICK);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let tick = Event::Tick {
+                at_ms: monotonic_ms(),
+            };
+            if events_tx.send(tick).is_err() {
+                break;
+            }
+        }
+    });
+
+    let injector: Arc<dyn Injector + Send + Sync> =
+        match portal_injector(&caps, InjectConfig::default()) {
+            Ok(i) => {
+                info!("injector: Clipboard + RemoteDesktop portals");
+                Arc::new(i)
+            }
+            Err(e) => {
+                warn!(error = %e, "no text injection backend");
+                Arc::new(UnsupportedInjector(e))
+            }
+        };
+
+    let deps = controller::Deps {
+        source: recorder,
+        injector,
+        foreground: Arc::new(NoForeground),
+        sinks: sinks::SinkRegistry::with_defaults(),
+        status: state.status.clone(),
+        backend: Arc::new(EngineHandle(Arc::clone(&state.engine))),
+        config: state.engine.config_watch(),
+    };
+    tauri::async_runtime::spawn(controller::run(deps, events_rx));
+    info!("controller started");
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn start_controller(state: &AppState, recorder: Arc<Recorder>) {
+    // No hotkey / injection backend on this platform.
     let _ = (recorder, EngineHandle);
     tracing::warn!("hotkey and text injection are not implemented on this platform yet");
     let _ = state.status.send(StatusEvent::Error {

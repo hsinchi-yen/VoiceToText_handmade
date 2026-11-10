@@ -118,9 +118,35 @@ fn open_store(data_dir: &Path, cfg: &HistoryConfig) -> Option<Arc<History>> {
     }
 }
 
-#[cfg(not(windows))]
+/// T3.6: AES-256-GCM with a key kept in the Secret Service (`linux::protect`). The key is
+/// read lazily on the first write/read, so a locked keyring only fails those calls.
+#[cfg(target_os = "linux")]
+fn open_store(data_dir: &Path, cfg: &HistoryConfig) -> Option<Arc<History>> {
+    use v2c_platform::linux::protect::SecretServiceProtector;
+
+    if let Err(e) = std::fs::create_dir_all(data_dir) {
+        warn!(error = %e, "history: data directory unavailable");
+        return None;
+    }
+    match History::open(
+        &data_dir.join("history.db"),
+        Arc::new(SecretServiceProtector::new()),
+        cfg.clone(),
+    ) {
+        Ok(h) => {
+            info!(enabled = cfg.enabled, "history opened");
+            Some(Arc::new(h))
+        }
+        Err(e) => {
+            warn!(error = %e, "history could not be opened");
+            None
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn open_store(_data_dir: &Path, _cfg: &HistoryConfig) -> Option<Arc<History>> {
-    // Linux (Secret Service key) arrives in Phase 3; never store unencrypted text.
+    // No data protector on this platform; never store unencrypted text.
     warn!("history is not available on this platform yet");
     None
 }
