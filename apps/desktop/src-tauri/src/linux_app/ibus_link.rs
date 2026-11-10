@@ -127,9 +127,19 @@ impl IbusLink {
         }
     }
 
-    /// Hands over the fallback hotkey; it is stopped once IBus connects.
-    pub fn set_fallback_hotkey(&self, hotkey: Box<dyn Hotkey + Send>) {
-        *lock(&self.fallback_hotkey) = Some(hotkey);
+    /// Hands over the fallback hotkey; it is stopped once IBus connects, or right away if
+    /// IBus already connected (a reconnect or poke can win the race with startup).
+    /// `connected` is only set to `true` while holding the same lock, so the two cannot
+    /// both stay live.
+    pub fn set_fallback_hotkey(&self, mut hotkey: Box<dyn Hotkey + Send>) {
+        let mut slot = lock(&self.fallback_hotkey);
+        if self.is_connected() {
+            drop(slot);
+            hotkey.stop();
+            info!("fallback hotkey stopped (IBus engine already connected)");
+        } else {
+            *slot = Some(hotkey);
+        }
     }
 
     #[cfg(test)]
@@ -144,13 +154,15 @@ impl IbusLink {
         }
         let engine = self.factory.connect()?;
         engine.start_hotkey(Arc::clone(&self.sink))?;
-        let primary = engine.injector();
-        self.injector.set(Arc::new(ChainInjector::new(
-            primary,
-            self.fallback_injector.clone(),
-        )));
-        self.connected.store(true, Ordering::SeqCst);
-        if let Some(mut hk) = lock(&self.fallback_hotkey).take() {
+        // Connected: IBus only. NO_FOCUSED_INPUT must reach the caller (plan 9.2a); the
+        // portal injector is only used while disconnected (`offline_injector`).
+        self.injector.set(engine.injector());
+        let fallback_hotkey = {
+            let mut slot = lock(&self.fallback_hotkey);
+            self.connected.store(true, Ordering::SeqCst);
+            slot.take()
+        };
+        if let Some(mut hk) = fallback_hotkey {
             hk.stop();
             info!("fallback hotkey stopped (IBus engine connected)");
         }
@@ -484,6 +496,22 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn connected_before_hand_over_stops_the_fallback() {
+        // A reconnect / poke connected before the init thread handed over its hotkey.
+        let h = harness(&[true], None);
+        h.link.connect().unwrap();
+        let stopped = Arc::new(Mutex::new(false));
+        h.link
+            .set_fallback_hotkey(Box::new(FakeHotkey(Arc::clone(&stopped))));
+        assert!(
+            *stopped.lock().unwrap(),
+            "fallback must not run next to IBus"
+        );
+        assert!(!h.link.has_fallback_hotkey());
+        h.link.shutdown();
     }
 
     #[test]

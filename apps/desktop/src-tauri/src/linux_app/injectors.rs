@@ -1,7 +1,9 @@
 //! Injector plumbing for Linux (pure, unit-tested with fakes).
 //!
-//! - [`ChainInjector`]: the IBus injector first; if it typed nothing (e.g.
-//!   `NO_FOCUSED_INPUT`), the portal clipboard injector when one exists.
+//! - [`ChainInjector`]: while the IBus engine is disconnected or unavailable
+//!   ([`IBUS_DISCONNECTED`]), the portal clipboard injector when one exists. Any other error
+//!   — notably `NO_FOCUSED_INPUT` (plan section 9.2a) — is returned as is, so the caller
+//!   keeps the text and tells the user; it is never pasted somewhere else.
 //! - [`SwitchInjector`]: the controller's injector; the IBus link swaps what is inside it
 //!   when the engine reconnects, without restarting the controller.
 
@@ -9,6 +11,8 @@ use std::sync::{Arc, RwLock};
 
 use v2c_core::inject_plan::Action;
 use v2c_platform::{InjectError, Injector};
+
+use super::ibus_link::IBUS_DISCONNECTED;
 
 pub type SharedInjector = Arc<dyn Injector + Send + Sync>;
 
@@ -22,7 +26,7 @@ impl Injector for UnsupportedInjector {
     }
 }
 
-/// `primary`, then `fallback` if the primary typed nothing.
+/// `primary`, then `fallback` only if the primary reported [`IBUS_DISCONNECTED`].
 pub struct ChainInjector {
     primary: SharedInjector,
     fallback: Option<SharedInjector>,
@@ -36,15 +40,9 @@ impl ChainInjector {
 
 impl Injector for ChainInjector {
     fn run(&self, actions: &[Action]) -> Result<(), InjectError> {
-        match self.primary.run(actions) {
-            Ok(()) => Ok(()),
-            // Part of the text is already in the field: running the rest through another
-            // backend would duplicate it. The kept-text sink keeps the whole text.
-            Err(e @ InjectError::Partial { .. }) => Err(e),
-            Err(e) => match &self.fallback {
-                Some(f) => f.run(actions),
-                None => Err(e),
-            },
+        match (self.primary.run(actions), &self.fallback) {
+            (Err(InjectError::Os(msg)), Some(f)) if msg == IBUS_DISCONNECTED => f.run(actions),
+            (result, _) => result,
         }
     }
 }
@@ -120,21 +118,37 @@ mod tests {
     }
 
     #[test]
-    fn no_focused_input_falls_back() {
+    fn no_focused_input_keeps_the_text_without_portal_paste() {
+        // Plan 9.2a: the error goes back to the caller (kept-text sink + notification).
         let no_input = InjectError::Os(v2c_platform::linux::ibus::NO_FOCUSED_INPUT.into());
         let (p, f) = (Fake::new(Err(no_input.clone())), Fake::new(Ok(())));
+        let c = ChainInjector::new(p.clone(), Some(f.clone()));
+        assert_eq!(c.run(&actions()), Err(no_input));
+        assert_eq!((p.runs(), f.runs()), (1, 0), "no portal call");
+
+        // Other IBus errors (e.g. a failed D-Bus send) do not fall back either.
+        let os = InjectError::Os("send failed".into());
+        let c = ChainInjector::new(Fake::new(Err(os.clone())), Some(f.clone()));
+        assert_eq!(c.run(&actions()), Err(os));
+        assert_eq!(f.runs(), 0);
+    }
+
+    #[test]
+    fn disconnected_ibus_falls_back_to_the_portal() {
+        let gone = InjectError::Os(IBUS_DISCONNECTED.into());
+        let (p, f) = (Fake::new(Err(gone.clone())), Fake::new(Ok(())));
         let c = ChainInjector::new(p.clone(), Some(f.clone()));
         assert_eq!(c.run(&actions()), Ok(()));
         assert_eq!((p.runs(), f.runs()), (1, 1));
 
         // Fallback fails too: its error is reported.
         let denied = Fake::new(Err(InjectError::PermissionDenied));
-        let c = ChainInjector::new(Fake::new(Err(no_input.clone())), Some(denied));
+        let c = ChainInjector::new(Fake::new(Err(gone.clone())), Some(denied));
         assert_eq!(c.run(&actions()), Err(InjectError::PermissionDenied));
 
         // No fallback: the primary's error.
-        let c = ChainInjector::new(Fake::new(Err(no_input.clone())), None);
-        assert_eq!(c.run(&actions()), Err(no_input));
+        let c = ChainInjector::new(Fake::new(Err(gone.clone())), None);
+        assert_eq!(c.run(&actions()), Err(gone));
     }
 
     #[test]

@@ -65,15 +65,16 @@
     } catch (code) {
       if (code !== "platform_unsupported" || !navigator.clipboard) {
         message = describe(code);
-        return;
-      }
-      try {
-        await navigator.clipboard.writeText(item.text);
-        message = "已複製到剪貼簿";
-      } catch {
-        message = "無法存取剪貼簿：請選取文字後按 Ctrl+C";
+      } else {
+        try {
+          await navigator.clipboard.writeText(item.text);
+          message = "已複製到剪貼簿";
+        } catch {
+          message = "無法存取剪貼簿：請選取文字後按 Ctrl+C";
+        }
       }
     }
+    await refresh();
   }
   const reoutput = (id) => act("history_reoutput", id, "已重新輸出");
   const remove = (id) => act("history_delete", id, "已刪除");

@@ -97,7 +97,10 @@ pub fn start_controller(app: &tauri::AppHandle, state: &AppState, recorder: Arc<
         unsent,
         move |k| {
             kept::warn_if_memory(k);
-            kept_notes.show(NotifyStatus::TextKept);
+            kept_notes.show(match k {
+                kept::Kept::History => NotifyStatus::TextKept,
+                kept::Kept::Memory => NotifyStatus::TextKeptUntilExit,
+            });
         },
     )));
 

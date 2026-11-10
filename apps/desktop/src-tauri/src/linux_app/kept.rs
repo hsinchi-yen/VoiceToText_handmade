@@ -5,7 +5,8 @@
 //! [`KeepTextSink`] makes sure the text survives: it is written to the encrypted input
 //! history when that is possible, otherwise kept in memory ([`UnsentStore`], never on
 //! disk, never logged) and listed at the top of the 紀錄 page with a negative id. Either
-//! way the user is told where it is ([`Kept`] → `NotifyStatus::TextKept`).
+//! way the user is told where it is ([`Kept`] → `NotifyStatus::TextKept` /
+//! `TextKeptUntilExit`).
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};

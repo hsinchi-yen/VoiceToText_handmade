@@ -48,9 +48,11 @@ pub enum NotifyStatus {
     Done,
     /// Text could not be pasted automatically; it is on the clipboard for the user.
     CopiedToClipboard,
-    /// Nothing was typed (e.g. no text field uses the v2c input method); the text is kept in
-    /// v2c's input history page for the user to copy (T3.6).
+    /// Nothing was typed (any cause); the text is in v2c's encrypted input history (T3.6).
     TextKept,
+    /// Nothing was typed and the history could not take it: the text is listed on the input
+    /// history page only until v2c exits (T3.6).
+    TextKeptUntilExit,
     Error(NotifyErrorKind),
 }
 
@@ -138,7 +140,13 @@ pub fn notification_for(status: NotifyStatus) -> Notification {
         ),
         NotifyStatus::TextKept => lasting(
             "文字沒有輸入",
-            "沒有使用 v2c 輸入法的輸入框；文字已保留在 v2c 主視窗的「輸入紀錄」",
+            "文字沒有輸入，已保留在 v2c 的「輸入紀錄」",
+            "document-save",
+            8000,
+        ),
+        NotifyStatus::TextKeptUntilExit => lasting(
+            "文字沒有輸入（暫存）",
+            "文字沒有輸入，已暫時保留在 v2c 的「輸入紀錄」（結束 v2c 後消失）",
             "document-save",
             8000,
         ),
@@ -330,13 +338,14 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    const ALL: [NotifyStatus; 15] = [
+    const ALL: [NotifyStatus; 16] = [
         NotifyStatus::Recording,
         NotifyStatus::Recognizing,
         NotifyStatus::Polishing,
         NotifyStatus::Done,
         NotifyStatus::CopiedToClipboard,
         NotifyStatus::TextKept,
+        NotifyStatus::TextKeptUntilExit,
         NotifyStatus::Error(NotifyErrorKind::ImeDisconnected),
         NotifyStatus::Error(NotifyErrorKind::ImeUnavailable),
         NotifyStatus::Error(NotifyErrorKind::InjectPermissionDenied),
@@ -380,8 +389,15 @@ mod tests {
             "熱鍵無法使用"
         );
         // Kept text must tell the user where it is, and must stay on screen.
-        let kept = notification_for(NotifyStatus::TextKept);
-        assert!(kept.body.contains("輸入紀錄") && !kept.transient);
+        for status in [NotifyStatus::TextKept, NotifyStatus::TextKeptUntilExit] {
+            let kept = notification_for(status);
+            assert!(
+                kept.body.contains("輸入紀錄") && !kept.transient,
+                "{status:?}"
+            );
+            // Neutral about the cause (no focused field, disconnect, permission, ...).
+            assert!(!kept.body.contains("輸入法"), "{status:?}");
+        }
     }
 
     #[test]
