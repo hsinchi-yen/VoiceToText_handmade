@@ -83,13 +83,13 @@
 - [ ] W11 T3.0 重新查證並拆出 T3.1～T3.4 任務卡
   - [x] 2026-11-10：Linux 主機改為目前執行 agent 的電腦（使用者決定）；檢查點 2 **尚未通過**，使用者授權提前進行
   - [x] 唯讀查證本機（Ubuntu 22.04／GNOME 42 Wayland：沒有 GlobalShortcuts、Clipboard portal，RemoteDesktop v1；沒有麥克風、NVIDIA、cmake、webkit2gtk-4.1）與既有 LLM（llama.cpp Qwen3.8-27B，10.20.30.23:8000，不支援音訊），更新 plan.md 第 9 節並拆出 T3.1～T3.4
-  - [ ] 🧑 核准 T3.0（卡片＋第 9 節）
+  - [x] 🧑 核准 T3.0（卡片＋第 9 節）——2026-11-10 核准，`t3-linux-integration` 已併入本機 main（未 push）
 - [ ] W12 T3.1 能力偵測＋熱鍵（portal → evdev → 不可用）
   - [x] `linux::caps::{LinuxCaps, probe()}`（唯讀：環境變數、portal Introspect＋`version`、`/proc/bus/input/devices`、試開裝置）；`linux::hotkey::{HotkeyBackend, select_backend(), LinuxHotkey}`；evdev／portal 事件轉換＋mock 測試（自動重複、權限拒絕、後端順序、SYN_DROPPED、接上 `trigger` 跑按住說話／雙擊免持／Ctrl+C／Shift 翻譯／Esc）
   - [x] 本機唯讀實測（`-- --ignored linux_real`）：沒有 GlobalShortcuts、RemoteDesktop v1、沒有 Clipboard；`/dev/input/event0` 為 EACCES；本機**沒有接任何鍵盤裝置**（只有電源鈕／HDMI），後端判定為不可用
   - [ ] 🧑 把使用者加入 `input` 群組（`sudo usermod -aG input $USER`，重新登入）並接上實體鍵盤後實機按鍵
   - [ ] 🧑 在 GNOME ≥ 48 的機器測 GlobalShortcuts（綁定對話框、按住／放開事件）
-  - [ ] 🧑 核准合併 T3.1
+  - [x] 🧑 核准合併 T3.1（2026-11-10，隨 `t3-linux-integration` 合併到本機 main）
 - [ ] W12 T3.3 既有 LLM 串接＋端到端模擬
   - [x] wiremock 測試（由 `Config` 建 provider：`[local]`／`[[cloud]]`；連線被拒、逾時、401、500、501、`finish_reason=length`、壞 JSON、`reasoning_content`、`<think>`；潤飾失敗退回去贅字、翻譯回報錯誤）：`crates/v2c-platform/tests/linux_llm.rs`
   - [x] 遠端相容 ASR（`CompatAsr`）wiremock 測試與兩台遠端服務設定：`crates/v2c-platform/tests/linux_asr.rs`
@@ -107,7 +107,7 @@
   - [x] `apps/desktop` 的 `inject_error_code` 補上兩個新變體（a0ee91d）
   - [x] 審查修正：工作階段只在 `prepare` 開啟、執行結束後才丟棄（不會在中途再跳對話框）；中途失敗盡力還原；權限/不支援錯誤保留種類；剪貼簿訊號限定 portal 送出者並忽略過期的擁有者變更
   - [ ] 🧑 在 GNOME ≥ 45 實機測貼上到 gedit／Firefox／終端機；RemoteDesktop 同意對話框按「取消」的提示
-  - [ ] 🧑 核准合併 T3.2
+  - [x] 🧑 核准合併 T3.2（2026-11-10，隨 `t3-linux-integration` 合併到本機 main）
 - [ ] W14 T3.4 通知提示＋打包
   - [x] `linux::notify::{notification_for, Notifier, DbusNotifier}`：狀態（錄音中／辨識中／潤飾中／完成／已複製請按 Ctrl+V／權限不足、不支援剪貼簿、熱鍵無法使用等錯誤）→ 通知內容的純函式，只有固定 UI 字串、不含辨識文字；`Notify` 以 `replaces_id` 更新同一個泡泡，進度狀態加 `transient`；D-Bus 失敗回傳可忽略的錯誤（mock 測試）
   - [x] `tools/build-linux.sh`：`--check` 列出缺少的依賴與 `apt` 指令並以非 0 結束（不自動安裝）；建置 .deb／AppImage → 複製到 `releases/` → 更新 `SHA256SUMS.txt`。本機 `--check` 實測：缺 webkit2gtk-4.1、libsoup-3、gtk3、ayatana-appindicator、librsvg、cmake、clang、libclang，exit 1
@@ -115,4 +115,39 @@
   - [ ] 🧑 實機看通知（`cargo test -p v2c-platform -- --ignored linux_real_notify`）
   - [ ] 🧑 核准 `tauri.conf.json` 的 Linux 打包設定與合併 T3.4
 - [x] 整合分支 `t3-linux-integration`（2026-11-10，基於 origin/main 0.1.3；T3.1～T3.4 各經獨立審查通過）：`cargo test -p v2c-core -p v2c-platform` 全部通過、clippy／fmt 通過；真實 LLM（8000）4/4、真實 ASR（8002，英文合成句）在預設 5 秒逾時下失敗、放寬到 15 秒通過（約 5.6 秒，CER 0）；**不代表真實 GNOME Wayland 端到端可用**
+- [ ] W15 T3.5 IBus 引擎（熱鍵＋CommitText 輸出）
+  - [x] `linux::ibus::{IbusAddress, IbusEngine, IbusHotkey, IbusInjector, Registration, ComponentDesc, EngineDesc, v2c_component()}`、`PlatformError::Ibus`；位址依 ibus 1.5.26 `ibusshare.c`（`IBUS_ADDRESS` → `IBUS_ADDRESS_FILE` → `~/.config/ibus/bus/<machine-id>-unix-<WAYLAND_DISPLAY>`，並檢查 daemon pid）；Factory／Engine／Service D-Bus 物件（zbus 5.19），右 Ctrl 吞掉、其他鍵放行、自動重複丟棄；`Text`／`Paste` → `CommitText`，`NewLine` → `ForwardKeyEvent(Return, 28)` 按下＋放開（ShiftEnter 帶 Shift）
+  - [x] `tools/ibus/v2c.xml`（exec `/usr/bin/v2c --ibus`，T3.7 安裝到 `/usr/share/ibus/component/`）；單元測試檢查與 `v2c_component()` 一致
+  - [x] mock 測試：轉換表、序列進真正的 `trigger::Trigger`（按住說話、雙擊免持、Ctrl+C 取消、Shift 翻譯、Esc）、一般按鍵放行、`IBusText` 位元組、注入動作序列、沒焦點時報錯不送出、錯誤／Debug 不含文字
+  - [x] 本機真實（`-- --ignored ibus_real --test-threads=1`）：在**私人** ibus-daemon（同一個 1.5.26 執行檔，獨立 socket，不連 session bus）上動態註冊 `v2c-test`、測試客戶端 `CreateInputContext` → `FocusIn` → `SetEngine`、右 Ctrl 按住 0.5 秒 → `StartRecording` + `StopAndProcess`、`a` 放行、收到兩筆中文 `CommitText` 與四個 `ForwardKeyEvent`、關閉後引擎消失；使用者的 daemon 只做唯讀查詢。沒在使用者 daemon 上註冊的原因：1.5.26 的動態元件消失時 `bus_ibus_impl_check_global_engine` 可能把焦點輸入框的引擎設成 NULL
+  - [x] 發現：IBus 全域引擎模式下，輸入框失焦後引擎會被移到內部 fake context 並再次收到 FocusIn／Enable；因此只有「FocusIn 後收到過按鍵」的引擎才是輸出目標，否則 `IbusInjector` 回報錯誤（不會打到別處）
+  - [x] 審查修正：sink 不在鎖內呼叫（sink 內呼叫 `stop()` 不會卡住 `ProcessKeyEvent`，有測試）；`IbusEngine::is_connected()`／`on_disconnect()`（私人 daemon 被關掉時實測觸發，`close()` 不觸發）；註明 zbus 5.19 `Message::header()` 遇到具名寄件者會 panic、引擎連線為何不受影響；`NO_FOCUSED_INPUT` 時呼叫端必須保留文字（T3.6 做紀錄／剪貼簿＋通知）
+  - [ ] `Registration::Launched`（由 ibus-daemon 依 component XML 啟動、RequestName）尚未實測（要先安裝 XML）
+  - [ ] 🧑 在 GNOME 設定加入 v2c 輸入來源，在 gedit／Firefox／終端機實機按住右 Ctrl 說話（含：吞掉右 Ctrl 後右 Ctrl+C 是否仍是複製、ForwardKeyEvent 的 Enter／Shift+Enter 在各 App 的效果）
+  - [x] 🧑 核准合併 T3.5（2026-11-11，本機合併到 main，未 push）
+- [ ] W16 T3.6 桌面 App 支援 Linux
+  - [x] A 部分（不需 Tauri 依賴）：`linux::secret::install_default_store()` 以 `zbus-secret-service-keyring-store` 1.0.1（`crypto-rust`，純 Rust zbus、不需 libdbus；相容 keyring-core 1.0.1）安裝 Secret Service 為 keyring-core 預設 store；`linux::secret::probe()` 唯讀狀態；`linux::protect::SecretServiceProtector`：AES-256-GCM（ring 0.17，Cargo.lock 已有）、隨機 96-bit nonce、格式 `[01][nonce][密文+tag]`，256-bit 金鑰首次使用時產生並存進 Secret Service（service `v2c-history`／user `history-key`），絕不覆寫既有金鑰：只有在「沒有項目」、政策為 `CreateIfMissing`、且解鎖預設 collection 後再查仍找不到時才產生，寫入後重讀並採用存下的值（多個行程同時首次使用會收斂）；紀錄庫已有資料時桌面版用 `MustExist`；金鑰與解密緩衝以 zeroize 清除；取金鑰失敗後 10 秒內快速失敗（避免重複跳解鎖視窗）；`KeySource` trait＋記憶體金鑰的 mock 測試（往返、竄改、錯金鑰、版本位元組、空輸入、nonce 不重複、Debug／錯誤不含明文或金鑰）
+  - [x] 本機唯讀實測 `-- --ignored secret_real`：Secret Service 在 session bus 上，`login`（預設、未鎖定）與 `session` 兩個 collection；寫入測試需另設 `V2C_SECRET_REAL_WRITE=1`，**未執行**
+  - [x] B 部分（2026-11-10，分支 `t3.6b-linux-desktop`）：建置套件裝好後 `cargo build/test -p v2c-desktop` 在 Linux 通過（先前寫好的 Linux `cfg` 分支不用改就能編譯）；`cargo build/test/clippy --workspace`、`fmt --check` 全部通過（whisper-rs CPU 版，`sensevoice` feature 照常編譯，sherpa-onnx 的 `.so` 已在 target 內）
+  - [x] IBus 接線（`apps/desktop/src-tauri/src/linux_app/`）：IBus 引擎為主要熱鍵＋注入，連不上或 `V2C_IBUS=off` 時退回 T3.1 portal／evdev 熱鍵與 T3.2 portal 注入；IBus 注入沒打出字時改走 portal（有的話）；元件 XML 已安裝 → `Registration::Launched`，沒安裝 → 不碰 IBus（`Dynamic` 只在 `V2C_IBUS=dynamic` 時，避免 1.5.26 拔掉全域引擎）；`on_disconnect` → 通知「輸入法連線中斷」＋背景重新連線（1/2/5/10/30 秒），啟動時連不上也會在背景重試，連上後停掉備援熱鍵（不會重複收鍵）
+  - [x] `v2c --ibus`：以背景模式啟動（不開主視窗）並以元件名稱連上；v2c 已在執行時由單一執行個體外掛交給既有行程（只重新連 IBus、不開視窗），新行程立刻結束——實測（私人 D-Bus＋Xvfb）第二個行程 45 ms 結束、第一個行程收到並立即重試
+  - [x] 文字保留：注入失敗時寫進加密紀錄；紀錄關閉／金鑰庫不可用時保留在記憶體（最多 20 筆，不落地），列在「輸入紀錄」頁最上方（負數 id）；通知「文字沒有輸入」；新狀態碼 `inject_no_input`、`ime_disconnected`；日誌只記字數（有日誌測試）
+  - [x] Wayland：狀態事件 → `DbusNotifier`（一次說話一則通知原地更新；潤飾退回等提示不跳通知）；通知在獨立執行緒，Secret Service 連線也移到背景執行緒（實測：沒有 keyring daemon 時啟動原本會卡 25 秒等 D-Bus 啟動）
+  - [x] 修正：Linux X11 下浮動標籤在建立時呼叫 `set_ignore_cursor_events` 會讓 tao `unwrap()` 而整個程式中止（實測），改成每次顯示後再設定；`build.rs` 在 Linux 加 rpath `$ORIGIN:$ORIGIN/../lib/v2c`（否則 `target/debug/v2c` 找不到 `libsherpa-onnx-c-api.so`）
+  - [x] Linux 預設 `[gpu] enabled = false`；路徑：`~/.config/v2c/`（設定、紀錄、日誌、詞庫）、`~/.local/share/v2c/models/`（寫進 `docs/linux-setup.md` 第 6 節）
+  - [x] 實際啟動（私人 D-Bus、不允許服務啟動、Xvfb、暫存 HOME、`V2C_IBUS=off`／`launched`）：X11 與 Wayland 兩種工作階段都能啟動並跑到 controller、fallback 熱鍵回報 `hotkey_failed`、沒有麥克風回報 `mic_config_failed`，無 panic；沒有碰使用者的 ibus-daemon、輸入來源、鑰匙圈、通知
+  - [ ] 🧑 Windows 上重新建置與測試，確認沒有回歸（共用檔案的改動見 T3.6 報告）
+  - [ ] 🧑 安裝 `tools/ibus/v2c.xml` 後實測 `Registration::Launched`、`v2c --ibus` 由 ibus-daemon 啟動、`ibus restart` 後自動重新連線
+  - [x] 🧑 核准合併 T3.6（2026-11-11，本機合併到 main，未 push）
+  - [ ] 🧑 實機寫入測試：`V2C_SECRET_REAL_WRITE=1 cargo test -p v2c-platform -- --ignored secret_real_write`（會在登入鑰匙圈建立再刪除一個 `v2c-test` 項目）
+- [ ] W17 T3.7 .deb／AppImage 交付到 `releases/`
+  - [x] `apps/desktop/src-tauri/tauri.linux.conf.json`（只在 Linux 合併，Windows 的 NSIS 設定不變）：deb＋AppImage；.deb 裝 `/usr/bin/v2c`、`/usr/share/ibus/component/v2c.xml`、`/usr/lib/v2c/libsherpa-onnx-c-api.so`／`libonnxruntime.so`（rpath `$ORIGIN/../lib/v2c`）、`/usr/lib/v2c/docs/`；相依 ibus、libasound2｜libasound2t64、libdbus-1-3（Tauri 自動加 webkit2gtk、gtk3、ayatana-appindicator）；建議 gnome-keyring
+  - [x] `tools/build-linux.sh --stage-libs`（`beforeBundleCommand`）把 sherpa-onnx `.so` 從 target 複製到 git-ignored 的 `runtime-dlls/`
+  - [x] `bash tools/build-linux.sh` 成功：`releases/v2c_0.1.3_amd64.deb`、`v2c_0.1.3_amd64.AppImage` 與 `SHA256SUMS.txt`；`dpkg-deb -I`／`-c` 內容正確，解開後 `ldd` 找得到 sherpa／onnx 函式庫；AppImage `--appimage-extract` 檢查（linuxdeploy 把 rpath 改成 `$ORIGIN/../lib`，函式庫在 `usr/lib/`）
+  - [x] `docs/linux-setup.md` 第 7 節（安裝、輸入來源、兩個遠端服務、AppImage 限制）、README Linux 段落
+  - [ ] 🧑 `sudo apt install ./releases/v2c_0.1.3_amd64.deb`、`ibus restart`、加入 v2c 輸入來源、實機說話（含 `v2c --ibus` 由 ibus-daemon 啟動）
+  - [x] 🧑 核准合併 T3.7（2026-11-11，本機合併到 main，未 push）
 - [ ] **檢查點 3**：第一版交付
+  - [x] 2026-11-11：Linux 語音辨識定案為遠端 `tea-asr-1`＋本機 SenseVoice 備援（`docs/linux-setup.md` 第 3、4 節）
+  - [x] 2026-11-11：IBus 限制「輸入來源不是 v2c 時右 Ctrl 沒反應」決定保留並寫進文件（第 6.3 節）
+  - [ ] 🧑 實機安裝 .deb、按住說話成功後才算通過（只有模擬測試通過，不算實機交付）

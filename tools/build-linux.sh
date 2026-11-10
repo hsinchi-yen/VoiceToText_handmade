@@ -5,6 +5,7 @@
 #
 #   bash tools/build-linux.sh --check   # list missing build dependencies, exit 1 if any
 #   bash tools/build-linux.sh           # check, then build (CPU build: no CUDA on Linux)
+#   bash tools/build-linux.sh --stage-libs   # (beforeBundleCommand) copy the sherpa-onnx .so
 #
 # Never installs anything: when a dependency is missing it prints the apt command for you to
 # run and exits. Run it in the foreground; the link step needs several GB of RAM.
@@ -13,13 +14,19 @@
 set -euo pipefail
 
 usage() {
-    sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
 }
+
+# SenseVoice (sherpa-onnx, shared build) libraries the v2c binary links (readelf NEEDED).
+# sherpa-onnx-sys copies them to target/<profile>/; the bundles install them to /usr/lib/v2c/
+# (the binary's rpath is $ORIGIN:$ORIGIN/../lib/v2c, see apps/desktop/src-tauri/build.rs).
+sherpa_libs=(libsherpa-onnx-c-api.so libonnxruntime.so)
 
 mode=build
 case "${1:-}" in
     "") ;;
     --check) mode=check ;;
+    --stage-libs) mode=stage ;;
     -h | --help)
         usage
         exit 0
@@ -35,6 +42,43 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # rustup installs to ~/.cargo/bin, which non-login shells often lack.
 if [[ -d "$HOME/.cargo/bin" ]]; then
     export PATH="$HOME/.cargo/bin:$PATH"
+fi
+
+# Run by `tauri build` (build.beforeBundleCommand in apps/desktop/src-tauri/tauri.linux.conf.json)
+# after the binary is compiled and before the .deb/AppImage are made: copies the sherpa-onnx
+# libraries to the git-ignored stage folder that bundle.linux.{deb,appimage}.files read.
+# (They cannot be bundle resources: tauri-build checks resources while compiling, before
+# sherpa-onnx-sys has produced them.) The AppImage also maps them to /usr/lib/v2c/ so that
+# linuxdeploy can resolve them through the binary's rpath; it then copies them to usr/lib/ and
+# rewrites the rpath to $ORIGIN/../lib (the usr/lib/v2c copies are unused duplicates there).
+stage_libs() {
+    local target profile src stage lib
+    target="${CARGO_TARGET_DIR:-}"
+    if [[ -z "$target" ]]; then
+        target="$(cargo metadata --format-version 1 --no-deps --manifest-path "$repo/Cargo.toml" |
+            sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
+    fi
+    profile=release
+    [[ "${TAURI_ENV_DEBUG:-}" == true ]] && profile=debug
+    src="$target/$profile"
+    if [[ -n "${TAURI_ENV_TARGET_TRIPLE:-}" && -d "$target/$TAURI_ENV_TARGET_TRIPLE/$profile" ]]; then
+        src="$target/$TAURI_ENV_TARGET_TRIPLE/$profile"
+    fi
+    stage="$repo/apps/desktop/src-tauri/runtime-dlls"
+    mkdir -p "$stage"
+    for lib in "${sherpa_libs[@]}"; do
+        if [[ ! -f "$src/$lib" ]]; then
+            echo "stage-libs: $src/$lib not found (did the release build run?)" >&2
+            return 1
+        fi
+        cp -f "$src/$lib" "$stage/$lib"
+        echo "stage-libs: $lib -> $stage/"
+    done
+}
+
+if [[ "$mode" == stage ]]; then
+    stage_libs
+    exit 0
 fi
 
 # pkg-config module -> Debian/Ubuntu package (Tauri v2 Linux prerequisites + cpal's ALSA).
@@ -141,7 +185,8 @@ export CMAKE_BUILD_PARALLEL_LEVEL="$CARGO_BUILD_JOBS"
     if [[ ! -d node_modules ]]; then
         npm ci
     fi
-    # tauri.conf.json targets NSIS (Windows); override the bundle list on the command line.
+    # tauri.linux.conf.json (merged over tauri.conf.json on Linux) selects deb + AppImage, the
+    # IBus component and the sherpa-onnx libraries; --bundles only makes the list explicit.
     npm run tauri build -- --bundles deb,appimage
 )
 

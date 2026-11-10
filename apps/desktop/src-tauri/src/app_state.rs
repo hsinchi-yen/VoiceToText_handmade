@@ -28,6 +28,19 @@ pub struct AppState {
     pub on_exit: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
 }
 
+/// [`Config::with_defaults`] plus per-OS defaults the app applies without changing `v2c-core`.
+/// Linux (T3.6): `[gpu] enabled = false` (no Breeze GPU path there; ASR uses the configured
+/// remote endpoint or SenseVoice on the CPU). Windows: exactly `Config::with_defaults()`.
+pub fn platform_defaults() -> Config {
+    #[allow(unused_mut)]
+    let mut cfg = Config::with_defaults();
+    #[cfg(target_os = "linux")]
+    {
+        cfg.gpu.enabled = false;
+    }
+    cfg
+}
+
 /// Loads `config.toml`, creating it with defaults if missing. On a parse error the defaults are
 /// used and the file is left untouched; the error code is returned for the status display.
 pub fn load_or_create_config(path: &Path) -> (Config, Option<&'static str>) {
@@ -36,11 +49,11 @@ pub fn load_or_create_config(path: &Path) -> (Config, Option<&'static str>) {
             Ok(cfg) => (cfg, None),
             Err(e) => {
                 warn!(error = %e, "config.toml is invalid; using defaults");
-                (Config::with_defaults(), Some("config_invalid"))
+                (platform_defaults(), Some("config_invalid"))
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let cfg = Config::with_defaults();
+            let cfg = platform_defaults();
             match save_config(path, &cfg) {
                 Ok(()) => info!("created default config.toml"),
                 Err(e) => warn!(error = %e, "could not write default config.toml"),
@@ -49,7 +62,7 @@ pub fn load_or_create_config(path: &Path) -> (Config, Option<&'static str>) {
         }
         Err(e) => {
             warn!(error = %e, "could not read config.toml; using defaults");
-            (Config::with_defaults(), Some("config_unreadable"))
+            (platform_defaults(), Some("config_unreadable"))
         }
     }
 }
@@ -120,12 +133,21 @@ mod tests {
     }
 
     #[test]
+    fn platform_defaults_per_os() {
+        let cfg = platform_defaults();
+        #[cfg(target_os = "linux")]
+        assert!(!cfg.gpu.enabled);
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(cfg, Config::with_defaults());
+    }
+
+    #[test]
     fn missing_config_is_created_with_defaults() {
         let dir = temp_dir("create");
         let path = dir.join("sub").join("config.toml");
         let (cfg, err) = load_or_create_config(&path);
         assert_eq!(err, None);
-        assert_eq!(cfg, Config::with_defaults());
+        assert_eq!(cfg, platform_defaults());
         let written = std::fs::read_to_string(&path).unwrap();
         assert_eq!(Config::from_toml_str(&written).unwrap(), cfg);
         // Second load reads the file.
@@ -141,7 +163,7 @@ mod tests {
         std::fs::write(&path, "route = 5").unwrap();
         let (cfg, err) = load_or_create_config(&path);
         assert_eq!(err, Some("config_invalid"));
-        assert_eq!(cfg, Config::with_defaults());
+        assert_eq!(cfg, platform_defaults());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "route = 5");
         let _ = std::fs::remove_dir_all(&dir);
     }

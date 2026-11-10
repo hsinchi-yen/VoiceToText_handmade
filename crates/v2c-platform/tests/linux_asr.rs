@@ -19,7 +19,7 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use v2c_core::asr::{AsrContext, AsrProvider};
 use v2c_core::audio::AudioClip;
-use v2c_core::config::{CloudKind, Config};
+use v2c_core::config::{CloudKind, Config, LocalAsr};
 use v2c_core::error::{ProviderErrorKind, Stage};
 use v2c_core::pipeline::{Pipeline, PipelineConfig};
 use v2c_core::route::{self, cloud_http_client, Purpose, RouteIssue, Target};
@@ -333,7 +333,8 @@ fn compat_asr_without_model_stays_local() {
     assert!(built.is_none());
 }
 
-/// The "two remote services" example from `docs/linux-setup.md`: ASR on :8002, LLM on :8000.
+/// The full example from `docs/linux-setup.md` section 4: tea-asr-1 on :8001, LLM on :8000,
+/// local SenseVoice as the fallback.
 #[test]
 fn two_remote_services_config_routes_every_purpose() {
     let cfg = Config::from_toml_str(
@@ -344,14 +345,21 @@ polish = "lan-llm"
 translate = "lan-llm"
 cloud_fallback_to_local = true
 
+[timeouts]
+asr_cloud_ms = 5000
+llm_cloud_ms = 3000
+
+[local]
+asr = "sense_voice"
+
 [gpu]
 enabled = false
 
 [[cloud]]
 id = "lan-asr"
 kind = "open_ai_compat"
-base_url = "http://192.168.1.50:8002/v1"
-asr_model = "breeze-asr-25"
+base_url = "http://192.168.1.50:8001/v1"
+asr_model = "tea-asr-1"
 
 [[cloud]]
 id = "lan-llm"
@@ -361,6 +369,12 @@ llm_model = "Qwen3.8-27B-UD-Q6_K_L"
 "#,
     )
     .unwrap();
+    assert_eq!(cfg.local.asr, LocalAsr::SenseVoice);
+    assert_eq!(cfg.timeouts.asr_cloud_ms, 5000);
+    assert_eq!(
+        cfg.cloud_service("lan-asr").unwrap().asr_model.as_deref(),
+        Some("tea-asr-1")
+    );
     let plan = route::resolve(&cfg.route, &cfg.cloud);
     assert!(plan.issues.is_empty(), "{:?}", plan.issues);
     for (purpose, id) in [

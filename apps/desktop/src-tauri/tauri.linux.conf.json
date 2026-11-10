@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBundleCommand": "bash ../../tools/build-linux.sh --stage-libs"
+  },
+  "bundle": {
+    "targets": ["deb", "appimage"],
+    "longDescription": "Typeless-style voice input for Linux (GNOME, IBus). Hold Right Ctrl, speak Traditional Chinese (Taiwan) or English, and the polished text is typed at the cursor. Local models by default.",
+    "resources": {
+      "../../../docs/*.md": "docs/"
+    },
+    "linux": {
+      "deb": {
+        "section": "utils",
+        "depends": [
+          "ibus",
+          "libasound2 | libasound2t64",
+          "libdbus-1-3"
+        ],
+        "recommends": ["gnome-keyring"],
+        "files": {
+          "/usr/share/ibus/component/v2c.xml": "../../../tools/ibus/v2c.xml",
+          "/usr/lib/v2c/libsherpa-onnx-c-api.so": "runtime-dlls/libsherpa-onnx-c-api.so",
+          "/usr/lib/v2c/libonnxruntime.so": "runtime-dlls/libonnxruntime.so"
+        }
+      },
+      "appimage": {
+        "bundleMediaFramework": false,
+        "files": {
+          "/usr/lib/v2c/libsherpa-onnx-c-api.so": "runtime-dlls/libsherpa-onnx-c-api.so",
+          "/usr/lib/v2c/libonnxruntime.so": "runtime-dlls/libonnxruntime.so"
+        }
+      }
+    }
+  }
+}

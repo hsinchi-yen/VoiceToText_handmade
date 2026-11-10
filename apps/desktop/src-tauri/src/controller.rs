@@ -373,6 +373,10 @@ fn ms_since(t: Instant) -> u64 {
 /// Overlay code for an injection failure. Elevated: the whole text is on the clipboard; after
 /// partial typing only the rest is (or the paste of the rest failed).
 pub fn inject_error_code(f: &InjectFailure) -> &'static str {
+    #[cfg(target_os = "linux")]
+    if let Some(code) = linux_inject_code(&f.error) {
+        return code;
+    }
     match (&f.error, f.after_partial_typing) {
         (InjectError::Partial { .. }, _) | (_, true) => "inject_partial",
         (InjectError::Elevated, false) => "inject_elevated",
@@ -382,6 +386,20 @@ pub fn inject_error_code(f: &InjectFailure) -> &'static str {
             InjectError::Os(_) | InjectError::PermissionDenied | InjectError::Unsupported(_),
             false,
         ) => "inject_failed",
+    }
+}
+
+/// Linux IBus outcomes with their own message (T3.6); nothing was typed in either case.
+#[cfg(target_os = "linux")]
+fn linux_inject_code(e: &InjectError) -> Option<&'static str> {
+    match e {
+        InjectError::Os(msg) if msg == v2c_platform::linux::ibus::NO_FOCUSED_INPUT => {
+            Some("inject_no_input")
+        }
+        InjectError::Os(msg) if msg == crate::linux_app::ibus_link::IBUS_DISCONNECTED => {
+            Some("ime_disconnected")
+        }
+        _ => None,
     }
 }
 
@@ -969,6 +987,13 @@ mod tests {
             inject_error_code(&f(InjectError::Os("x".into()), true)),
             "inject_partial"
         );
+        #[cfg(target_os = "linux")]
+        {
+            let no_input = InjectError::Os(v2c_platform::linux::ibus::NO_FOCUSED_INPUT.into());
+            assert_eq!(inject_error_code(&f(no_input, false)), "inject_no_input");
+            let gone = InjectError::Os(crate::linux_app::ibus_link::IBUS_DISCONNECTED.into());
+            assert_eq!(inject_error_code(&f(gone, false)), "ime_disconnected");
+        }
     }
 
     #[cfg(windows)]

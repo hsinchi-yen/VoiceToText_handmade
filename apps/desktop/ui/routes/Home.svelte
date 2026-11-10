@@ -14,6 +14,8 @@
     inject_partial: "只輸入了部分文字",
     inject_modifiers_held: "修飾鍵未放開，已取消輸入",
     hotkey_failed: "熱鍵安裝失敗",
+    inject_no_input: "沒有使用 v2c 輸入法的輸入框，文字未輸入（已保留在「輸入紀錄」）",
+    ime_disconnected: "v2c 輸入法連線中斷，文字未輸入（已保留在「輸入紀錄」）",
     mic_not_found: "找不到麥克風",
     mic_lost: "麥克風中斷，正在重新連線",
     config_invalid: "設定檔格式錯誤，已使用預設值",
