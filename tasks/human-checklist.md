@@ -150,3 +150,36 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] 側載 APK 到手機實測；回報手機型號與 Android 版本
 - [ ] 檢查點 2：手機日常使用一週
 - [ ] 決定 Linux 用哪台電腦（同一台雙系統或另一台），並提供規格
+
+## Phase 3（Linux：目前執行 agent 的這台電腦，Ubuntu 22.04／GNOME 42 Wayland）
+
+> mock 測試通過只代表模擬流程正確，**不代表**真實 GNOME Wayland 端到端可用。檢查點 2（手機）尚未通過。
+
+- [x] 核准 T3.0（2026-11-10）：`tasks/plan.md` 第 9 節與 `tasks/cards/T3.*.md`
+- [x] 決定本機的輸出路線（2026-11-10：Linux 改做 IBus 引擎）（GNOME 42 沒有 Clipboard portal，背景程式無法設定剪貼簿、也無法逐字送中文）：
+  1. 升級到 Ubuntu 24.04（GNOME 46：Clipboard portal＋可記住同意的 RemoteDesktop），熱鍵仍用 evdev；或 GNOME 48 以上（Ubuntu 25.04 起）才有 GlobalShortcuts
+  2. 維持 22.04，只做「辨識後複製到剪貼簿＋通知」，由你手動 Ctrl+V
+  3. 改用 IBus 引擎輸出文字（與 `v2cplan.md`「非輸入法框架」的決策衝突，要先改決策）
+- [x] （2026-11-10 決定不做：0.1.3 已關閉思考）核准是否在 `v2c-core` 新增「LLM 額外請求欄位」設定（給 llama.cpp 的 `chat_template_kwargs.enable_thinking=false`；開著思考一句約 2.7 秒，會超過潤飾 1 秒的逾時而退回規則式去贅字）
+- [ ] evdev 熱鍵：`sudo usermod -aG input $USER`，登出再登入（這會讓同一使用者的程式都能讀鍵盤，請自行評估）
+  - 本機目前**沒有接任何實體鍵盤**（`/proc/bus/input/devices` 只有電源鍵等），加入群組後還要接上實體鍵盤才能實測按住右 Ctrl
+- [ ] 接上麥克風（本機目前沒有任何擷取裝置），之後才能做實機語音輸入
+- [ ] Linux 建置依賴（本機缺少；Tauri 桌面 App 與 whisper-rs 需要）：`sudo apt install cmake clang libclang-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev`（Ubuntu 22.04 是否提供 `libwebkit2gtk-4.1-dev` 請在安裝時確認）
+- [x] ASR：2026-11-11 決定 Linux 用遠端 `tea-asr-1`（`:8001`）＋本機 SenseVoice 備援
+- [ ] T3.7 設定：在主視窗「雲端服務」頁貼上 `:8001` 語音辨識端點的金鑰（存進 GNOME 登入鑰匙圈）；確認 `~/.local/share/v2c/models/` 有 SenseVoice 模型；拔網路說一句，打開主視窗查看，應顯示「雲端服務失敗，已改用地端」且文字仍輸出
+- [ ] 檢查點 3：實機 GNOME Wayland 按住說話 → 文字出現在 gedit／Firefox／終端機
+- [ ] T3.1 熱鍵實機：加入 `input` 群組並接上鍵盤後，按住右 Ctrl 說話、雙擊免持、右 Ctrl+C 不誤觸、Shift 翻譯、Esc 取消；在 GNOME ≥ 48 的機器測 GlobalShortcuts（綁定的取消鍵會被系統攔截，不要選 Esc）
+- [ ] T3.2 注入實機（需 GNOME ≥ 45）：貼上到 gedit／Firefox／終端機，換行用 Shift+Enter 不送出；RemoteDesktop 同意對話框按「取消」時顯示權限不足；原剪貼簿文字被還原
+- [ ] T3.3 中文語音辨識：把一段自己錄的中文 WAV 放到 `tests/tmp/`，依 `docs/linux-setup.md` 第 5 節執行 `asr_real`（目前只用英文合成句驗證過）
+- [ ] T3.4：依 `bash tools/build-linux.sh --check` 安裝缺少的套件後執行 `bash tools/build-linux.sh`；`apps/desktop` 尚未支援 Linux（金鑰庫只接 Windows、`build.rs` 只放 Windows DLL、controller 未接通知），預期會有編譯錯誤，需另開卡並核准 `tauri.conf.json` 的 Linux 設定
+- [ ] T3.4 通知實機：`cargo test -p v2c-platform -- --ignored linux_real_notify`（會在桌面跳出幾則測試通知）
+- [x] 核准合併 `t3-linux-integration` 到 `main`（2026-11-10，本機 fast-forward，未 push）（含 T3.0～T3.4；本機只合併到整合分支，沒有 push）
+- [ ] T3.5：同意 agent 在你的 ibus-daemon 上動態註冊暫時的 `v2c-test` 引擎做實測（不改 GNOME 輸入來源設定，測完移除）
+- [ ] T3.5 之後：「設定 → 鍵盤 → 輸入來源」加入 v2c，按 Super+Space 切換，實機按住右 Ctrl 說話
+- [ ] T3.5 換行順序：在 gedit／Firefox／終端機輸出多行文字（文字與 Enter 交錯），確認不會變成「ab⏎」（IBus 的 CommitText 立即處理、ForwardKeyEvent 排隊）
+- [ ] T3.5 右 Ctrl：Wayland 下 v2c 輸入來源啟用時，右 Ctrl+C 仍能複製（引擎吞掉右 Ctrl 的按下；若失效，改成不吞觸發鍵需你決定）
+- [ ] T3.5（選做）在你正在用的 ibus-daemon 上做動態註冊測試：ibus 1.5.26 移除動態引擎時可能拔掉目前的全域引擎，所以 agent 只在私人 daemon 上測；要做需你本人同意
+- [ ] T3.6 Secret Service 寫入測試：`V2C_SECRET_REAL_WRITE=1 cargo test -p v2c-platform -- --ignored secret_real_write`（會在 login 鑰匙圈建立再刪除 `v2c-test` 項目）
+- [ ] T3.7 安裝 .deb：在 `releases/` 執行 `sha256sum -c --ignore-missing SHA256SUMS.txt`，再 `sudo apt install ./v2c_0.1.4_amd64.deb`，`ibus restart`，加入「v2c 語音輸入」輸入來源，實機按住右 Ctrl 說話（含切到 v2c 時由 ibus-daemon 啟動 `v2c --ibus`）。步驟見 `docs/linux-setup.md` 第 7 節
+- [ ] T3.7（選做）AppImage：`./v2c_0.1.4_amd64.AppImage` 能否啟動（需要 libfuse2）
+- [ ] 錄音檔已推上 GitHub（`34fcbe2`）：`tests/fixtures/audio/README.md` 寫的是「不會進 git」，若要公開 repo 請確認

@@ -31,7 +31,7 @@ where
     let text = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let mut cfg = Config::with_defaults();
+            let mut cfg = app_state::platform_defaults();
             if change(&mut cfg)? {
                 app_state::save_config(path, &cfg).map_err(save_failed)?;
             }

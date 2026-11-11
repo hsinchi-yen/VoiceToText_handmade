@@ -1,5 +1,5 @@
-//! Tauri build script: the command ACL (app manifest) and staging of the runtime DLLs the
-//! installer ships next to `v2c.exe`.
+//! Tauri build script: the command ACL (app manifest), staging of the runtime DLLs the
+//! installer ships next to `v2c.exe`, and (Linux) the rpath for the sherpa-onnx `.so` files.
 //!
 //! ## Command ACL
 //! Without an app manifest Tauri v2 lets every webview call every app command. Declaring the
@@ -90,12 +90,23 @@ const TEA_DLL_PREFIXES: [&str; 2] = ["transcribe", "ggml"];
 const STAGE_DIR: &str = "runtime-dlls";
 
 fn main() {
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        stage_runtime_dlls();
+    match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        Ok("windows") => stage_runtime_dlls(),
+        Ok("linux") => linux_rpath(),
+        _ => {}
     }
     let attrs = tauri_build::Attributes::new()
         .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS));
     tauri_build::try_build(attrs).expect("tauri-build failed");
+}
+
+/// Linux: SenseVoice links `libsherpa-onnx-c-api.so` / `libonnxruntime.so` dynamically;
+/// `sherpa-onnx-sys` copies them to `target/<profile>/` next to the `v2c` binary. Without an
+/// rpath only `cargo run` / `cargo test` (which set `LD_LIBRARY_PATH`) can start it.
+/// `$ORIGIN`: next to the binary (dev builds, AppImage); `$ORIGIN/../lib/v2c`: where the
+/// .deb (T3.7) is expected to install them relative to `/usr/bin/v2c`.
+fn linux_rpath() {
+    println!("cargo:rustc-link-arg-bins=-Wl,-rpath,$ORIGIN:$ORIGIN/../lib/v2c");
 }
 
 fn warn(msg: impl std::fmt::Display) {

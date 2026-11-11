@@ -17,6 +17,8 @@ mod controller;
 mod engine;
 mod gpu_task;
 mod history_sink;
+#[cfg(target_os = "linux")]
+mod linux_app;
 mod local_asr;
 mod logging;
 mod overlay;
@@ -37,7 +39,9 @@ use v2c_core::secrets::SecretStore;
 
 use crate::app_state::AppState;
 use crate::controller::StatusEvent;
-use crate::engine::{Engine, EngineHandle};
+use crate::engine::Engine;
+#[cfg(not(target_os = "linux"))]
+use crate::engine::EngineHandle;
 use crate::recorder::{Recorder, RecorderNotice};
 
 /// Webview event carrying [`StatusEvent`]s (overlay and UI pages listen to it).
@@ -72,6 +76,11 @@ fn main() {
         // instance runs hidden) only shows the running instance's window and exits, so there is
         // never a second keyboard hook typing everything twice.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // Linux: ibus-daemon's `v2c --ibus` reconnects the engine; no window.
+            #[cfg(target_os = "linux")]
+            if linux_app::on_second_instance(app, &_args) {
+                return;
+            }
             info!("second launch: showing the running instance");
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
@@ -135,7 +144,9 @@ fn main() {
             let handle = app.handle();
             commands::history::init(handle); // before the controller reads the sinks
                                              // Before the background tasks so the overlay sees their first status events.
-            if let Err(e) = overlay::start(handle, &handle.state::<AppState>().status) {
+            if !overlay_enabled() {
+                info!("overlay disabled on Wayland (notifications instead)");
+            } else if let Err(e) = overlay::start(handle, &handle.state::<AppState>().status) {
                 error!(error = %e, "overlay window could not be created");
             }
             if let Err(e) = tray::start(handle) {
@@ -174,18 +185,44 @@ fn main() {
 /// after the onboarding restart and while no local speech model is installed (onboarding).
 fn show_main_unless_autostart(app: &tauri::AppHandle) {
     let autostart = std::env::args().any(|a| a == commands::settings::AUTOSTART_ARG);
+    // Linux: started by ibus-daemon (`v2c --ibus`): never pop up a window.
+    #[cfg(target_os = "linux")]
+    let ibus_launch = linux_app::launch::is_ibus_launch(&std::env::args().collect::<Vec<_>>());
+    #[cfg(not(target_os = "linux"))]
+    let ibus_launch = false;
     let paths = &app.state::<AppState>().paths;
     let resumed = commands::onboarding::take_show_flag(paths);
     let has_model = commands::models::any_asr_model(paths);
-    let show = commands::onboarding::show_main_at_start(autostart, resumed, has_model);
-    info!(autostart, resumed, has_model, show, "main window");
+    let show =
+        !ibus_launch && commands::onboarding::show_main_at_start(autostart, resumed, has_model);
+    info!(
+        autostart,
+        ibus_launch, resumed, has_model, show, "main window"
+    );
     if show {
         if let Some(w) = app.get_webview_window("main") {
             let _ = w.show();
         }
     }
 }
-/// Windows Credential Manager as the keyring-core default store, for cloud API keys.
+
+/// The floating overlay: always on Windows; off on a Linux Wayland session, where a window
+/// cannot be placed near the cursor or kept from taking focus (T3.6).
+fn overlay_enabled() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use v2c_platform::linux::caps::SessionType;
+        let session = std::env::var("XDG_SESSION_TYPE").ok();
+        SessionType::from_env_value(session.as_deref()) != SessionType::Wayland
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
+/// Windows Credential Manager (Linux: Secret Service) as the keyring-core default store, for
+/// cloud API keys.
 fn install_keyring() -> Arc<dyn SecretStore> {
     #[cfg(windows)]
     match windows_native_keyring_store::Store::new() {
@@ -195,6 +232,23 @@ fn install_keyring() -> Arc<dyn SecretStore> {
         }
         // Cloud services then report a key error; local use is unaffected.
         Err(e) => warn!(error = %e, "keyring store unavailable"),
+    }
+    // T3.6: freedesktop Secret Service (GNOME Keyring / KWallet) over zbus. Connecting can
+    // wait for D-Bus activation of the keyring daemon (up to ~25 s), so it runs in the
+    // background; a cloud call before it finishes reports a key error once.
+    #[cfg(target_os = "linux")]
+    {
+        let spawned = std::thread::Builder::new()
+            .name("v2c-keyring".into())
+            .spawn(
+                || match v2c_platform::linux::secret::install_default_store() {
+                    Ok(()) => info!("keyring: Secret Service"),
+                    Err(e) => warn!(error = %e, "keyring store unavailable"),
+                },
+            );
+        if spawned.is_err() {
+            warn!("could not start the keyring thread");
+        }
     }
     Arc::new(v2c_core::secrets::KeyringSecretStore::new())
 }
@@ -307,6 +361,9 @@ fn start_background(app: &tauri::AppHandle, config_error: Option<&'static str>) 
         }
     }
 
+    #[cfg(target_os = "linux")]
+    linux_app::start_controller(app, &state, recorder);
+    #[cfg(not(target_os = "linux"))]
     start_controller(&state, recorder);
 }
 
@@ -368,9 +425,9 @@ fn start_controller(state: &AppState, recorder: Arc<Recorder>) {
     info!("controller started");
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn start_controller(state: &AppState, recorder: Arc<Recorder>) {
-    // Linux hotkey and injection arrive in Phase 3.
+    // No hotkey / injection backend on this platform.
     let _ = (recorder, EngineHandle);
     tracing::warn!("hotkey and text injection are not implemented on this platform yet");
     let _ = state.status.send(StatusEvent::Error {

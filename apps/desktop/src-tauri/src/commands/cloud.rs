@@ -920,7 +920,17 @@ fn install_default_store() -> Result<(), &'static str> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn install_default_store() -> Result<(), &'static str> {
+    v2c_platform::linux::secret::install_default_store().map_err(|_| {
+        warn!("cloud: Secret Service credential store unavailable");
+        "keyring_failed"
+    })?;
+    info!("cloud: installed Secret Service credential store");
+    Ok(())
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn install_default_store() -> Result<(), &'static str> {
     Err("keyring_failed")
 }

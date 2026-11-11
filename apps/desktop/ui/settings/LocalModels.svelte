@@ -118,7 +118,11 @@
   </p>
   <div class="tea">
     <b>TEA-ASR-1.1 模型</b>（顯示卡，約需 2.6 GB 顯存；台灣華語與中英夾雜較準，幾乎不加標點，靠潤飾補上）：
-    {#if tea?.installed || view.tea_asr}
+    {#if !view.tea_build}
+      <!-- No CUDA build (the Linux package, dev builds): the model could not run here, so do
+           not offer the 2.2 GB download. Windows release builds have CUDA and are unchanged. -->
+      <span class="hint">這個版本無法在本機執行（需要 NVIDIA 顯示卡與 CUDA 版）。要用 TEA-ASR，請在「雲端服務」接上提供它的伺服器。</span>
+    {:else if tea?.installed || view.tea_asr}
       <span>已安裝</span>
     {:else if teaBusy}
       <button onclick={() => models.cancel(TEA_ID)}>暫停</button>
@@ -136,8 +140,8 @@
       </span>
     {/if}
     {#if teaError}<p class="bad">{teaError}</p>{/if}
-    <p class="hint">下載完成後不用重新啟動；選了 TEA-ASR-1.1 就會在幾秒內載入。也可以手動把 TEA-ASR-1.1-Q8_0.gguf 放進模型資料夾，見
-      <button class="link" onclick={() => api.openDoc("local-setup")}>設定說明</button>。</p>
+    {#if view.tea_build}<p class="hint">下載完成後不用重新啟動；選了 TEA-ASR-1.1 就會在幾秒內載入。也可以手動把 TEA-ASR-1.1-Q8_0.gguf 放進模型資料夾，見
+      <button class="link" onclick={() => api.openDoc("local-setup")}>設定說明</button>。</p>{/if}
   </div>
 </section>
 

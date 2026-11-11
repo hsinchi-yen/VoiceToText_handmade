@@ -18,6 +18,21 @@ pub enum PlatformError {
     Os(String),
     #[error("not supported on this platform")]
     Unsupported,
+    /// Linux: an input device (`/dev/input/event*`) could not be opened (`EACCES`). v2c never
+    /// elevates itself; the user has to join the `input` group.
+    #[error(
+        "permission denied opening {}: add your user to the `input` group \
+         (sudo usermod -aG input $USER), then log out and back in",
+        path.display()
+    )]
+    InputPermission { path: std::path::PathBuf },
+    /// Linux: no global hotkey backend works on this system; the text says why.
+    #[error("no global hotkey backend available: {0}")]
+    HotkeyUnavailable(String),
+    /// Linux: the IBus daemon could not be found or talked to; the text says which step
+    /// failed (never contains typed text).
+    #[error("IBus: {0}")]
+    Ibus(String),
 }
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -34,6 +49,14 @@ pub enum InjectError {
     ModifiersHeld,
     #[error("OS call failed: {0}")]
     Os(String),
+    /// Linux: the user declined the portal's permission dialog (or unticked the keyboard /
+    /// clipboard in it). Nothing was typed.
+    #[error("permission denied: the input/clipboard permission dialog was cancelled")]
+    PermissionDenied,
+    /// Linux: this desktop offers no way to inject (e.g. no Clipboard portal before
+    /// GNOME 45); the text says what is missing. Nothing was typed.
+    #[error("clipboard injection not supported here: {0}")]
+    Unsupported(String),
 }
 
 /// Information about the foreground application.

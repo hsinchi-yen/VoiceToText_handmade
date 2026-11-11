@@ -28,3 +28,30 @@ features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ]
+
+# T3.1: portal capability probe and GlobalShortcuts session over pure-Rust D-Bus (no libdbus).
+# 5.x matches the zbus already in Cargo.lock (Tauri's Linux deps), so the app links one copy.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5.19"
+# `poll()` with a timeout so evdev reader threads exit promptly on stop (already in Cargo.lock).
+libc = "0.2"
+# T3.6: API keys and the history key in the freedesktop Secret Service, as a keyring-core
+# store over zbus (no libdbus). `crypto-rust` = blocking API with pure-Rust session crypto.
+keyring-core.workspace = true
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
+# T3.6: AES-256-GCM + system RNG for history encryption (already in Cargo.lock via rustls).
+ring = "0.17"
+# T3.6: unlock the default collection before creating the history key (same version the
+# keyring store uses).
+secret-service = { version = "5.2", features = ["crypto-rust"] }
+# T3.6: wipe the history key and decrypted bytes from memory.
+zeroize.workspace = true
+
+# T3.3: Linux LLM/ASR integration and end-to-end simulation tests (tests/linux_*.rs).
+[dev-dependencies]
+async-trait.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+wiremock.workspace = true

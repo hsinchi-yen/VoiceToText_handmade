@@ -20,7 +20,8 @@ cuda = ["v2c-asr-local/cuda", "v2c-asr-local/tea", "dep:transcribe-cpp-sys"]
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
-# `keyring`: API keys from Windows Credential Manager (store installed at startup, main.rs).
+# `keyring`: API keys from Windows Credential Manager / the Linux Secret Service (store
+# installed at startup, main.rs; the Linux store lives in v2c-platform::linux::secret).
 v2c-core = { workspace = true, features = ["keyring"] }
 # `sensevoice`: CPU fallback ASR (sherpa-onnx; its DLLs ship next to v2c.exe, see build.rs).
 v2c-asr-local = { workspace = true, features = ["sensevoice"] }

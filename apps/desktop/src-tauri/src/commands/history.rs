@@ -118,9 +118,44 @@ fn open_store(data_dir: &Path, cfg: &HistoryConfig) -> Option<Arc<History>> {
     }
 }
 
-#[cfg(not(windows))]
+/// T3.6: AES-256-GCM with a key kept in the Secret Service (`linux::protect`). The key is
+/// read lazily on the first write/read (off the UI thread: it may wait on an unlock prompt).
+/// The source starts as `MustExist` and only allows creating a key once the database is
+/// known to be empty, so a hidden or unreadable key never gets replaced while encrypted rows
+/// exist.
+#[cfg(target_os = "linux")]
+fn open_store(data_dir: &Path, cfg: &HistoryConfig) -> Option<Arc<History>> {
+    use v2c_platform::linux::protect::{AeadProtector, KeyPolicy, SecretServiceKeySource};
+
+    if let Err(e) = std::fs::create_dir_all(data_dir) {
+        warn!(error = %e, "history: data directory unavailable");
+        return None;
+    }
+    let source = Arc::new(SecretServiceKeySource::new(KeyPolicy::MustExist));
+    match History::open(
+        &data_dir.join("history.db"),
+        Arc::new(AeadProtector::with_source(Arc::clone(&source))),
+        cfg.clone(),
+    ) {
+        Ok(h) => {
+            match h.count() {
+                Ok(0) => source.set_policy(KeyPolicy::CreateIfMissing),
+                Ok(_) => {}
+                Err(e) => warn!(error = %e, "history: row count failed; key must exist"),
+            }
+            info!(enabled = cfg.enabled, "history opened");
+            Some(Arc::new(h))
+        }
+        Err(e) => {
+            warn!(error = %e, "history could not be opened");
+            None
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn open_store(_data_dir: &Path, _cfg: &HistoryConfig) -> Option<Arc<History>> {
-    // Linux (Secret Service key) arrives in Phase 3; never store unencrypted text.
+    // No data protector on this platform; never store unencrypted text.
     warn!("history is not available on this platform yet");
     None
 }
@@ -198,7 +233,15 @@ pub async fn history_list(
     window: tauri::WebviewWindow,
     state: State<'_, HistoryState>,
 ) -> Result<Vec<HistoryItem>, &'static str> {
-    with_store(&window, &state, list_items).await
+    check_caller(window.label())?;
+    // Linux: texts that could not be typed and are only kept in memory come first.
+    let mut items = unsent::items(window.app_handle());
+    match with_store(&window, &state, list_items).await {
+        Ok(rows) => items.extend(rows),
+        Err(code) if items.is_empty() => return Err(code),
+        Err(_) => {}
+    }
+    Ok(items)
 }
 
 #[tauri::command]
@@ -207,6 +250,10 @@ pub async fn history_delete(
     window: tauri::WebviewWindow,
     state: State<'_, HistoryState>,
 ) -> Result<(), &'static str> {
+    check_caller(window.label())?;
+    if let Some(result) = unsent::delete(window.app_handle(), id) {
+        return result;
+    }
     with_store(&window, &state, move |s| {
         s.delete(id).map_err(|e| {
             warn!(error = %e, id, "history delete failed");
@@ -221,13 +268,20 @@ pub async fn history_clear(
     window: tauri::WebviewWindow,
     state: State<'_, HistoryState>,
 ) -> Result<(), &'static str> {
-    with_store(&window, &state, |s| {
+    check_caller(window.label())?;
+    let had_unsent = unsent::clear(window.app_handle());
+    let cleared = with_store(&window, &state, |s| {
         s.clear().map_err(|e| {
             warn!(error = %e, "history clear failed");
             "history_failed"
         })
     })
-    .await?;
+    .await;
+    match cleared {
+        Ok(()) => {}
+        Err("history_unavailable") if had_unsent => {}
+        Err(code) => return Err(code),
+    }
     info!("history cleared by user");
     Ok(())
 }
@@ -239,12 +293,25 @@ pub async fn history_copy(
     window: tauri::WebviewWindow,
     state: State<'_, HistoryState>,
 ) -> Result<(), &'static str> {
-    let chars = with_store(&window, &state, move |s| {
-        let text = entry_text(s, id)?;
-        copy_to_clipboard(&text)?;
-        Ok(text.chars().count())
-    })
-    .await?;
+    check_caller(window.label())?;
+    let chars = match unsent::text(window.app_handle(), id) {
+        Some(text) => {
+            let text = text?;
+            tokio::task::spawn_blocking(move || {
+                copy_to_clipboard(&text).map(|()| text.chars().count())
+            })
+            .await
+            .map_err(|_| "history_failed")??
+        }
+        None => {
+            with_store(&window, &state, move |s| {
+                let text = entry_text(s, id)?;
+                copy_to_clipboard(&text)?;
+                Ok(text.chars().count())
+            })
+            .await?
+        }
+    };
     info!(id, chars, "history copied");
     Ok(())
 }
@@ -273,7 +340,11 @@ pub async fn history_reoutput(
     state: State<'_, HistoryState>,
     app_state: State<'_, AppState>,
 ) -> Result<(), &'static str> {
-    let text = with_store(&window, &state, move |s| entry_text(s, id)).await?;
+    check_caller(window.label())?;
+    let text = match unsent::text(window.app_handle(), id) {
+        Some(text) => text?,
+        None => with_store(&window, &state, move |s| entry_text(s, id)).await?,
+    };
     let rules = app_state.engine.config().apps.clone();
     target::reoutput(&window, text, rules).await?;
     info!(id, "history re-output");
@@ -415,6 +486,86 @@ mod target {
     }
 }
 
+/// Linux (T3.6): outputs that could not be typed and could not go to the history either are
+/// kept in memory (`linux_app::kept`) and listed first, with negative ids.
+#[cfg(target_os = "linux")]
+mod unsent {
+    use tauri::Manager;
+
+    use super::HistoryItem;
+    use crate::linux_app::kept::{is_unsent_id, Unsent, UnsentState};
+
+    fn store(
+        app: &tauri::AppHandle,
+    ) -> Option<std::sync::Arc<crate::linux_app::kept::UnsentStore>> {
+        app.try_state::<UnsentState>()
+            .map(|s| std::sync::Arc::clone(&s.0))
+    }
+
+    pub fn to_item(u: Unsent) -> HistoryItem {
+        HistoryItem {
+            id: u.id,
+            created_at: u.created_at,
+            app: String::new(),
+            mode: match u.mode {
+                v2c_core::Mode::Dictate => "dictate",
+                v2c_core::Mode::TranslateZhToEn => "translate",
+            },
+            chars: u32::try_from(u.text.chars().count()).unwrap_or(u32::MAX),
+            text: u.text,
+        }
+    }
+
+    pub fn items(app: &tauri::AppHandle) -> Vec<HistoryItem> {
+        store(app)
+            .map(|s| s.list().into_iter().map(to_item).collect())
+            .unwrap_or_default()
+    }
+
+    /// `None`: not an unsent id (look in the history).
+    pub fn text(app: &tauri::AppHandle, id: i64) -> Option<Result<String, &'static str>> {
+        is_unsent_id(id).then(|| {
+            store(app)
+                .and_then(|s| s.text(id))
+                .ok_or("history_not_found")
+        })
+    }
+
+    pub fn delete(app: &tauri::AppHandle, id: i64) -> Option<Result<(), &'static str>> {
+        is_unsent_id(id).then(|| match store(app) {
+            Some(s) if s.remove(id) => Ok(()),
+            _ => Err("history_not_found"),
+        })
+    }
+
+    /// Returns whether anything was kept.
+    pub fn clear(app: &tauri::AppHandle) -> bool {
+        store(app).is_some_and(|s| {
+            let had = s.len() > 0;
+            s.clear();
+            had
+        })
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod unsent {
+    use super::HistoryItem;
+
+    pub fn items(_: &tauri::AppHandle) -> Vec<HistoryItem> {
+        Vec::new()
+    }
+    pub fn text(_: &tauri::AppHandle, _: i64) -> Option<Result<String, &'static str>> {
+        None
+    }
+    pub fn delete(_: &tauri::AppHandle, _: i64) -> Option<Result<(), &'static str>> {
+        None
+    }
+    pub fn clear(_: &tauri::AppHandle) -> bool {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use v2c_core::history::{AddOutcome, NewEntry, Protector};
@@ -470,6 +621,28 @@ mod tests {
         assert_eq!(check_caller("overlay"), Err("forbidden"));
         assert_eq!(check_caller(""), Err("forbidden"));
         assert_eq!(check_caller("Main"), Err("forbidden"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unsent_items_look_like_history_rows() {
+        let item = unsent::to_item(crate::linux_app::kept::Unsent {
+            id: -3,
+            created_at: 7,
+            mode: Mode::TranslateZhToEn,
+            text: "早安 hi".into(),
+        });
+        assert_eq!(
+            (
+                item.id,
+                item.created_at,
+                item.mode,
+                item.chars,
+                item.app.as_str()
+            ),
+            (-3, 7, "translate", 5, "")
+        );
+        assert!(!format!("{item:?}").contains("早安"));
     }
 
     #[cfg(windows)]
