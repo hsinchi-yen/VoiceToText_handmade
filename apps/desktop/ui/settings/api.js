@@ -1,5 +1,6 @@
 // Calls to src-tauri/src/commands/{settings,gpu,onboarding}.rs. Errors are short codes.
 import { invoke } from "@tauri-apps/api/core";
+import { pick } from "../platform.js";
 
 const errorText = {
   forbidden: "只能在主視窗修改設定",
@@ -18,7 +19,10 @@ const errorText = {
   config_save_failed: "無法儲存設定檔",
   autostart_failed: "無法變更開機自動啟動",
   mic_not_found: "找不到麥克風",
-  mic_open_failed: "麥克風無法開啟（可能被其他程式獨占，或 Windows 隱私權設定不允許）",
+  mic_open_failed: pick(
+    "麥克風無法開啟（可能被其他程式獨占，或 Windows 隱私權設定不允許）",
+    "麥克風無法開啟（可能沒有接上麥克風，或 GNOME「設定 → 隱私 → 麥克風」不允許）",
+  ),
   mic_format_unsupported: "這個麥克風的格式不支援測試",
   already_running: "正在進行中",
   busy: "正在聽寫中，請說完再測試",

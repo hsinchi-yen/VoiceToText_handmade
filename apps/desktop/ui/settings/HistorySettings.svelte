@@ -1,4 +1,5 @@
 <script>
+  import { pick } from "../platform.js";
   // [history]: on/off, retention, apps that are never recorded.
   import * as api from "./api.js";
 
@@ -22,7 +23,7 @@
   <label class:dirty={dirty("history_enabled")}>
     <input type="checkbox" checked={h.enabled}
       onchange={(e) => save([{ field: "history_enabled", value: e.currentTarget.checked }])} />
-    保存輸入紀錄（以 Windows DPAPI 加密，只有你的帳號能讀；不存錄音）
+    保存輸入紀錄（{pick("以 Windows DPAPI 加密", "以 AES-256-GCM 加密，金鑰存在 GNOME 登入鑰匙圈")}，只有你的帳號能讀；不存錄音）
   </label>
   <label class:dirty={dirty("history_retention_days")}>
     保留天數

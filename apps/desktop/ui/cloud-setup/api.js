@@ -1,5 +1,6 @@
 // Calls to src-tauri/src/commands/cloud.rs. Errors come back as short codes (never the key).
 import { invoke } from "@tauri-apps/api/core";
+import { pick } from "../platform.js";
 
 const errorText = {
   forbidden: "只能在主視窗設定雲端服務",
@@ -16,7 +17,7 @@ const errorText = {
   asr_timeout_range: "語音辨識逾時要在 1000～60000 毫秒之間",
   unsupported_purpose: "這個服務不支援所選的用途",
   not_found: "找不到這個雲端服務（可能已被移除）",
-  keyring_failed: "無法存取 Windows 認證管理員（金鑰庫）",
+  keyring_failed: pick("無法存取 Windows 認證管理員（金鑰庫）", "無法存取 GNOME 鑰匙圈（金鑰庫；請確認已登入桌面且鑰匙圈已解鎖）"),
   config_invalid: "設定檔 config.toml 格式有誤，請先修正",
   config_unreadable: "無法讀取設定檔",
   config_save_failed: "無法儲存設定檔",

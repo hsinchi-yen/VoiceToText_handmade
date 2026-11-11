@@ -1,4 +1,5 @@
 <script>
+  import { pick } from "../platform.js";
   // 「新增雲端服務」 wizard, 7 steps (tasks/plan.md §6.2). `editing` is a row from
   // cloud_list to change an existing service: a custom endpoint starts at step 2 (base_url
   // editable), an official service at step 3. The stored key is reused only if the kind and
@@ -285,7 +286,7 @@
       </fieldset>
     {/if}
     <p class="warn">{isCompat ? lanNote : billingWarning}</p>
-    <p class="hint">詳見安裝資料夾中的 docs\cloud-setup.md</p>
+    <p class="hint">{pick("詳見安裝資料夾中的 docs\\cloud-setup.md", "詳見 /usr/lib/v2c/docs/cloud-setup.md")}</p>
   {:else if step === 3}
     <h2>貼上金鑰{isCompat ? "（選填）" : ""}</h2>
     {#if editing}
@@ -310,7 +311,7 @@
     {#if typedLast4}
       <p class="hint">末 4 碼：{typedLast4}</p>
     {/if}
-    <p class="hint">金鑰只存在 Windows 認證管理員，不會寫進設定檔，畫面上也只顯示末 4 碼。</p>
+    <p class="hint">金鑰只存在{pick(" Windows 認證管理員", " GNOME 登入鑰匙圈")}，不會寫進設定檔，畫面上也只顯示末 4 碼。</p>
   {:else if step === 4}
     <h2>選擇模型</h2>
     {#if busy}<p>正在讀取模型清單…</p>{/if}

@@ -1,4 +1,5 @@
 <script>
+  import { pick } from "../platform.js";
   // Connected services: 測試連線／修改／移除.
   import * as api from "./api.js";
 
@@ -51,7 +52,10 @@
       confirmId = null;
       message = `已移除「${api.displayName(s)}」，原本交給它的用途已改回地端。`;
       if (!r.key_deleted) {
-        message += "（金鑰沒能從 Windows 認證管理員刪除，v2c 已不會再使用它；可以自行到認證管理員刪除。）";
+        message += pick(
+          "（金鑰沒能從 Windows 認證管理員刪除，v2c 已不會再使用它；可以自行到認證管理員刪除。）",
+          "（金鑰沒能從 GNOME 鑰匙圈刪除，v2c 已不會再使用它；可以自行用「密碼和金鑰」刪除。）",
+        );
       }
       onChanged();
     } catch (code) {

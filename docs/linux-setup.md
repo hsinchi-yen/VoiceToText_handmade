@@ -117,15 +117,15 @@ llm_extra_body = { chat_template_kwargs = { enable_thinking = false } }
 asr = "lan-asr"
 cloud_fallback_to_local = true
 
-[timeouts]
-asr_cloud_ms = 8000             # 預設 5000；實測這台伺服器一句約 5.6 秒，見下方
-
 [[cloud]]
 id = "lan-asr"
 kind = "open_ai_compat"
 base_url = "http://192.168.1.50:8002/v1"
 asr_model = "breeze-asr-25"     # 伺服器的模型名稱（GET /v1/models 列出的 id）；自訂端點沒有預設值，不填則不會使用這個服務
+asr_timeout_ms = 8000           # 0.1.6 起：只放寬這個服務的逾時（實測一句約 5.6～6.1 秒）；不填用 [timeouts] asr_cloud_ms（預設 5000）
 ```
+
+0.1.6 起也可以在「雲端服務」精靈的「選擇模型」步驟填「語音辨識逾時」，不用手改設定檔。
 
 2026-11-10 實測（Breeze-ASR-25 伺服器，需要金鑰；音訊是 3.1 秒的英文合成語音 "Please send the meeting notes to the team by Friday."，不是真人錄音）：
 
@@ -133,7 +133,7 @@ asr_model = "breeze-asr-25"     # 伺服器的模型名稱（GET /v1/models 列�
 |------|------|
 | 辨識結果 | 與原句相同（忽略大小寫與標點，字元錯誤率 0） |
 | 每次辨識耗時 | 約 5.6～5.7 秒（連跑 3 次都一樣，不是冷啟動） |
-| 預設逾時 `asr_cloud_ms = 5000` | **每次都逾時**；要用這台伺服器，請把 `asr_cloud_ms` 調到 8000 左右 |
+| 預設逾時 `asr_cloud_ms = 5000` | **每次都逾時**；要用這台伺服器，請把這個服務的 `asr_timeout_ms` 設成 8000 左右（0.1.6 以前只能調全域的 `asr_cloud_ms`） |
 | 端到端（辨識 → 潤飾 → 注入計畫） | 辨識約 5.7 秒；潤飾在思考開啟時 1 秒預算逾時並退回去贅字（總計約 6.7 秒），關閉思考（0.1.3）時約 0.4～0.6 秒成功（總計約 6.1～6.3 秒） |
 
 中文辨識沒有驗證：這台機器的合成語音工具（flite）只能產生英文，也沒有麥克風可以錄中文。
@@ -149,7 +149,7 @@ asr_model = "breeze-asr-25"     # 伺服器的模型名稱（GET /v1/models 列�
 | 純辨識平均耗時 | 約 1.7 秒 | 約 5.9 秒 |
 | 辨識＋潤飾平均總耗時 | 約 2.4 秒（10 段中 9 段 ≤ 3 秒） | 約 6.9 秒（0 段 ≤ 3 秒） |
 | 純辨識平均 CER | 1.8% | 7.0% |
-| 預設 `asr_cloud_ms = 5000` 可用 | 可以 | 不行（要 ≥ 8000） |
+| 預設逾時 5000 ms 可用 | 可以 | 不行（這個服務的 `asr_timeout_ms` 要 ≥ 8000） |
 
 建議 Linux 用 `tea-asr-1`（`asr_cloud_ms` 可維持 5000；第 4 節範例已是這個設定）。兩者都沒有帶詞庫；測試是用 v2c 的處理流程程式直接餵音檔，不是在安裝好的 App 上用麥克風說話。
 
@@ -214,7 +214,7 @@ base_url = "http://192.168.1.50:8000/v1"
 llm_model = "Qwen3.8-27B-UD-Q6_K_L"
 ```
 
-這份範例由測試 `two_remote_services_config_routes_every_purpose`（`crates/v2c-platform/tests/linux_asr.rs`）確認三種用途都會導向對應的服務，而且都會在失敗時退回本機。要改用 `breeze-asr-25`：`base_url` 換成該服務的埠號、`asr_model = "breeze-asr-25"`，並把 `asr_cloud_ms` 調到 8000（見第 3 節）。
+這份範例由測試 `two_remote_services_config_routes_every_purpose`（`crates/v2c-platform/tests/linux_asr.rs`）確認三種用途都會導向對應的服務，而且都會在失敗時退回本機。要改用 `breeze-asr-25`：`base_url` 換成該服務的埠號、`asr_model = "breeze-asr-25"`，並在這個服務加上 `asr_timeout_ms = 8000`（見第 3 節；只影響這個服務，其他服務仍用 `asr_cloud_ms`）。
 
 ## 5. 自己測試連線（開發者）
 
@@ -309,7 +309,7 @@ Wayland 下不顯示浮動標籤，改用桌面通知（同一則通知依序更
 
 ```sh
 sha256sum -c --ignore-missing SHA256SUMS.txt     # 在 releases/ 資料夾裡執行，確認檔案沒有損壞
-sudo apt install ./v2c_0.1.4_amd64.deb            # 會一併安裝相依套件（ibus、libwebkit2gtk-4.1-0、libayatana-appindicator3-1…）
+sudo apt install ./v2c_0.1.6_amd64.deb            # 會一併安裝相依套件（ibus、libwebkit2gtk-4.1-0、libayatana-appindicator3-1…）
 ibus restart                                      # 讓 ibus-daemon 讀到新的 v2c 元件（或登出再登入）
 ```
 
@@ -335,10 +335,10 @@ ibus restart                                      # 讓 ibus-daemon 讀到新的
 ### 7.4 AppImage
 
 ```sh
-chmod +x v2c_0.1.4_amd64.AppImage
-./v2c_0.1.4_amd64.AppImage
+chmod +x v2c_0.1.6_amd64.AppImage
+./v2c_0.1.6_amd64.AppImage
 ```
 
-- 需要 FUSE 2（Ubuntu 22.04：`sudo apt install libfuse2`；Ubuntu 24.04：`libfuse2t64`）。沒有 FUSE 時可改用 `./v2c_0.1.4_amd64.AppImage --appimage-extract-and-run`。
+- 需要 FUSE 2（Ubuntu 22.04：`sudo apt install libfuse2`；Ubuntu 24.04：`libfuse2t64`）。沒有 FUSE 時可改用 `./v2c_0.1.6_amd64.AppImage --appimage-extract-and-run`。
 - AppImage 已內含 WebKit、系統匣（ayatana-appindicator）與 D-Bus 函式庫；系統只需要有 ibus（輸入法服務）與 gnome-keyring（金鑰庫）。
 - AppImage **不能安裝 IBus 元件**，所以預設走備援熱鍵／輸出（第 6.2 節；GNOME 42 上文字只會保留在紀錄裡）。要用 IBus 請改裝 .deb。若一定要用 AppImage：把 AppImage 放到固定位置（例如 `~/Applications/v2c.AppImage`），複製 repo 的 `tools/ibus/v2c.xml` 到 `/usr/share/ibus/component/v2c.xml`（需要 sudo），把其中的 `<exec>` 改成 `/home/你的帳號/Applications/v2c.AppImage --ibus`，然後 `ibus restart`。這個做法未經測試。

@@ -1,4 +1,5 @@
 <script>
+  import { isLinux } from "../platform.js";
   // Per-app injection rules ([[apps]]): newline key and always-paste.
   let { view, save } = $props();
 
@@ -24,7 +25,11 @@
   <h2 class:dirty={view.dirty?.has("apps")}>App 規則</h2>
   <p class="hint">
     聊天程式按 Enter 會送出訊息，換行要用 Shift+Enter；虛擬機視窗收不到模擬打字，要改用貼上。
-    名稱是執行檔名稱（可在工作管理員 → 詳細資料查到）。
+    {#if isLinux}
+      Linux（GNOME Wayland）目前無法得知前景程式，這些規則暫時不會生效，換行一律用 Enter。
+    {:else}
+      名稱是執行檔名稱（可在工作管理員 → 詳細資料查到）。
+    {/if}
   </p>
   <table>
     <thead>
