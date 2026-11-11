@@ -17,7 +17,7 @@
     <name>org.freedesktop.IBus.V2c</name>
     <description>v2c voice input</description>
     <exec>/usr/bin/v2c --ibus</exec>
-    <version>0.1.4</version>
+    <version>0.1.5</version>
     <author>v2c</author>
     <license>MIT</license>
     <homepage></homepage>
