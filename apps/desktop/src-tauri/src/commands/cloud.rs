@@ -21,6 +21,12 @@
 //! used as names. The `id`, `[route]`, and keyring entry never change on rename, and logs
 //! keep using the `id` only.
 //!
+//! Speech recognition timeout (T1.15): a service that does speech recognition may carry its
+//! own `asr_timeout_ms` (whole milliseconds, [`ASR_TIMEOUT_MIN_MS`]..=[`ASR_TIMEOUT_MAX_MS`];
+//! blank = use `[timeouts] asr_cloud_ms`). [`parse_asr_timeout`] checks it; the connection
+//! test and the running provider both use `CloudService::asr_timeout`. It is kept only for
+//! kinds with speech recognition (and, for compatible endpoints, when an ASR model is set).
+//!
 //! Key hygiene: keys come in only inside [`CloudDraft`] (`Debug` redacted, zeroized on drop),
 //! go out only to the keyring and the request header, and never appear in results, errors,
 //! or logs. Results expose the last 4 characters at most. Errors are short codes.
@@ -81,6 +87,17 @@ pub struct CloudDraft {
     pub asr_model: Option<String>,
     #[serde(default)]
     pub llm_model: Option<String>,
+    /// Speech recognition timeout as typed in the wizard (text or number); blank = unset.
+    #[serde(default)]
+    pub asr_timeout_ms: Option<MsInput>,
+}
+
+/// A millisecond value from the UI: the raw field text, or a number.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum MsInput {
+    Number(f64),
+    Text(String),
 }
 
 impl Drop for CloudDraft {
@@ -106,6 +123,7 @@ impl std::fmt::Debug for CloudDraft {
             )
             .field("asr_model", &self.asr_model)
             .field("llm_model", &self.llm_model)
+            .field("asr_timeout_ms", &self.asr_timeout_ms)
             .finish()
     }
 }
@@ -134,6 +152,9 @@ pub struct KindInfo {
     pub suggested_asr_model: Option<&'static str>,
     pub suggested_llm_model: Option<&'static str>,
     pub key_page_url: Option<&'static str>,
+    /// `[timeouts] asr_cloud_ms`: used when a service has no `asr_timeout_ms` (the wizard
+    /// shows it as the placeholder).
+    pub default_asr_timeout_ms: u64,
 }
 
 /// One row of the connected-services list.
@@ -152,6 +173,8 @@ pub struct ServiceView {
     pub effective_base_url: String,
     pub asr_model: Option<String>,
     pub llm_model: Option<String>,
+    /// The service's own speech recognition timeout (`None` = the global default).
+    pub asr_timeout_ms: Option<u64>,
     pub purposes: Purposes,
     pub supports_asr: bool,
     pub has_key: bool,
@@ -232,7 +255,7 @@ pub fn key_page(kind: CloudKind) -> Option<&'static str> {
     }
 }
 
-pub fn kinds() -> Vec<KindInfo> {
+pub fn kinds(timeouts: &TimeoutConfig) -> Vec<KindInfo> {
     [
         CloudKind::Gemini,
         CloudKind::OpenAi,
@@ -256,6 +279,7 @@ pub fn kinds() -> Vec<KindInfo> {
             suggested_asr_model: s.asr,
             suggested_llm_model: s.llm,
             key_page_url: key_page(kind),
+            default_asr_timeout_ms: timeouts.asr_cloud_ms,
         }
     })
     .collect()
@@ -312,6 +336,40 @@ fn check_name_unique(name: &str, id: &str, services: &[CloudService]) -> Result<
     }
 }
 
+/// Shortest and longest per-service speech recognition timeout, ms.
+pub const ASR_TIMEOUT_MIN_MS: u64 = 1000;
+pub const ASR_TIMEOUT_MAX_MS: u64 = 60_000;
+
+/// The wizard's timeout field: blank = unset; otherwise a whole number of milliseconds in
+/// [`ASR_TIMEOUT_MIN_MS`]..=[`ASR_TIMEOUT_MAX_MS`] (`asr_timeout_invalid` /
+/// `asr_timeout_range` otherwise).
+pub fn parse_asr_timeout(v: &Option<MsInput>) -> Result<Option<u64>, &'static str> {
+    let n: f64 = match v {
+        None => return Ok(None),
+        Some(MsInput::Text(t)) if t.trim().is_empty() => return Ok(None),
+        Some(MsInput::Text(t)) => match t.trim().parse::<i64>() {
+            Ok(n) => n as f64,
+            // Digits that overflow i64 are still a number, just far out of range.
+            Err(_)
+                if t.trim()
+                    .trim_start_matches('-')
+                    .bytes()
+                    .all(|b| b.is_ascii_digit()) =>
+            {
+                return Err("asr_timeout_range")
+            }
+            Err(_) => return Err("asr_timeout_invalid"),
+        },
+        Some(MsInput::Number(f)) if f.is_finite() && f.fract() == 0.0 => *f,
+        Some(MsInput::Number(_)) => return Err("asr_timeout_invalid"),
+    };
+    if (ASR_TIMEOUT_MIN_MS as f64..=ASR_TIMEOUT_MAX_MS as f64).contains(&n) {
+        Ok(Some(n as u64))
+    } else {
+        Err("asr_timeout_range")
+    }
+}
+
 fn trimmed(s: &Option<String>) -> Option<String> {
     s.as_deref()
         .map(str::trim)
@@ -324,10 +382,11 @@ impl CloudDraft {
     /// name length). Name uniqueness is checked on save.
     fn to_service(&self, id: &str) -> Result<CloudService, &'static str> {
         let mut base_url = trimmed(&self.base_url).map(|u| u.trim_end_matches('/').to_owned());
+        let asr_timeout_ms = parse_asr_timeout(&self.asr_timeout_ms)?;
         if base_url.as_deref() == route::default_base_url(self.kind) {
             base_url = None;
         }
-        let svc = CloudService {
+        let mut svc = CloudService {
             id: id.to_owned(),
             name: normalize_name(self.kind, &self.name)?,
             kind: self.kind,
@@ -338,7 +397,14 @@ impl CloudDraft {
                 None
             },
             llm_model: trimmed(&self.llm_model),
+            asr_timeout_ms: None,
         };
+        // Only services that do speech recognition keep a timeout for it.
+        if svc.kind.supports_asr()
+            && (svc.kind != CloudKind::OpenAiCompat || svc.asr_model.is_some())
+        {
+            svc.asr_timeout_ms = asr_timeout_ms;
+        }
         if self.kind == CloudKind::OpenAiCompat && svc.base_url.is_none() {
             return Err("base_url_required");
         }
@@ -531,6 +597,7 @@ pub async fn test_draft(
     let opts = ProbeOptions {
         asr,
         llm,
+        asr_timeout: svc.asr_timeout(timeouts),
         ..ProbeOptions::from_timeouts(timeouts)
     };
     let compat_llm = openai_llm(&svc, key.as_ref(), http, opts.llm_timeout);
@@ -550,6 +617,7 @@ pub async fn test_draft(
         kind = kind_toml(svc.kind),
         ok = result.ok,
         latency_ms = result.latency_ms,
+        asr_timeout_ms = opts.asr_timeout.as_millis() as u64,
         "cloud connection test"
     );
     Ok((result, probe))
@@ -595,6 +663,7 @@ fn view(svc: &CloudService, cfg: &Config, stored: &dyn SecretStore) -> ServiceVi
         effective_base_url: route::effective_base_url(svc).unwrap_or_default(),
         asr_model: svc.asr_model.clone(),
         llm_model: svc.llm_model.clone(),
+        asr_timeout_ms: svc.asr_timeout_ms,
         purposes: Purposes {
             asr: cfg.route.asr == svc.id,
             polish: cfg.route.polish == svc.id,
@@ -648,19 +717,35 @@ fn config_lock() -> std::sync::MutexGuard<'static, ()> {
     CONFIG_LOCK.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// Sets `key = "val"` keeping the old value's comments/whitespace.
-fn set_str(table: &mut dyn TableLike, key: &str, val: &str) {
+/// Sets `key = v` keeping the old value's comments/whitespace.
+fn set_value(table: &mut dyn TableLike, key: &str, mut v: Value) {
     match table.get_mut(key) {
         Some(Item::Value(old)) => {
-            let decor = old.decor().clone();
-            let mut v = Value::from(val);
-            *v.decor_mut() = decor;
+            *v.decor_mut() = old.decor().clone();
             *old = v;
         }
         _ => {
-            table.insert(key, toml_edit::value(val));
+            table.insert(key, Item::Value(v));
         }
     }
+}
+
+fn set_str(table: &mut dyn TableLike, key: &str, val: &str) {
+    set_value(table, key, Value::from(val));
+}
+
+/// Sets an integer, or removes the key when `None`.
+fn set_opt_ms(table: &mut dyn TableLike, key: &str, val: Option<u64>) -> Result<(), &'static str> {
+    match val {
+        Some(ms) => {
+            let ms = i64::try_from(ms).map_err(|_| "asr_timeout_range")?;
+            set_value(table, key, Value::from(ms));
+        }
+        None => {
+            table.remove(key);
+        }
+    }
+    Ok(())
 }
 
 fn set_opt(table: &mut dyn TableLike, key: &str, val: &Option<String>) {
@@ -711,7 +796,7 @@ fn upsert_service(doc: &mut DocumentMut, svc: &CloudService) -> Result<(), &'sta
     set_opt(table, "base_url", &svc.base_url);
     set_opt(table, "asr_model", &svc.asr_model);
     set_opt(table, "llm_model", &svc.llm_model);
-    Ok(())
+    set_opt_ms(table, "asr_timeout_ms", svc.asr_timeout_ms)
 }
 
 fn remove_service_table(doc: &mut DocumentMut, id: &str) -> Result<(), &'static str> {
@@ -967,9 +1052,12 @@ fn live_config(app: &tauri::AppHandle) -> Arc<Config> {
 // ---------------------------------------------------------------------------------------
 
 #[tauri::command]
-pub fn cloud_kinds(window: tauri::WebviewWindow) -> Result<Vec<KindInfo>, &'static str> {
+pub fn cloud_kinds(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<Vec<KindInfo>, &'static str> {
     check_caller(window.label())?;
-    Ok(kinds())
+    Ok(kinds(&live_config(&app).timeouts))
 }
 
 #[tauri::command]
@@ -1082,6 +1170,7 @@ mod tests {
             api_key: key.map(str::to_owned),
             asr_model: None,
             llm_model: None,
+            asr_timeout_ms: None,
         }
     }
 
@@ -1387,6 +1476,7 @@ mod tests {
             base_url: Some(server.uri()),
             asr_model: None,
             llm_model: None,
+            asr_timeout_ms: None,
         }];
         let mut d = draft(CloudKind::Claude, Some(format!("{}/", server.uri())), None);
         d.id = Some("claude".into());
@@ -1585,6 +1675,7 @@ future_option = 42  # unknown key
             base_url: None,
             asr_model: None,
             llm_model: None,
+            asr_timeout_ms: None,
         });
         assert_eq!(display_name(&cfg.cloud[0]), "gemini");
         let row = view(&cfg.cloud[0], &cfg, &MemorySecretStore::new());
@@ -1599,6 +1690,7 @@ future_option = 42  # unknown key
             base_url: Some("http://h/v1".into()),
             asr_model: None,
             llm_model: None,
+            asr_timeout_ms: None,
         }
     }
 
@@ -1971,6 +2063,216 @@ llm_model = \"qwen\"
         assert_eq!(cfg.route.polish, LOCAL);
     }
 
+    // ---- per-service ASR timeout (T1.15) ----
+
+    fn ms_text(v: &str) -> Option<MsInput> {
+        Some(MsInput::Text(v.into()))
+    }
+
+    #[test]
+    fn asr_timeout_input_is_checked() {
+        assert_eq!(parse_asr_timeout(&None), Ok(None));
+        assert_eq!(parse_asr_timeout(&ms_text("  ")), Ok(None));
+        assert_eq!(parse_asr_timeout(&ms_text(" 8000 ")), Ok(Some(8000)));
+        assert_eq!(parse_asr_timeout(&ms_text("1000")), Ok(Some(1000)));
+        assert_eq!(parse_asr_timeout(&ms_text("60000")), Ok(Some(60_000)));
+        assert_eq!(
+            parse_asr_timeout(&Some(MsInput::Number(8000.0))),
+            Ok(Some(8000))
+        );
+        for bad in ["abc", "8000ms", "8000.5", "8 000", "0x1f40"] {
+            assert_eq!(
+                parse_asr_timeout(&ms_text(bad)),
+                Err("asr_timeout_invalid"),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            parse_asr_timeout(&Some(MsInput::Number(1500.5))),
+            Err("asr_timeout_invalid")
+        );
+        for out in ["999", "60001", "0", "-5", "99999999999999999999999"] {
+            assert_eq!(
+                parse_asr_timeout(&ms_text(out)),
+                Err("asr_timeout_range"),
+                "{out}"
+            );
+        }
+        assert_eq!(
+            parse_asr_timeout(&Some(MsInput::Number(1e20))),
+            Err("asr_timeout_range")
+        );
+        // The UI may send either form.
+        let d: CloudDraft = serde_json::from_value(json!({
+            "kind": "gemini", "asr_timeout_ms": "8000"
+        }))
+        .unwrap();
+        assert_eq!(d.asr_timeout_ms, ms_text("8000"));
+        let d: CloudDraft = serde_json::from_value(json!({
+            "kind": "gemini", "asr_timeout_ms": 8000
+        }))
+        .unwrap();
+        assert_eq!(d.asr_timeout_ms, Some(MsInput::Number(8000.0)));
+    }
+
+    #[test]
+    fn asr_timeout_is_kept_only_for_speech_services() {
+        let with = |mut d: CloudDraft| {
+            d.asr_timeout_ms = ms_text("8000");
+            d.to_service("x").unwrap().asr_timeout_ms
+        };
+        assert_eq!(with(draft(CloudKind::Gemini, None, None)), Some(8000));
+        assert_eq!(with(draft(CloudKind::OpenAi, None, None)), Some(8000));
+        assert_eq!(with(draft(CloudKind::Claude, None, None)), None);
+        let text_only = compat("http://h:8000/v1", None);
+        assert_eq!(with(text_only.clone()), None);
+        let mut speech = text_only;
+        speech.asr_model = Some("breeze-asr-25".into());
+        assert_eq!(with(speech), Some(8000));
+    }
+
+    /// Compatible speech endpoint whose transcription answers after 2 s.
+    async fn slow_asr_server() -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"text": "hi"}))
+                    .set_delay(Duration::from_secs(2)),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn connection_test_uses_the_service_asr_timeout() {
+        let server = slow_asr_server().await;
+        let mut d = draft(
+            CloudKind::OpenAiCompat,
+            Some(format!("{}/v1", server.uri())),
+            None,
+        );
+        d.asr_model = Some("breeze-asr-25".into());
+        let probe = |d: CloudDraft, global_ms: u64| async move {
+            let t = TimeoutConfig {
+                asr_cloud_ms: global_ms,
+                llm_cloud_ms: 2000,
+            };
+            let (r, p) = test_draft(&d, &MemorySecretStore::new(), &[], &http(), &t, true, true)
+                .await
+                .unwrap();
+            (r, p)
+        };
+
+        // Service 3000 ms beats a too-short global value: passes.
+        d.asr_timeout_ms = ms_text("3000");
+        let (r, p) = probe(d.clone(), 1000).await;
+        assert!(p.asr.passed(), "{p:?}");
+        assert!(r.ok, "{r:?}");
+
+        // Service 1000 ms is used even though the global value would be enough: times out.
+        d.asr_timeout_ms = ms_text("1000");
+        let (r, p) = probe(d.clone(), 5000).await;
+        assert_eq!(p.asr, Check::TimedOut);
+        assert_eq!(status(&r, "asr").reason, Some(TIMED_OUT));
+
+        // Unset: the global value applies.
+        d.asr_timeout_ms = None;
+        let (_, p) = probe(d.clone(), 1000).await;
+        assert_eq!(p.asr, Check::TimedOut);
+
+        // Bad input never reaches the server.
+        d.asr_timeout_ms = ms_text("abc");
+        let t = timeouts();
+        let s = MemorySecretStore::new();
+        assert_eq!(
+            test_draft(&d, &s, &[], &http(), &t, true, true)
+                .await
+                .unwrap_err(),
+            "asr_timeout_invalid"
+        );
+        d.asr_timeout_ms = ms_text("70000");
+        assert_eq!(
+            test_draft(&d, &s, &[], &http(), &t, true, true)
+                .await
+                .unwrap_err(),
+            "asr_timeout_range"
+        );
+    }
+
+    #[test]
+    fn asr_timeout_is_saved_updated_and_removed_preserving_comments() {
+        let path = temp_config("asr-timeout");
+        std::fs::write(&path, USER_CONFIG).unwrap();
+        let store = MemorySecretStore::new();
+        let asr_only = Purposes {
+            asr: true,
+            polish: false,
+            translate: false,
+        };
+        let mut d = draft(
+            CloudKind::OpenAiCompat,
+            Some("http://10.0.0.5:8002/v1".into()),
+            None,
+        );
+        d.asr_model = Some("breeze-asr-25".into());
+        d.asr_timeout_ms = ms_text("8000");
+        let row = save_service(&path, &store, &d, asr_only).unwrap();
+        assert_eq!(row.asr_timeout_ms, Some(8000));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("asr_timeout_ms = 8000"), "{text}");
+        assert!(text.contains("# keep this comment") && text.contains("future_option = 42"));
+        let cfg = load_config(&path).unwrap();
+        let svc = cfg.cloud_service("custom").unwrap();
+        assert_eq!(svc.asr_timeout(&cfg.timeouts), Duration::from_millis(8000));
+        assert_eq!(cfg.route.asr, "custom");
+
+        // A comment the user put on the line survives a change of value.
+        let commented = text.replace(
+            "asr_timeout_ms = 8000",
+            "asr_timeout_ms = 8000 # slow LAN server",
+        );
+        std::fs::write(&path, commented).unwrap();
+        d.id = Some("custom".into());
+        d.asr_timeout_ms = Some(MsInput::Number(9000.0));
+        let row = save_service(&path, &store, &d, asr_only).unwrap();
+        assert_eq!(row.asr_timeout_ms, Some(9000));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("asr_timeout_ms = 9000 # slow LAN server"),
+            "{text}"
+        );
+
+        // Out of range: refused, file unchanged.
+        d.asr_timeout_ms = ms_text("500");
+        assert_eq!(
+            save_service(&path, &store, &d, asr_only),
+            Err("asr_timeout_range")
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+
+        // Blank: the key is removed and the global value applies again.
+        d.asr_timeout_ms = ms_text("");
+        let row = save_service(&path, &store, &d, asr_only).unwrap();
+        assert_eq!(row.asr_timeout_ms, None);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("asr_timeout_ms"), "{text}");
+        assert!(text.contains("# keep this comment") && text.contains("future_option = 42"));
+        let rows = list_services(&path, &store).unwrap();
+        assert_eq!(rows[0].asr_timeout_ms, None);
+    }
+
+    #[test]
+    fn kinds_report_the_global_asr_timeout() {
+        let t = TimeoutConfig {
+            asr_cloud_ms: 7000,
+            llm_cloud_ms: 3000,
+        };
+        assert!(kinds(&t).iter().all(|k| k.default_asr_timeout_ms == 7000));
+    }
+
     #[test]
     fn draft_debug_is_redacted_and_kinds_are_complete() {
         let d = draft(CloudKind::OpenAi, None, Some(KEY));
@@ -1983,7 +2285,7 @@ llm_model = \"qwen\"
         assert_eq!(parsed.kind, CloudKind::OpenAiCompat);
         assert!(!format!("{parsed:?}").contains("TESTSECRET"));
 
-        let k = kinds();
+        let k = kinds(&timeouts());
         assert_eq!(k.len(), 4);
         let claude = k.iter().find(|i| i.kind == CloudKind::Claude).unwrap();
         assert!(!claude.supports_asr && claude.capabilities.contains("只能潤飾與中翻英"));

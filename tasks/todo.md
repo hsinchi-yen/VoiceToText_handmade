@@ -81,6 +81,9 @@
 - [ ] W7b T1.14 設定頁：儲存按鈕、目前使用中、直接選地端辨識引擎、地端語音模型測試
   - [x] 程式完成（2026-11-11，分支 `t1.14-local-route-test`，審查通過）：設定改為草稿＋「儲存」（`settings_preview` 驗證、`settings_apply` 一次寫入，未儲存欄位標示、離開前詢問、外部變更時可選重新載入或保留草稿）；「目前使用中」（`settings_runtime_status`）；語音辨識選單分成三個地端選項＋雲端；地端語音模型「測試」（`settings_test_local_asr`，不回傳辨識文字）；移除 LM Studio 區塊與 `settings_test_lm`
   - [ ] 🧑 安裝新版後實機操作（見 human-checklist）
+- [ ] W7c T1.15 每個雲端服務各自的語音辨識逾時（Breeze-ASR-25／TEA-ASR 建議 8000）
+  - [x] 程式完成（2026-11-11，分支 `t1.15-asr-timeout`）：`[[cloud]] asr_timeout_ms`＋`CloudService::asr_timeout()`（沒填用 `[timeouts] asr_cloud_ms`），實際辨識（`providers.rs`）與測試連線都用它；精靈第 4 步「語音辨識逾時（毫秒，選填）」、快選「Breeze-ASR-25 建議 8000」「TEA-ASR 建議 8000」「用預設」、模型名稱含 breeze／tea 時提示；範圍 1000～60000、空白移除欄位（toml_edit 保留註解）；服務清單顯示「辨識逾時 N ms」；`docs/cloud-setup.md`、`docs/lan-server-guide.md`、`tasks/plan.md` 第 6.2 節
+  - [ ] 🧑 Breeze-ASR（`:8002`）按建議 8000 實測不再退回本機；TEA-ASR 依日誌 `asr_ms` 回報再調整建議值（見 human-checklist）
 - [ ] **檢查點 1**：日常使用一週，問題記在 `dogfood-windows.md`
 
 ## Phase 2 — Android

@@ -86,13 +86,14 @@ impl Providers {
         p.local_translate = Some(Arc::new(local(Stage::Translate, LOCAL_LLM_TIMEOUT)));
         p.lm_probe = Some(local(Stage::Polish, LM_CHECK_TIMEOUT));
 
-        let asr_timeout = Duration::from_millis(cfg.timeouts.asr_cloud_ms);
         let llm_timeout = Duration::from_millis(cfg.timeouts.llm_cloud_ms);
         let service = |purpose: Purpose| match &plan.get(purpose).target {
             Target::Cloud { service_id, .. } => cfg.cloud_service(service_id),
             Target::Local => None,
         };
         if let Some(svc) = service(Purpose::Asr) {
+            // The service's own `asr_timeout_ms`, else `[timeouts] asr_cloud_ms` (T1.15).
+            let asr_timeout = svc.asr_timeout(&cfg.timeouts);
             p.cloud_asr = log_build(
                 Purpose::Asr,
                 &svc.id,
@@ -577,6 +578,7 @@ mod tests {
             base_url: None,
             asr_model: None,
             llm_model: None,
+            asr_timeout_ms: None,
         });
         cfg.route.asr = "gem".into();
         cfg.route.translate = "gem".into();

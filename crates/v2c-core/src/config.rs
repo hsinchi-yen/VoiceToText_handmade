@@ -4,6 +4,8 @@
 //! nothing here requires an API key. API keys are NOT stored here; they live in the OS keyring
 //! and are looked up by `CloudService::id`.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{error::V2cError, Result};
@@ -371,6 +373,19 @@ pub struct CloudService {
     pub asr_model: Option<String>,
     #[serde(default)]
     pub llm_model: Option<String>,
+    /// This service's speech recognition timeout, ms. `None` = use `[timeouts] asr_cloud_ms`
+    /// (see [`CloudService::asr_timeout`]). Lets one slow server (e.g. a LAN Breeze-ASR-25)
+    /// get more time without changing the other services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asr_timeout_ms: Option<u64>,
+}
+
+impl CloudService {
+    /// Effective speech recognition timeout: `asr_timeout_ms` if set, else the global
+    /// `[timeouts] asr_cloud_ms`.
+    pub fn asr_timeout(&self, t: &TimeoutConfig) -> Duration {
+        Duration::from_millis(self.asr_timeout_ms.unwrap_or(t.asr_cloud_ms))
+    }
 }
 
 #[cfg(test)]
@@ -445,6 +460,7 @@ mod tests {
             base_url: None,
             asr_model: Some("gemini-flash".into()),
             llm_model: None,
+            asr_timeout_ms: Some(8000),
         });
         c.route.asr = "my-gemini".into();
         let s = c.to_toml_string().unwrap();
@@ -478,6 +494,37 @@ base_url = \"http://h/v1\"
         );
         let back = Config::from_toml_str(&cfg.to_toml_string().unwrap()).unwrap();
         assert_eq!(back, cfg);
+    }
+
+    #[test]
+    fn asr_timeout_is_per_service_with_global_default() {
+        let cfg = Config::from_toml_str(
+            "[timeouts]
+asr_cloud_ms = 5000
+
+[[cloud]]
+id = \"a\"
+kind = \"open_ai_compat\"
+base_url = \"http://h:8002/v1\"
+asr_model = \"breeze-asr-25\"
+asr_timeout_ms = 8000
+
+[[cloud]]
+id = \"b\"
+kind = \"gemini\"
+",
+        )
+        .unwrap();
+        let a = cfg.cloud_service("a").unwrap();
+        let b = cfg.cloud_service("b").unwrap();
+        assert_eq!(a.asr_timeout_ms, Some(8000));
+        assert_eq!(b.asr_timeout_ms, None);
+        assert_eq!(a.asr_timeout(&cfg.timeouts), Duration::from_millis(8000));
+        assert_eq!(b.asr_timeout(&cfg.timeouts), Duration::from_millis(5000));
+        // Unset is omitted when written, set survives a round trip.
+        let text = cfg.to_toml_string().unwrap();
+        assert_eq!(text.matches("asr_timeout_ms").count(), 1, "{text}");
+        assert_eq!(Config::from_toml_str(&text).unwrap(), cfg);
     }
 
     #[test]

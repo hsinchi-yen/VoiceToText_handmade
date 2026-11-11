@@ -33,6 +33,7 @@
         base_url: s.base_url ?? "",
         asr_model: s.asr_model ?? "",
         llm_model: s.llm_model ?? "",
+        asr_timeout_ms: s.asr_timeout_ms != null ? String(s.asr_timeout_ms) : "",
       };
       results[s.id] = await api.test(draft);
     } catch (code) {
@@ -79,6 +80,7 @@
           用途：{routed(s)}<br />
           {#if s.kind === "open_ai_compat" || s.base_url}端點：{s.effective_base_url}<br />{/if}
           {#if s.asr_model}語音辨識模型：{s.asr_model}<br />{/if}
+          {#if s.asr_timeout_ms != null}辨識逾時 {s.asr_timeout_ms} ms<br />{/if}
           {#if s.llm_model}文字模型：{s.llm_model}<br />{/if}
           金鑰：{s.has_key ? (s.key_last4 ? `末 4 碼 ${s.key_last4}` : "已儲存") : "未設定"}
         </div>

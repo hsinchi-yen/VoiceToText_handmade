@@ -12,6 +12,8 @@ const errorText = {
   name_taken: "這個名稱已經被其他服務使用（含代號，不分大小寫），請換一個",
   invalid_name: "名稱不能包含換行或控制字元",
   name_reserved: "「local」是保留字（代表地端），請換一個名稱",
+  asr_timeout_invalid: "語音辨識逾時請填整數毫秒（例如 8000），或留空使用預設值",
+  asr_timeout_range: "語音辨識逾時要在 1000～60000 毫秒之間",
   unsupported_purpose: "這個服務不支援所選的用途",
   not_found: "找不到這個雲端服務（可能已被移除）",
   keyring_failed: "無法存取 Windows 認證管理員（金鑰庫）",
@@ -30,7 +32,7 @@ export function describe(code) {
 /** Strips empty strings so the backend sees "not set". */
 function clean(draft) {
   const out = { kind: draft.kind };
-  for (const k of ["id", "name", "base_url", "api_key", "asr_model", "llm_model"]) {
+  for (const k of ["id", "name", "base_url", "api_key", "asr_model", "llm_model", "asr_timeout_ms"]) {
     const v = typeof draft[k] === "string" ? draft[k].trim() : draft[k];
     if (v) out[k] = v;
   }
@@ -89,6 +91,19 @@ export function nameProblem(name, id, services) {
     (s) => s.id !== id && (s.id.toLowerCase() === low || shownName(s).toLowerCase() === low),
   );
   return clash ? "name_taken" : "";
+}
+
+/** Per-service speech recognition timeout range, ms (backend `ASR_TIMEOUT_MIN_MS`/`MAX`). */
+export const ASR_TIMEOUT_MIN_MS = 1000;
+export const ASR_TIMEOUT_MAX_MS = 60000;
+
+/** Client-side copy of the backend `parse_asr_timeout`; returns an error code or "". */
+export function asrTimeoutProblem(value) {
+  const v = String(value ?? "").trim();
+  if (!v) return "";
+  if (!/^-?\d+$/.test(v)) return "asr_timeout_invalid";
+  const n = Number(v);
+  return n < ASR_TIMEOUT_MIN_MS || n > ASR_TIMEOUT_MAX_MS ? "asr_timeout_range" : "";
 }
 
 /** Same rule as the backend (`ApiKey::last4`): short keys show nothing. */
