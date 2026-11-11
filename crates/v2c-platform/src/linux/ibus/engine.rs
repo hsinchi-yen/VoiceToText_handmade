@@ -725,6 +725,8 @@ mod tests {
         for needle in [
             format!("<name>{}</name>", c.name),
             format!("<exec>{}</exec>", c.exec),
+            // Shown by IBus/GNOME; must follow the release version bump.
+            format!("<version>{}</version>", c.version),
             format!("<name>{}</name>", c.engines[0].name),
             format!("<language>{}</language>", c.engines[0].language),
             format!("<layout>{}</layout>", c.engines[0].layout),

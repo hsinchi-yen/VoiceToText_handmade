@@ -176,6 +176,15 @@ if [[ "$mode" == check ]]; then
     exit 0
 fi
 
+version="$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    "$repo/apps/desktop/src-tauri/tauri.conf.json" | head -n 1)"
+# The IBus component (installed by the .deb) carries its own version, shown by IBus/GNOME.
+ibus_version="$(sed -n 's/.*<version>\([^<]*\)<\/version>.*/\1/p' "$repo/tools/ibus/v2c.xml" | head -n 1)"
+if [[ "$ibus_version" != "$version" ]]; then
+    echo "tools/ibus/v2c.xml <version> is '$ibus_version' but tauri.conf.json is '$version'; update the XML" >&2
+    exit 1
+fi
+
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo/target}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 export CMAKE_BUILD_PARALLEL_LEVEL="$CARGO_BUILD_JOBS"
@@ -190,8 +199,6 @@ export CMAKE_BUILD_PARALLEL_LEVEL="$CARGO_BUILD_JOBS"
     npm run tauri build -- --bundles deb,appimage
 )
 
-version="$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-    "$repo/apps/desktop/src-tauri/tauri.conf.json" | head -n 1)"
 bundle="$CARGO_TARGET_DIR/release/bundle"
 shopt -s nullglob
 built=("$bundle"/deb/v2c_"${version}"_*.deb "$bundle"/appimage/v2c_"${version}"_*.AppImage)
