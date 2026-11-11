@@ -7,6 +7,8 @@
 //! Also checks that no transcript / polished / translated text reaches the log
 //! (AGENTS.md rule 1), with every log event of this binary captured at TRACE level.
 
+#![cfg(target_os = "linux")]
+
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};

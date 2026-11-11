@@ -6,6 +6,8 @@
 //! Hermetic by default (wiremock). `llm_real_*` tests are `#[ignore]` and need
 //! `V2C_TEST_LLM_BASE_URL`; they send only a synthetic sentence and print lengths/timings.
 
+#![cfg(target_os = "linux")]
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

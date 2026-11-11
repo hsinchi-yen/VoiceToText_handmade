@@ -159,6 +159,12 @@
   - [x] `docs/linux-setup.md` 第 7 節（安裝、輸入來源、兩個遠端服務、AppImage 限制）、README Linux 段落
   - [ ] 🧑 `sudo apt install ./releases/v2c_0.1.3_amd64.deb`、`ibus restart`、加入 v2c 輸入來源、實機說話（含 `v2c --ibus` 由 ibus-daemon 啟動）
   - [x] 🧑 核准合併 T3.7（2026-11-11，本機合併到 main，未 push）
+- [x] W17b T3.8 同步 Windows 0.1.4 到 Linux（2026-11-11）
+  - [x] 合併 `origin/main` 0.1.4（T1.12 TEA-ASR 本機引擎、T1.13 端點名稱、T1.14 設定儲存／即時狀態／地端測試）；無文字衝突，`linux_e2e_sim` 補上 `CloudService.name`
+  - [x] 沒有 CUDA 的版本（Linux 安裝包、開發版）在「地端語音模型」不提供 TEA-ASR-1.1 下載，改提示用遠端服務；Windows CUDA 正式版畫面不變（獨立審查：Windows 執行、介面、建置、安裝檔都不受影響）
+  - [x] `crates/v2c-platform/tests/linux_*.rs` 加 `#![cfg(target_os = "linux")]`，Windows 上 `cargo test --workspace` 不會編譯 Linux 測試
+  - [x] `releases/v2c_0.1.4_amd64.deb`、`v2c_0.1.4_amd64.AppImage`
+  - [ ] 🧑 Windows 上 `cargo test --workspace` 與 `npm run tauri:build:cuda` 確認沒有回歸（這台 Linux 無法建置 Windows）
 - [ ] **檢查點 3**：第一版交付
   - [x] 2026-11-11：Linux 語音辨識定案為遠端 `tea-asr-1`＋本機 SenseVoice 備援（`docs/linux-setup.md` 第 3、4 節）
   - [x] 2026-11-11：IBus 限制「輸入來源不是 v2c 時右 Ctrl 沒反應」決定保留並寫進文件（第 6.3 節）

@@ -10,6 +10,8 @@
 //! `V2C_TEST_ASR_BASE_URL`; the key is read from the file in `V2C_TEST_ASR_KEY_FILE` and never
 //! printed; only the HTTP outcome, text length and elapsed time are printed.
 
+#![cfg(target_os = "linux")]
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
