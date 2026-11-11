@@ -5832,7 +5832,7 @@ dependencies = [
 
 [[package]]
 name = "v2c-asr-local"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "hound",
@@ -5846,7 +5846,7 @@ dependencies = [
 
 [[package]]
 name = "v2c-cli"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -5862,7 +5862,7 @@ dependencies = [
 
 [[package]]
 name = "v2c-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -5881,7 +5881,7 @@ dependencies = [
 
 [[package]]
 name = "v2c-desktop"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "bzip2 0.6.1",
@@ -5918,14 +5918,14 @@ dependencies = [
 
 [[package]]
 name = "v2c-ffi"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "v2c-core",
 ]
 
 [[package]]
 name = "v2c-platform"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "keyring-core",
