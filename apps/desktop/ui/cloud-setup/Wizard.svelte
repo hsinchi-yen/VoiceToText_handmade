@@ -286,7 +286,7 @@
       </fieldset>
     {/if}
     <p class="warn">{isCompat ? lanNote : billingWarning}</p>
-    <p class="hint">{pick("詳見安裝資料夾中的 docs\\cloud-setup.md", "詳見 /usr/lib/v2c/docs/cloud-setup.md")}</p>
+    <p class="hint">{pick("詳見安裝資料夾中的 docs\\cloud-setup.md", "詳見 /usr/lib/v2c/docs/cloud-setup.md（.deb 版；AppImage 版見 repo 的 docs/cloud-setup.md）")}</p>
   {:else if step === 3}
     <h2>貼上金鑰{isCompat ? "（選填）" : ""}</h2>
     {#if editing}

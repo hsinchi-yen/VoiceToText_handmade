@@ -1,5 +1,5 @@
 <script>
-  import { pick } from "../platform.js";
+  import { isLinux, pick } from "../platform.js";
   // [history]: on/off, retention, apps that are never recorded.
   import * as api from "./api.js";
 
@@ -32,5 +32,8 @@
   <label for="exclude-apps" class:dirty={dirty("history_exclude_apps")}>不記錄的 App（一行一個執行檔名稱）</label>
   <textarea id="exclude-apps" rows="4" bind:value={exclude} spellcheck="false"
     onchange={() => save([{ field: "history_exclude_apps", value: api.parseExeList(exclude) }])}></textarea>
+  {#if isLinux}
+    <p class="hint">Linux（GNOME Wayland）目前無法得知前景程式，這份清單暫時不會生效；不想留紀錄時請關閉上方「保存輸入紀錄」。</p>
+  {/if}
   <p class="hint">輸入紀錄的變更會在重新啟動 v2c 後生效。</p>
 </section>
