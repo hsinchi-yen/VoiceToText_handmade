@@ -129,6 +129,8 @@
       message = api.describe("key_missing");
       return;
     }
+    // A text-only compatible endpoint hides the field: drop what was typed there before.
+    if (step === 4 && isCompat && !wantAsr) draft.asr_timeout_ms = "";
     if (step === 4) {
       const problem = api.asrTimeoutProblem(draft.asr_timeout_ms);
       if (problem) {
