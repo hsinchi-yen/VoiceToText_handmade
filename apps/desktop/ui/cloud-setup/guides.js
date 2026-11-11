@@ -45,3 +45,12 @@ export const billingWarning = "雲端服務會依用量向你收費，錄音或�
 export const lanNote =
   "區網或自架伺服器不會收費，但錄音或文字會送到那台伺服器；http:// 在網路上是不加密的，請只在信任的網路使用。";
 
+
+// Suggested per-service speech recognition timeouts (T1.15). The one place to tune them.
+// `match` is looked for in the ASR model name (case-insensitive) to show a hint.
+// Breeze-ASR-25 on a LAN server measured 5.5–6.3 s per sentence (2026-11); TEA-ASR is
+// provisional until measured.
+export const asrTimeoutSuggestions = [
+  { match: "breeze", label: "Breeze-ASR-25", ms: 8000 },
+  { match: "tea", label: "TEA-ASR", ms: 8000 },
+];

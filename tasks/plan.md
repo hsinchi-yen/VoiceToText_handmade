@@ -262,6 +262,8 @@ enabled = true
 
 **自訂相容端點的別名**（T1.13，2026-11-11 你決定）：自訂相容端點可在精靈或服務清單填選填的「名稱」（`[[cloud]] name`，例如「區網 Qwen」），所有顯示服務的地方都用它；沒填就顯示代號（`custom`、`custom-2`…）。代號 `id` 不變，改名不影響 `[route]` 與金鑰。Gemini／OpenAI／Claude 不提供別名。
 
+**每個服務各自的語音辨識逾時**（T1.15，2026-11-11 你決定）：做語音辨識的服務（Gemini／OpenAI，或填了語音辨識模型的自訂相容端點）可填選填的 `[[cloud]] asr_timeout_ms`（整數毫秒 1000～60000）；有效逾時 = 該值，沒填就用 `[timeouts] asr_cloud_ms`（`CloudService::asr_timeout()`），實際辨識與「測試連線」都用它。精靈第 4 步「語音辨識逾時（毫秒，選填）」提供快選：Breeze-ASR-25 建議 8000（區網 `:8002` 實測每句 5.5～6.3 秒）、TEA-ASR 建議 8000（暫定）、用預設；建議值集中在 `apps/desktop/ui/cloud-setup/guides.js` 的 `asrTimeoutSuggestions`。服務清單顯示「辨識逾時 N ms」。
+
 另外提供 `docs/cloud-setup.md`：給使用者看的圖文說明，涵蓋上述步驟與各家取得金鑰的流程；精靈第 2 步的「詳細說明」連到這份文件。
 
 Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫面實作；Rust 核心提供共用的 `test_connection()`。

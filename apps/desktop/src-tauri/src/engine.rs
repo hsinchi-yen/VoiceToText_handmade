@@ -1172,6 +1172,7 @@ mod tests {
             base_url: None,
             asr_model: None,
             llm_model: None,
+            asr_timeout_ms: None,
         });
         assert!(ConfigDiff::between(&a, &b).providers);
 
@@ -1314,6 +1315,7 @@ mod tests {
             base_url: None,
             asr_model: None,
             llm_model: None,
+            asr_timeout_ms: None,
         });
         cfg.route.translate = "g".into();
         cfg.route.cloud_fallback_to_local = false;
@@ -1356,6 +1358,7 @@ mod tests {
             asr_model: None,
             llm_model: None,
             name: None,
+            asr_timeout_ms: None,
         });
         cfg.route.asr = "g".into();
         let e = engine(cfg);

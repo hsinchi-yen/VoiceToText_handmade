@@ -401,7 +401,9 @@ pub struct ProbeOptions {
 }
 
 impl ProbeOptions {
-    /// Test every purpose the kind supports, with the configured cloud timeouts.
+    /// Test every purpose the kind supports, with the configured cloud timeouts. To test one
+    /// service the way it runs, set `asr_timeout` to [`CloudService::asr_timeout`] (its own
+    /// `asr_timeout_ms`, else this global value).
     pub fn from_timeouts(t: &TimeoutConfig) -> Self {
         Self {
             asr: true,
@@ -655,6 +657,7 @@ mod tests {
             base_url: None,
             asr_model: None,
             llm_model: None,
+            asr_timeout_ms: None,
         }
     }
 

@@ -685,6 +685,7 @@ async fn e2e_real_asr_llm_polish_inject() {
         base_url: Some(asr_url),
         asr_model: Some(var("V2C_TEST_ASR_MODEL").unwrap_or_else(|| "whisper-1".into())),
         llm_model: None,
+        asr_timeout_ms: None,
     });
     let secrets = MemorySecretStore::new();
     if let Some(p) = var("V2C_TEST_ASR_KEY_FILE") {

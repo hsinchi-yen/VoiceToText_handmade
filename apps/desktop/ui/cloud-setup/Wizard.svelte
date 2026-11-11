@@ -9,8 +9,17 @@
   // backend only sees which model fields are filled in.
   // Custom endpoints may also get an optional display name (step 2); `services` is the
   // current list, used for the default-id placeholder and the duplicate-name check.
+  // Services with speech recognition may set their own ASR timeout (step 4, T1.15); blank
+  // uses the global `[timeouts] asr_cloud_ms` (`info.default_asr_timeout_ms`).
   import * as api from "./api.js";
-  import { guides, billingWarning, lanNote, roles, otherRole } from "./guides.js";
+  import {
+    guides,
+    billingWarning,
+    lanNote,
+    roles,
+    otherRole,
+    asrTimeoutSuggestions,
+  } from "./guides.js";
 
   let { kinds, services = [], editing = null, preset = null, onDone, onCancel } = $props();
 
@@ -37,6 +46,7 @@
           api_key: "",
           asr_model: start.asr_model ?? "",
           llm_model: start.llm_model ?? "",
+          asr_timeout_ms: start.asr_timeout_ms != null ? String(start.asr_timeout_ms) : "",
         }
       : {
           kind: startPreset?.kind ?? null,
@@ -45,6 +55,7 @@
           api_key: "",
           asr_model: "",
           llm_model: "",
+          asr_timeout_ms: "",
         },
   );
   let role = $state(start ? inferRole(start) : (startPreset?.role ?? "text"));
@@ -69,6 +80,12 @@
   const typedLast4 = $derived(api.last4(draft.api_key));
   // The id this service has (editing) or will get (new): shown when no name is given.
   const defaultId = $derived(editing ? editing.id : api.nextCustomId(services));
+  // Suggested timeout for the typed ASR model (shown as a hint only when the field is blank).
+  const timeoutHint = $derived.by(() => {
+    const model = draft.asr_model.trim().toLowerCase();
+    if (!model || draft.asr_timeout_ms.trim()) return null;
+    return asrTimeoutSuggestions.find((t) => model.includes(t.match)) ?? null;
+  });
 
   function choose(kind) {
     const k = kinds.find((x) => x.kind === kind);
@@ -112,13 +129,25 @@
       message = api.describe("key_missing");
       return;
     }
+    // A text-only compatible endpoint hides the field: drop what was typed there before.
+    if (step === 4 && isCompat && !wantAsr) draft.asr_timeout_ms = "";
+    if (step === 4) {
+      const problem = api.asrTimeoutProblem(draft.asr_timeout_ms);
+      if (problem) {
+        message = api.describe(problem);
+        return;
+      }
+    }
     if (step === 4 && isCompat) {
       if ((wantAsr && !draft.asr_model.trim()) || (wantText && !draft.llm_model.trim())) {
         message = api.describe("model_required");
         return;
       }
       // Only test (and save) what this endpoint serves.
-      if (!wantAsr) draft.asr_model = "";
+      if (!wantAsr) {
+        draft.asr_model = "";
+        draft.asr_timeout_ms = "";
+      }
       if (!wantText) draft.llm_model = "";
     }
     step += 1;
@@ -306,6 +335,32 @@
           placeholder={info.suggested_asr_model ?? "例如 breeze-asr-25 或 whisper-1"}
         />
       </label>
+      <label>
+        語音辨識逾時（毫秒，選填）
+        <input
+          bind:value={draft.asr_timeout_ms}
+          inputmode="numeric"
+          spellcheck="false"
+          placeholder={`預設 ${info.default_asr_timeout_ms}`}
+        />
+      </label>
+      <div class="picks">
+        {#each asrTimeoutSuggestions as t (t.label)}
+          <button type="button" onclick={() => (draft.asr_timeout_ms = String(t.ms))}>
+            {t.label} 建議 {t.ms}
+          </button>
+        {/each}
+        <button type="button" onclick={() => (draft.asr_timeout_ms = "")}>用預設</button>
+      </div>
+      {#if timeoutHint}
+        <p class="hint">
+          {timeoutHint.label} 建議逾時 {timeoutHint.ms} 毫秒，可按上面的按鈕填入。
+        </p>
+      {/if}
+      <p class="hint">
+        伺服器每句要花較久時（例如區網 Breeze-ASR-25 每句約 6 秒），請放寬這個服務的逾時，超過就會退回地端。留空使用預設值
+        {info.default_asr_timeout_ms} 毫秒（設定檔 [timeouts] asr_cloud_ms），範圍 {api.ASR_TIMEOUT_MIN_MS}～{api.ASR_TIMEOUT_MAX_MS}。
+      </p>
     {/if}
     {#if !isCompat || wantText}
       <label>
@@ -328,7 +383,10 @@
           : wantAsr
             ? "會送出一段 3 秒的內建測試音檔（不是你的聲音）。"
             : "會送出一句測試文字。"}
-        伺服器較慢時，測試可能因逾時失敗，可在設定檔 [timeouts] 放寬（見 docs\lan-server-guide.md）。
+        {#if wantAsr}
+          伺服器較慢時，語音辨識可能因逾時失敗，可回上一步放寬「語音辨識逾時」（目前
+          {draft.asr_timeout_ms.trim() || info.default_asr_timeout_ms} 毫秒）。
+        {/if}
       {:else}
         {info.supports_asr ? "會送出一段 3 秒的內建測試音檔與一句測試文字。" : "會送出一句測試文字。"}
       {/if}
@@ -483,6 +541,11 @@
     padding: 0.5rem;
     border-left: 3px solid #0969da;
     background: color-mix(in srgb, #0969da 10%, transparent);
+  }
+  .picks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
   }
   .roles {
     border: 1px solid color-mix(in srgb, currentColor 20%, transparent);

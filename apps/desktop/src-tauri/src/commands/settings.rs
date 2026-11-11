@@ -1013,6 +1013,7 @@ mod tests {
                 base_url: None,
                 asr_model: None,
                 llm_model: None,
+                asr_timeout_ms: None,
             });
         }
         c

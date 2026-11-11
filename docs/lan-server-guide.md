@@ -271,6 +271,7 @@ sudo -u v2c /opt/v2c/vllm/bin/vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
    - 端點網址：`http://192.168.1.50:8080/v1`（要包含 `/v1`）
    - 金鑰：留空（whisper-server 沒有金鑰檢查）
    - 語音辨識模型：填 `breeze`（whisper-server 不看這個名稱，但欄位不能空白）
+   - 語音辨識逾時：伺服器每句要超過 5 秒時按「Breeze-ASR-25 建議 8000」（見下方 6.2 節的說明）；CPU 版辨識（方案 A）可填 15000
    - 文字模型：留空
    - 測試連線 → 用途勾「語音辨識」→ 儲存
 3. **文字模型服務**：
@@ -298,6 +299,7 @@ id = "lan-asr"
 kind = "open_ai_compat"
 base_url = "http://192.168.1.50:8080/v1"
 asr_model = "breeze"
+asr_timeout_ms = 8000  # 只給這個服務：區網 Breeze-ASR-25 每句約 5.5～6.3 秒；不填就用 [timeouts] asr_cloud_ms
 
 [[cloud]]
 id = "lan-llm"
@@ -306,7 +308,7 @@ base_url = "http://192.168.1.50:11434/v1"
 llm_model = "qwen2.5:7b"
 
 [timeouts]
-asr_cloud_ms = 5000    # 伺服器較慢時調高；CPU 版辨識（方案 A）請調到 15000
+asr_cloud_ms = 5000    # 沒設 asr_timeout_ms 的雲端服務都用這個值；建議改在慢的那個服務設 asr_timeout_ms
 llm_cloud_ms = 3000    # 會先「思考」的模型或 CPU 版文字模型（方案 C）建議 6000
 
 [polish]
@@ -315,7 +317,16 @@ timeout_ms = 1000      # 潤飾的基本時間上限（依字數放寬，最多�
 
 注意：潤飾有自己的時間上限 `[polish] timeout_ms`，只調 `llm_cloud_ms` 不夠。中翻英只看 `llm_cloud_ms`。
 
-實例（2026-11-10 實測一台區網伺服器）：語音辨識每句固定約 5.6 秒、會思考的 27B 文字模型約 3～4 秒，預設上限下兩者都逾時；改成 `asr_cloud_ms = 8000`、`llm_cloud_ms = 6000`、`[polish] timeout_ms = 5000` 後即可使用（較慢，但不會退回本機）。
+**每個服務各自的語音辨識逾時**（`[[cloud]] asr_timeout_ms`）：有設就用它，沒設才用 `[timeouts] asr_cloud_ms`。範圍 1000～60000 毫秒。精靈第 4 步的「語音辨識逾時（毫秒，選填）」寫的就是這個欄位，並提供快選：
+
+| 模型 | 建議值 | 依據 |
+|------|--------|------|
+| Breeze-ASR-25 | 8000 | 2026-11-11 實測區網 `:8002`：每句 asr_ms 約 5.5～6.3 秒（連 2 秒短句也要 5.5 秒），6000 會偶爾逾時並退回本機 |
+| TEA-ASR | 8000 | 暫定，之後依日誌 `asr_ms` 實測調整 |
+
+只放寬慢的那個服務，其他雲端服務不受影響；精靈的「測試連線」也用同一個值。
+
+實例（2026-11-10 實測一台區網伺服器）：語音辨識每句固定約 5.6 秒、會思考的 27B 文字模型約 3～4 秒，預設上限下兩者都逾時；改成語音辨識服務的 `asr_timeout_ms = 8000`（當時是全域 `asr_cloud_ms = 8000`）、`llm_cloud_ms = 6000`、`[polish] timeout_ms = 5000` 後即可使用（較慢，但不會退回本機）。
 
 需要金鑰的服務（例如 vLLM）請用精靈貼金鑰：金鑰只存在 Windows 認證管理員，不會寫進這個檔案。
 
@@ -384,7 +395,7 @@ curl.exe http://192.168.1.50:11434/v1/chat/completions -H "Content-Type: applica
 |------|------------|
 | 精靈顯示「網路不通」 | 伺服器沒開、IP 錯、防火牆擋住。在 Windows 用 `Test-NetConnection 192.168.1.50 -Port 8080` 檢查；在伺服器用 `ss -ltnp` 確認服務聽在 `0.0.0.0` 而不是 `127.0.0.1` |
 | 「這個端點不支援語音辨識」 | whisper-server 少了 `--inference-path /v1/audio/transcriptions`，或網址少了 `/v1` |
-| 「逾時：服務回應太慢」 | CPU 方案常見。調高 `[timeouts] asr_cloud_ms`／`llm_cloud_ms`，或改用 GPU 方案、較小的模型 |
+| 「逾時：服務回應太慢」 | CPU 方案常見。語音辨識：在精靈修改該服務的「語音辨識逾時」（`asr_timeout_ms`）；文字模型：調高 `[timeouts] llm_cloud_ms`；或改用 GPU 方案、較小的模型 |
 | 每句都顯示「潤飾逾時，已改用基本整理」 | 文字模型太慢：換小一號的模型、確認 `ollama ps` 是 GPU、設 `OLLAMA_KEEP_ALIVE` 讓模型保持載入，或改用不會思考的模型 |
 | 辨識出簡體字 | v2c 會在本機把辨識結果轉成台灣繁體，畫面上不應出現簡體；若仍出現，請回報 |
 | 英文被翻成中文 | 確認 whisper-server 的啟動參數沒有 `--translate`（`-tr`）；語言用 `-l zh` 即可，英文字會照原樣保留 |
