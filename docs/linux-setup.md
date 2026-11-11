@@ -319,10 +319,82 @@ ibus restart                                      # 讓 ibus-daemon 讀到新的
 
 ### 7.2 加入 v2c 輸入來源（GNOME）
 
-1. 「設定」→「鍵盤」→「輸入來源」→「＋」→ 選中文（台灣）語言（元件的語言是 `zh_TW`；GNOME 顯示的名稱依介面語言而定，也可以在搜尋框輸入「v2c」）→「**v2c 語音輸入**」→「新增」。這一步還沒在實機上做過。
+1. 「設定」→「鍵盤」→「輸入來源」→「＋」→ 選中文（台灣）語言（元件的語言是 `zh_TW`；GNOME 顯示的名稱依介面語言而定，也可以在搜尋框輸入「v2c」）→「**v2c 語音輸入**」→「新增」。
    清單裡沒有 v2c：執行 `ibus restart` 或重新登入後再試；`ibus list-engine | grep v2c` 應該看得到。
+   「設定」裡加不進去（找不到、按鈕沒反應、遠端連線沒有「設定」視窗）：改用下方 7.2.1 的指令。
 2. 要說話時，用 Super+空白鍵切到 v2c 輸入來源，在輸入框裡按住右 Ctrl 說話（見第 6.2 節）。切到 v2c 時 v2c 還沒執行，ibus-daemon 會自動啟動它（`/usr/bin/v2c --ibus`，不開主視窗）。
 3. 主視窗從應用程式選單的「v2c」打開。
+
+#### 7.2.1 用指令加入輸入來源
+
+GNOME 的輸入來源清單存在 `org.gnome.desktop.input-sources sources`，「設定」視窗改的也是它，所以用 `gsettings` 改的效果一樣。以下指令都在**你自己登入桌面的帳號**下、一般權限執行（不要加 sudo）；從 SSH 連進來時，要在已登入桌面的同一個帳號下執行。
+
+1. 確認 ibus-daemon 認得 v2c 引擎（裝完 .deb 後要先 `ibus restart` 或重新登入）：
+
+   ```sh
+   ibus list-engine | grep v2c          # 應該看到：  v2c - v2c 語音輸入
+   ```
+
+   沒有輸出：確認 `/usr/share/ibus/component/v2c.xml` 存在，再執行 `ibus restart`。
+
+2. 先看目前的清單，記下來（要還原時用得到）：
+
+   ```sh
+   gsettings get org.gnome.desktop.input-sources sources
+   # 例如：[('xkb', 'us')]
+   ```
+
+3. 把 v2c 加到清單最後，原本的輸入來源都保留（已經有 v2c 就不會重複加）：
+
+   ```sh
+   python3 - <<'EOF'
+   import ast, subprocess
+   key = ["org.gnome.desktop.input-sources", "sources"]
+   cur = subprocess.run(["gsettings", "get", *key], capture_output=True, text=True, check=True).stdout.strip()
+   if cur.startswith("@"):            # 清單是空的時，gsettings 會印出 "@a(ss) []"
+       cur = cur.split(" ", 1)[1]
+   src = ast.literal_eval(cur)
+   if ("ibus", "v2c") not in src:
+       src.append(("ibus", "v2c"))
+   subprocess.run(["gsettings", "set", *key, str(src)], check=True)
+   print("輸入來源：", src)
+   EOF
+   ```
+
+   清單原本只有英文鍵盤時，也可以直接整個設定（**會覆蓋**原本的清單，有注音等其他輸入法時不要用這行）：
+
+   ```sh
+   gsettings set org.gnome.desktop.input-sources sources "[('xkb', 'us'), ('ibus', 'v2c')]"
+   ```
+
+4. 確認：
+
+   ```sh
+   gsettings get org.gnome.desktop.input-sources sources    # 應該包含 ('ibus', 'v2c')
+   ```
+
+   畫面右上角會出現輸入來源選單。按 Super+空白鍵切到「v2c 語音輸入」（選單上顯示「語」），切到後執行 `ibus engine` 應該印出 `v2c`。
+
+不需要登出；設定一改，GNOME 就會更新輸入來源選單。
+
+**移除 v2c 輸入來源**（解除安裝前，或想還原時）：
+
+```sh
+python3 - <<'EOF'
+import ast, subprocess
+key = ["org.gnome.desktop.input-sources", "sources"]
+cur = subprocess.run(["gsettings", "get", *key], capture_output=True, text=True, check=True).stdout.strip()
+if cur.startswith("@"):
+    cur = cur.split(" ", 1)[1]
+src = [s for s in ast.literal_eval(cur) if s != ("ibus", "v2c")]
+subprocess.run(["gsettings", "set", *key, str(src)], check=True)
+print("輸入來源：", src)
+EOF
+```
+
+或用第 2 步記下的原始清單：`gsettings set org.gnome.desktop.input-sources sources "<原本的清單>"`。
+
+不是 GNOME 的桌面（Xfce、KDE 等用 IBus 的環境）：GNOME 的 `gsettings` 設定對它們無效。改用 `ibus-setup` 的「輸入法」分頁加入 v2c，或執行 `ibus engine v2c` 直接切到 v2c（只對這次登入有效）。這個做法沒有實測過。
 
 ### 7.3 設定兩個遠端服務
 
