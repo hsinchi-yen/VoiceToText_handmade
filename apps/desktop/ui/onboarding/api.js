@@ -56,6 +56,29 @@ export function setResumeStep(step) {
   }
 }
 
+/**
+ * Set when the user leaves onboarding without a local model ("稍後再設定", "略過，改用雲端
+ * 服務", or the menu). Then the app stops reopening onboarding at startup.
+ */
+export const SKIPPED_KEY = "v2c.onboarding.skipped";
+
+export function skipped() {
+  try {
+    return localStorage.getItem(SKIPPED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setSkipped(on) {
+  try {
+    if (on) localStorage.setItem(SKIPPED_KEY, "1");
+    else localStorage.removeItem(SKIPPED_KEY);
+  } catch {
+    // Storage unavailable: onboarding opens again at the next start.
+  }
+}
+
 export function mb(bytes) {
   return bytes == null ? "?" : `${Math.round(bytes / 1048576)} MB`;
 }

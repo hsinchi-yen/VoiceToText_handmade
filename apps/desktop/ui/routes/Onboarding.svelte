@@ -1,6 +1,7 @@
 <script>
   // 初次設定 (T1.11, plan §5.1 / §6.1): shown automatically when no local speech model is
-  // installed. Local first: no cloud options anywhere in this flow.
+  // installed. Local first: the flow itself only mentions cloud in the opt-in "略過，改用雲端
+  // 服務" on the model step (the app menu, shown here too, always lists 雲端服務).
   import * as api from "../onboarding/api.js";
   import ModelStep from "../onboarding/ModelStep.svelte";
   import TryIt from "../onboarding/TryIt.svelte";
@@ -36,6 +37,16 @@
     refresh();
   });
 
+  // Leaving through the menu without a model counts as skipping. (With a model, keep the
+  // resume step: the restart that loads new models must come back here.)
+  $effect(() => () => {
+    // `st` is null until the status is known: then we cannot tell whether a model exists.
+    if (st && !haveModel && step !== "done") {
+      api.setResumeStep(null);
+      api.setSkipped(true);
+    }
+  });
+
   const index = $derived(steps.indexOf(step));
   const go = (s) => {
     step = s;
@@ -58,7 +69,16 @@
 
   function finish() {
     api.setResumeStep(null);
+    api.setSkipped(false);
     location.hash = "#/";
+  }
+
+  // Leave onboarding without (necessarily) a local model. Without one, the cloud page is
+  // unlocked and onboarding no longer opens by itself at startup.
+  function skip(to) {
+    api.setResumeStep(null);
+    if (!haveModel) api.setSkipped(true);
+    location.hash = to;
   }
 </script>
 
@@ -72,7 +92,15 @@
 {#if error}<p class="bad">{error}</p>{/if}
 
 {#if step !== "done"}
-  <p class="skip"><a href="#/" onclick={() => api.setResumeStep(null)}>稍後再設定</a></p>
+  <p class="skip">
+    <a
+      href="#/"
+      onclick={(e) => {
+        e.preventDefault();
+        skip("#/");
+      }}>稍後再設定</a
+    >
+  </p>
 {/if}
 
 {#if step === "welcome"}
@@ -116,7 +144,15 @@
       {installedNow ? "載入模型並繼續（v2c 會重新啟動）" : "下一步"}
     </button>
   </p>
-  {#if !haveModel}<p class="hint">至少需要一個語音模型才能繼續。下載失敗也不影響 v2c 其他功能，可以稍後再回來。</p>{/if}
+  {#if !haveModel}
+    <p class="hint">
+      至少需要一個語音模型才能繼續。下載失敗也不影響 v2c 其他功能，可以稍後再回來（「設定 → 地端語音模型」或「狀態」頁都有入口）。
+    </p>
+    <div class="alt">
+      <p>不想下載，或下載一直失敗？也可以改用雲端語音辨識（需要你自己的金鑰，例如 OpenAI、Gemini，或區網的相容端點）。</p>
+      <button onclick={() => skip("#/cloud-setup")}>略過，改用雲端服務</button>
+    </div>
+  {/if}
 {:else if step === "mic"}
   <p>按「測試麥克風」後說幾句話，音量條會跟著動。</p>
   <MicMeter onHeard={() => (heard = true)} />
@@ -177,6 +213,15 @@
   }
   .bad {
     color: #cf222e;
+  }
+  .alt {
+    margin-top: 1rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px dashed color-mix(in srgb, currentColor 25%, transparent);
+    border-radius: 6px;
+  }
+  .alt p {
+    margin: 0 0 0.5rem;
   }
   .link {
     background: none;

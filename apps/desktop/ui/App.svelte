@@ -7,7 +7,7 @@
   import CloudSetup from "./routes/CloudSetup.svelte";
   import Overlay from "./routes/Overlay.svelte";
   import Onboarding from "./routes/Onboarding.svelte";
-  import { resumeStep } from "./onboarding/api.js";
+  import { resumeStep, skipped as onboardingSkipped } from "./onboarding/api.js";
 
   // Hash routes: #/settings, #/vocab, ... The overlay window (T1.3) loads #/overlay.
   const routes = {
@@ -22,9 +22,6 @@
 
   const current = () => location.hash.replace(/^#\/?/, "");
   let route = $state(current());
-  // Until a local speech model is installed, cloud options are not shown (plan §6.1).
-  let needsModels = $state(false);
-
   $effect(() => {
     const onHash = () => (route = current());
     window.addEventListener("hashchange", onHash);
@@ -32,27 +29,27 @@
   });
 
   // First run: open onboarding when no local model exists (or to resume it after the
-  // restart that loads newly installed models).
+  // restart that loads newly installed models). Not after the user skipped it.
   $effect(() => {
     if (current() === "overlay") return;
     invoke("onboarding_status")
       .then((s) => {
-        needsModels = s.needed;
-        if ((s.needed || resumeStep()) && current() === "") location.hash = "#/onboarding";
+        const open = (s.needed && !onboardingSkipped()) || resumeStep();
+        if (open && current() === "") location.hash = "#/onboarding";
       })
       .catch(() => {});
   });
 
   const Page = $derived((routes[route] ?? routes[""]).page);
-  const hidden = (path) => path === "overlay" || (needsModels && path === "cloud-setup");
+  // Every page except the overlay is always in the menu, onboarding included (2026-11-11
+  // decision: the cloud page is reachable from the first run on).
+  const menu = Object.entries(routes).filter(([path]) => path !== "overlay");
 </script>
 
-{#if route !== "overlay" && route !== "onboarding"}
+{#if route !== "overlay"}
   <nav>
-    {#each Object.entries(routes) as [path, r] (path)}
-      {#if !hidden(path)}
-        <a href={"#/" + path} class:active={route === path}>{r.label}</a>
-      {/if}
+    {#each menu as [path, r] (path)}
+      <a href={"#/" + path} class:active={route === path}>{r.label}</a>
     {/each}
   </nav>
 {/if}

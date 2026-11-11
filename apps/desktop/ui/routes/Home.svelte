@@ -62,7 +62,7 @@
 <h1>v2c 語音輸入</h1>
 <p class="status">{describe(status)}</p>
 {#if status?.kind === "error" && (status.code === "model_missing" || status.code === "sensevoice_not_available")}
-  <p><a href="#/onboarding">前往初次設定</a></p>
+  <p><a href="#/onboarding">前往初次設定</a>　或　<a href="#/cloud-setup">改用雲端服務</a></p>
 {/if}
 <div class="meter"><div style:width={`${level * 100}%`}></div></div>
 
