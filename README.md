@@ -22,7 +22,11 @@
 
 ## 安裝
 
-1. 下載 `v2c_0.1.0_x64-setup.exe`。
+1. 取得安裝檔 `v2c_<版本>_x64-setup.exe`。安裝檔約 460 MB，**不放在 GitHub 上**，請在自己的 Windows 電腦用一鍵腳本產生（見下方「[從原始碼建置](#從原始碼建置)」）：
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File tools\build-windows.ps1
+   ```
+   完成後安裝檔在 repo 的 `releases\` 資料夾。
 2. 執行安裝檔。因為第一版**沒有數位簽章**，Windows 會跳出藍色的「**Windows 已保護您的電腦**」（SmartScreen）：
    按「**其他資訊**」→「**仍要執行**」。
 3. 安裝只裝在你自己的帳號底下（`%LOCALAPPDATA%\v2c`），**不需要系統管理員權限**，也會在「開始」功能表建立捷徑。
@@ -128,16 +132,27 @@ v2c 就會自動使用。建議設定與顯示卡記憶體的分配請看 [docs/
 
 ## 從原始碼建置
 
-完整步驟見 [docs/build-guide.md](docs/build-guide.md)（一鍵腳本 `tools\build-installer.ps1`）；模型、安裝檔等不進 git 的大檔怎麼取得，見 [docs/download-guide.md](docs/download-guide.md)。
+完整步驟見 [docs/build-guide.md](docs/build-guide.md)；模型、安裝檔等不進 git 的大檔怎麼取得，見 [docs/download-guide.md](docs/download-guide.md)。
 
-需要：Visual Studio 2022 Build Tools（C++ 工作負載）、Rust（MSVC 工具鏈）、LLVM（libclang）、Node.js LTS；
-要用顯示卡還需要 NVIDIA CUDA Toolkit。`tools/setup-dev.ps1` 會安裝這些（請先讀過腳本，再自己以系統管理員身分執行）：
+**產生安裝檔（三步）：**
 
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\setup-dev.ps1
-```
+1. 安裝工具（只需一次）：Visual Studio 2022（Build Tools／Community 皆可，要有 C++ 工作負載）、Rust（MSVC 工具鏈）、LLVM（libclang）、Node.js LTS；
+   要用顯示卡還需要 NVIDIA CUDA Toolkit 12 以上。`tools/setup-dev.ps1` 會安裝這些（請先讀過腳本，再自己以**系統管理員**身分執行）：
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File tools\setup-dev.ps1      # 沒有 NVIDIA 顯示卡就加 -SkipCuda
+   ```
+2. **開一個新的**一般 PowerShell 視窗，在 repo 根目錄檢查環境：
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File tools\build-windows.ps1 -CheckOnly
+   ```
+3. 建置（第一次約 30～60 分鐘，請放在前景執行）：
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File tools\build-windows.ps1
+   ```
+   腳本會自動判斷：有 NVIDIA 顯示卡又裝了 CUDA → GPU 版（Breeze、TEA-ASR、SenseVoice）；否則 → CPU 版（SenseVoice）。
+   顯示卡架構與同時編譯數也會自動偵測。完成後安裝檔在 `releases\v2c_<版本>_x64-setup.exe`。
 
-環境變數（每個新的終端機視窗）：
+手動開發時的環境變數（每個新的終端機視窗）：
 
 ```powershell
 $env:Path = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;" + $env:Path

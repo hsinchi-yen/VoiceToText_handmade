@@ -11,13 +11,14 @@ param(
     [int]$Jobs = 1,
     [string]$CudaPath = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.5',
     [string]$CudaArch = '75',
-    [string]$TargetDir = (Join-Path $env:USERPROFILE '.v2ct')
+    [string]$TargetDir = (Join-Path $env:USERPROFILE '.v2ct'),
+    # CMake bundled with Visual Studio (any edition). tools\build-windows.ps1 detects it.
+    [string]$CMakeBin = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 
-$vsCmake = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
-$front = @($vsCmake, (Join-Path $env:USERPROFILE '.cargo\bin'), 'C:\Program Files\nodejs')
+$front = @($CMakeBin,(Join-Path $env:USERPROFILE '.cargo\bin'), 'C:\Program Files\nodejs')
 if (-not $CpuOnly) {
     # Older CUDA versions on PATH make CMake pick the wrong nvcc and headers.
     $front = @("$CudaPath\bin\x64", "$CudaPath\bin") + $front
@@ -26,7 +27,9 @@ $rest = ($env:Path -split ';') | Where-Object {
     $_ -and ($CpuOnly -or $_ -notmatch 'CUDA\\v\d' -or $_.StartsWith($CudaPath, 'OrdinalIgnoreCase'))
 }
 $env:Path = ($front + $rest) -join ';'
-$env:LIBCLANG_PATH = 'C:\Program Files\LLVM\bin'
+if (-not ($env:LIBCLANG_PATH -and (Test-Path (Join-Path $env:LIBCLANG_PATH 'libclang.dll')))) {
+    $env:LIBCLANG_PATH = 'C:\Program Files\LLVM\bin'
+}
 $env:CARGO_TARGET_DIR = $TargetDir
 $env:CARGO_BUILD_JOBS = "$Jobs"
 $env:CMAKE_BUILD_PARALLEL_LEVEL = "$Jobs"

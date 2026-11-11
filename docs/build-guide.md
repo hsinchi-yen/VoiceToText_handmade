@@ -8,8 +8,10 @@
    ```powershell
    powershell -ExecutionPolicy Bypass -File tools\setup-dev.ps1
    ```
-2. 確認 CUDA 的環境變數只指向你要用的版本（GPU 版才需要）。
-   - `CUDA_PATH` 要是 `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.5`。
+2. CUDA（GPU 版才需要）：`tools\build-windows.ps1` 會自動選用已安裝、且支援你顯示卡的最新 CUDA 12 以上版本，並自行設定 `CUDA_PATH`，不用手動設。要注意：
+   - **GTX 10 系列以前的顯示卡**（架構低於 75）不支援 CUDA 13，請安裝 CUDA 12.x（12.4 以上）；**RTX 50 系列**需要 CUDA 12.8 以上。版本不合時腳本會改建 CPU 版並說明原因。
+   - 只支援 Visual Studio **2022**；只裝了 VS 2026 的話，請另外安裝 VS 2022 Build Tools。
+   - 手動建置（第 5 節）時，`CUDA_PATH` 要指向你要用的版本，例如 `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.5`。
    - 系統 `Path` 裡如果還有舊版（例如 `CUDA\v11.0\bin`），CMake 可能抓到舊的 nvcc，出現「unsupported Microsoft Visual Studio version」。請在系統管理員 PowerShell 移除舊版路徑：
      ```powershell
      $p = [Environment]::GetEnvironmentVariable('Path','Machine') -split ';' | Where-Object { $_ -notmatch 'CUDA\\v11\.0' }
@@ -20,7 +22,29 @@
 
 ## 2. 一鍵建置安裝檔（建議）
 
-在 repo 根目錄：
+安裝檔約 460 MB，超過 GitHub 的檔案大小上限，**不放在 GitHub 上**；請用下面的腳本在自己的電腦產生。
+
+### 2.1 自動偵測環境（一般使用者用這個）
+
+在一般（非系統管理員）PowerShell、repo 根目錄：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\build-windows.ps1 -CheckOnly   # 只檢查工具，不建置
+powershell -ExecutionPolicy Bypass -File tools\build-windows.ps1              # 檢查後建置（會先問 y/N）
+powershell -ExecutionPolicy Bypass -File tools\build-windows.ps1 -CpuOnly     # 有顯示卡也只建 CPU 版
+```
+
+`tools\build-windows.ps1` 會：
+1. 找出 Visual Studio 2022（Build Tools／Community／Professional 皆可，要有 C++ 工作負載）與它內建的 CMake、Rust、LLVM（libclang）、Node.js。缺少的會列出來並停止，請用第 1 節的 `tools\setup-dev.ps1` 安裝後，**開新的 PowerShell 視窗**再執行一次。腳本本身不會安裝任何軟體。
+2. 決定建置版本：有 NVIDIA 顯示卡（`nvidia-smi`）且裝了 CUDA Toolkit 12 以上（取支援這張顯示卡的最新版）→ GPU 版；否則 → CPU 版（只有 SenseVoice），並說明原因。
+3. 從 `nvidia-smi` 讀出顯示卡架構（例如 RTX 30＝86；有多張顯示卡時全部都建，例如 `75;86`），並檢查 CUDA 版本是否支援；從記憶體大小決定同時編譯數（24 GB 以下 1、48 GB 以下 2、以上 4）。
+4. 用這些值呼叫 `tools\build-installer.ps1`（2.2 節），完成後印出安裝檔路徑。
+
+可用參數：`-CudaArch 86`、`-Jobs 2` 覆寫自動偵測的值；`-Yes` 不詢問直接建置。
+
+### 2.2 直接指定參數
+
+`tools\build-windows.ps1` 底層呼叫的就是這支；環境與預設值不同時可以直接用：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1           # GPU（CUDA）版
@@ -40,10 +64,11 @@ powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1 -CpuOnly  # �
 
 | 參數 | 預設 | 說明 |
 |------|------|------|
-| `-Jobs` | `1` | 同時編譯的工作數。記憶體 16 GB 又開著瀏覽器時用 1；記憶體充裕可設 4 |
+| `-Jobs` | `1`（`build-windows.ps1` 會依記憶體自動決定） | 同時編譯的工作數。記憶體 16 GB 又開著瀏覽器時用 1；記憶體充裕可設 4 |
 | `-CudaPath` | `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.5` | CUDA Toolkit 位置 |
 | `-CudaArch` | `75` | 顯示卡架構：RTX 20 系列＝75、RTX 30＝86、RTX 40＝89 |
 | `-TargetDir` | `%USERPROFILE%\.v2ct` | Cargo 的建置輸出資料夾（`CARGO_TARGET_DIR`） |
+| `-CMakeBin` | VS 2022 Build Tools 內建 CMake 的 `bin` | 裝的是 Community／Professional 時改成該版本的路徑（`build-windows.ps1` 會自動找） |
 
 時間：第一次完整建置約 30～60 分鐘（whisper.cpp 的 CUDA 核心最久）；之後只改 Rust 程式約 4～5 分鐘。
 

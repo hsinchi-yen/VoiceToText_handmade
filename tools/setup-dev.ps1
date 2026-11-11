@@ -37,7 +37,8 @@ function Install-Winget($id, $extraArgs = @()) {
 function Test-VcTools {
     $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path $vswhere)) { return $false }
-    $path = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    # VS 2022 only (17.x): tools\build-windows.ps1 and the build use its bundled CMake.
+    $path = & $vswhere -latest -products * -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
     return [bool]$path
 }
 
@@ -102,4 +103,5 @@ foreach ($c in 'rustc', 'cargo', 'clang', 'nvcc', 'node') {
     else { Write-Host ("  {0,-6} not on PATH yet" -f $c) }
 }
 Write-Host "  LIBCLANG_PATH = $env:LIBCLANG_PATH"
-Write-Host "`nNext: open a new terminal in the repo and run:  cargo test --workspace"
+Write-Host "`nNext: open a NEW (non-admin) PowerShell in the repo and build the installer:"
+Write-Host "  powershell -ExecutionPolicy Bypass -File tools\build-windows.ps1"
