@@ -168,9 +168,9 @@ Breeze 模型的轉檔方式見 [tools/convert-breeze/README.md](tools/convert-b
 Linux 版（Ubuntu 22.04／GNOME，透過 IBus 輸入）還沒有在實機上按住說話驗證過。這一版只有 CPU 版：語音辨識用區網的遠端服務或 SenseVoice，不支援 Breeze／CUDA。
 
 - 安裝：`sudo apt install ./v2c_0.1.6_amd64.deb`，再登出並重新登入（或執行 `ibus restart`，會讓所有 App 的輸入法短暫中斷），然後在「設定 → 鍵盤 → 輸入來源」加入「v2c 語音輸入」（「設定」裡加不進去時，用 [docs/linux-setup.md](docs/linux-setup.md) 第 7.2.1 節的 `gsettings` 指令）。.deb 會一併安裝 IBus 輸入法元件。
-- 也有免安裝的 `v2c_0.1.6_amd64.AppImage`，但它不含 IBus 元件，建議用 .deb。
+- 也會產生免安裝的 `v2c_0.1.6_amd64.AppImage`，但它不含 IBus 元件，建議用 .deb。
 - 設定檔在 `~/.config/v2c/config.toml`，模型在 `~/.local/share/v2c/models/`。
-- 從原始碼建置：`bash tools/build-linux.sh --check` 會列出缺少的套件；`bash tools/build-linux.sh` 會產生 .deb 與 AppImage，放在 `releases/`，雜湊寫在 `releases/SHA256SUMS.txt`。
+- 安裝檔不放進 git，請自己建置：`bash releases/linux/build.sh --check` 會列出缺少的套件；`bash releases/linux/build.sh` 會產生 .deb 與 AppImage，放在 `releases/linux/`，雜湊寫在 `releases/linux/SHA256SUMS.txt`（見 [releases/linux/README.md](releases/linux/README.md)）。
 
 完整步驟（加入輸入來源、設定語音辨識與文字模型兩個遠端服務）見 [docs/linux-setup.md](docs/linux-setup.md) 第 7 節。
 

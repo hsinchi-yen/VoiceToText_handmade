@@ -1,7 +1,13 @@
 # Build output
 target/
-# Built installers and their checksums (tools/build-installer.ps1) — never commit
-releases/
+# Built installers and their checksums (tools/build-installer.ps1) — never commit.
+# Exception: releases/linux/build.sh and README.md are tracked; the Linux .deb / AppImage /
+# SHA256SUMS.txt that build.sh writes next to them are not.
+releases/*
+!releases/linux/
+releases/linux/*
+!releases/linux/build.sh
+!releases/linux/README.md
 node_modules/
 dist/
 apps/android/.gradle/

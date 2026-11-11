@@ -296,7 +296,7 @@ Wayland 下不顯示浮動標籤，改用桌面通知（同一則通知依序更
 
 ## 7. 安裝（T3.7）
 
-`bash tools/build-linux.sh` 產生兩種安裝包，放在 repo 的 `releases/`（不進 git），雜湊寫在 `releases/SHA256SUMS.txt`：
+安裝包放在 repo 的 `releases/linux/`，雜湊寫在 `releases/linux/SHA256SUMS.txt`。安裝檔不放進 git，clone 或 pull 原始碼後用 `bash releases/linux/build.sh` 自己建置（`--check` 只列出缺少的套件；不會自動安裝）。資料夾只保留最新版，舊版會被刪掉：
 
 | 檔案 | 內容 | 適合 |
 |------|------|------|
@@ -308,7 +308,7 @@ Wayland 下不顯示浮動標籤，改用桌面通知（同一則通知依序更
 ### 7.1 安裝 .deb
 
 ```sh
-sha256sum -c --ignore-missing SHA256SUMS.txt     # 在 releases/ 資料夾裡執行，確認檔案沒有損壞
+sha256sum -c --ignore-missing SHA256SUMS.txt     # 在 releases/linux/ 資料夾裡執行，確認檔案沒有損壞
 sudo apt install ./v2c_0.1.6_amd64.deb            # 會一併安裝相依套件（ibus、libwebkit2gtk-4.1-0、libayatana-appindicator3-1…）
 ibus restart                                      # 讓 ibus-daemon 讀到新的 v2c 元件（或登出再登入）
 ```

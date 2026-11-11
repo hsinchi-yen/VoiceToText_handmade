@@ -55,7 +55,7 @@ Commands for things that don't exist yet are the intended ones; the task that cr
 4. **Stay inside the card's scope.** Edit only the paths the card lists under "允許修改". To change a `v2c-core` public interface, stop and request approval (see Workflow).
 5. **Do not install system software** (CUDA, drivers, winget packages). Write the script or instructions; the human runs them.
    Keep every test artifact (downloaded test models, generated WAVs, bench output, scratch dirs) under `tests/` in this repo — use `tests/tmp/` (git-ignored) for throwaway files. Never create test folders in the user's home directory. The only build directory outside the repo is `C:\Users\lance.tn\.v2ct` (`CARGO_TARGET_DIR`, build caches only); share it instead of creating per-task target dirs.
-   Every deliverable you build (installers, release binaries handed to the user) goes to `releases/` in this repo (git-ignored), with its SHA-256 in `releases/SHA256SUMS.txt`. `tools/build-installer.ps1` does this; never leave a deliverable only in the target dir.
+   Every deliverable you build (installers, release binaries handed to the user) goes to `releases/` in this repo (git-ignored), with its SHA-256 in `releases/SHA256SUMS.txt`. `tools/build-installer.ps1` does this; never leave a deliverable only in the target dir. Exception: `tools/build-linux.sh` writes the Linux .deb and AppImage to `releases/linux/` (with its own `SHA256SUMS.txt`); it keeps only the newest version, and the installers are git-ignored. Only `releases/linux/build.sh` (the user-facing build script) and its README are tracked.
 6. Verify any crate or external API marked 【實作前確認】 against its current docs before using it, and note the result in your report.
 
 ## Workflow

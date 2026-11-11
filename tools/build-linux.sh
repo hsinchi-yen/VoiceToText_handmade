@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Builds the Linux desktop bundles (.deb and AppImage), copies them to <repo>/releases/, and
-# records their SHA-256 in releases/SHA256SUMS.txt (same "<hash>  <name>" format as
-# tools/build-installer.ps1). See tasks/plan.md section 9 and docs/linux-setup.md.
+# Builds the Linux desktop bundles (.deb and AppImage), copies them to <repo>/releases/linux/,
+# and records their SHA-256 in releases/linux/SHA256SUMS.txt (same "<hash>  <name>" format as
+# tools/build-installer.ps1). releases/linux/ holds only the newest version: older
+# v2c_*.deb / v2c_*.AppImage there are deleted. The installers are git-ignored; users build
+# them with releases/linux/build.sh (a wrapper around this script). See tasks/plan.md section 9 and docs/linux-setup.md.
 #
 #   bash tools/build-linux.sh --check   # list missing build dependencies, exit 1 if any
 #   bash tools/build-linux.sh           # check, then build (CPU build: no CUDA on Linux)
@@ -208,23 +210,28 @@ if ((${#built[@]} == 0)); then
     exit 1
 fi
 
-# Deliverables go to <repo>/releases (git-ignored); the target dir keeps only build caches.
-releases="$repo/releases"
+# Deliverables go to <repo>/releases/linux (newest version only; git-ignored); the target
+# dir keeps only build caches. Windows deliverables stay in releases/ (git-ignored).
+releases="$repo/releases/linux"
 sums="$releases/SHA256SUMS.txt"
 mkdir -p "$releases"
-touch "$sums"
+shopt -s nullglob
+for old in "$releases"/v2c_*.deb "$releases"/v2c_*.AppImage; do
+    case "$(basename "$old")" in
+        v2c_"${version}"_*) ;;
+        *) echo "removing older bundle $(basename "$old")"; rm -f "$old" ;;
+    esac
+done
+shopt -u nullglob
+tmp="$(mktemp "$releases/.SHA256SUMS.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
 for f in "${built[@]}"; do
     name="$(basename "$f")"
     cp -f "$f" "$releases/$name"
     hash="$(sha256sum "$releases/$name" | cut -d' ' -f1)"
-    # Replace an older line for the same file name, keep everything else.
-    tmp="$(mktemp "$releases/.SHA256SUMS.XXXXXX")"
-    trap 'rm -f "$tmp"' EXIT
-    # (A trailing CR from a file last written on Windows is ignored when matching.)
-    awk -v n="  $name" '{ l = $0; sub(/\r$/, "", l) } substr(l, length(l) - length(n) + 1) != n' \
-        "$sums" >"$tmp"
     printf '%s  %s\n' "$hash" "$name" >>"$tmp"
-    mv -f "$tmp" "$sums"
     printf '%s  %s MiB\nsha256 %s\n' "$releases/$name" \
         "$(awk -v b="$(stat -c %s "$releases/$name")" 'BEGIN { printf "%.1f", b / 1048576 }')" "$hash"
 done
+# Only the bundles just built are listed.
+mv -f "$tmp" "$sums"
