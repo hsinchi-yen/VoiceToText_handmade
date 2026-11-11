@@ -147,6 +147,19 @@ impl Pipeline {
 - `sherpa-rs` 或 sherpa-onnx 官方 C API 綁定 **【實作前確認】**；輸出簡體，靠 `zh_tw` 轉換。
 - 選擇邏輯：設定 `asr = "auto"` 時，偵測到 CUDA 且 Breeze 模型存在 → Breeze，否則 SenseVoice。
 
+**TEA-ASR-1.1（GPU，手動選用；T1.12）**
+- 模型：`JacobLinCool/TEA-ASR-1.1`（MIT，以 Qwen3-ASR-1.7B 微調，台灣華語＋中英夾雜，輸出繁體台灣用語）。用社群轉好的 GGUF：`dorajim15/TEA-ASR-1.1-transcribe-cpp` 的 `TEA-ASR-1.1-Q8_0.gguf`（2.18 GB）。
+- 推論：`transcribe-cpp` crate（transcribe.cpp 的 Rust 綁定），feature `cuda`＋`shared`（DLL，避免與 whisper-rs 的 ggml 符號衝突）。**【實作前確認】** Windows＋CUDA 建置。
+- 輸入 16 kHz 單聲道、每段 ≤30 秒；語言固定 `zh`；輸出移除 U+E000–U+F8FF；不做簡轉繁；幾乎沒有標點，由潤飾補上。
+- 選擇邏輯：只有 `asr = "tea_asr"` 才用；GPU 不允許、無 CUDA、模型不存在時改用 SenseVoice。`auto` 不變。VRAM 管理規則與 Breeze 相同（5.1）。
+- 作者自測 MER（%，CommonVoice zh-TW／ASCEND 中英夾雜）：TEA-ASR-1.1 3.58／9.60，Breeze-ASR-25 8.03／17.53。尚未在本機實測。
+
+**同一時間只載入一個辨識模型**（2026-11-11 你決定；T1.12 一併實作）
+- 引擎只有一個「目前模型」槽位：Breeze、TEA-ASR、SenseVoice 三者同時最多一個在記憶體。
+- 切換（設定變更、自動判斷、讓路、恢復）一律先卸載舊模型、確認釋放後再載入新模型；切換期間按熱鍵的那段錄音等新模型載入完再辨識（浮動標籤顯示「切換模型中」），不得用舊模型與新模型並行。
+- GPU 模型因顯存不足、全螢幕或 `heavy_apps` 讓路而卸載後，載入 SenseVoice（CPU）暫代；GPU 恢復後卸載 SenseVoice、載回使用者選的 GPU 模型。
+- `asr = "auto"` 保留，只決定要載入哪一個；不再為了備援預先常駐 SenseVoice。
+
 ### 5.1 顯示卡記憶體（VRAM）管理
 
 **你這台電腦的現況**（2026-11-08 以 `nvidia-smi` 查得）：RTX 2060 Max-Q 共 6144 MiB，**正在負責畫面輸出**（2560×1440，display_active = Enabled）；平常桌面程式（Chrome、Teams、Edge、Docker Desktop、Telegram 等）已經用掉約 1.4 GB，剩約 4.5 GB。另有 AMD 內顯與 Trigger 6 USB 顯示卡。
@@ -247,6 +260,8 @@ enabled = true
 6. **指定用途**：勾選要把語音辨識／潤飾／中翻英哪些交給這個服務；未勾選的維持地端。
 7. **完成**：系統列選單可隨時一鍵切回「全部地端」。
 
+**自訂相容端點的別名**（T1.13，2026-11-11 你決定）：自訂相容端點可在精靈或服務清單填選填的「名稱」（`[[cloud]] name`，例如「區網 Qwen」），所有顯示服務的地方都用它；沒填就顯示代號（`custom`、`custom-2`…）。代號 `id` 不變，改名不影響 `[route]` 與金鑰。Gemini／OpenAI／Claude 不提供別名。
+
 另外提供 `docs/cloud-setup.md`：給使用者看的圖文說明，涵蓋上述步驟與各家取得金鑰的流程；精靈第 2 步的「詳細說明」連到這份文件。
 
 Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫面實作；Rust 核心提供共用的 `test_connection()`。
@@ -268,6 +283,7 @@ Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫�
 
 **ui/**（Svelte）
 - 設定：熱鍵（錄製按鍵）、各用途使用地端或哪個雲端服務、地端模型（Breeze / SenseVoice、LM Studio 位址與模型）、潤飾開關、App 規則、麥克風、開機自動啟動。
+  - （T1.14，2026-11-11 你決定）變更先暫存，按「儲存」才寫入 config.toml 並套用，可「取消變更」，未儲存就離開會先詢問。最上方「目前使用中」顯示引擎實際狀態（實際使用的辨識引擎與執行位置、潤飾／中翻英實際走的服務與模型、改用備援的原因）。語音辨識用途選單直接列出各地端引擎。地端語音模型有「測試」。設定頁不再顯示 LM Studio 區塊（「地端」潤飾仍用 config.toml 的 `[local] llm_*`，預設本機 LM Studio；要用別台或別的模型就在雲端服務新增自訂相容端點）。
 - 雲端服務：已串接的服務清單（測試連線、修改、移除）與「新增雲端服務」精靈（第 6.2 節）。
 - 詞庫：一行一詞的編輯器。
 - 紀錄：最近 200 筆（預設保留 7 天），可複製、重新輸出、刪除、清空。

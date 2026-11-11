@@ -30,6 +30,10 @@ $env:LIBCLANG_PATH = 'C:\Program Files\LLVM\bin'
 $env:CARGO_TARGET_DIR = $TargetDir
 $env:CARGO_BUILD_JOBS = "$Jobs"
 $env:CMAKE_BUILD_PARALLEL_LEVEL = "$Jobs"
+# MSVC reads source files in the system code page (950 on zh-TW Windows) unless told otherwise;
+# transcribe.cpp has UTF-8 characters in comments that then swallow the next line (C2065...).
+$env:CFLAGS_x86_64_pc_windows_msvc = '/utf-8'
+$env:CXXFLAGS_x86_64_pc_windows_msvc = '/utf-8'
 if (-not $CpuOnly) {
     $env:CUDA_PATH = $CudaPath
     $env:CUDAToolkit_ROOT = $CudaPath
@@ -43,6 +47,18 @@ try {
     if ($LASTEXITCODE) { throw "build failed (exit $LASTEXITCODE)" }
 } finally {
     Pop-Location
+}
+
+# The CUDA build also ships TEA-ASR (transcribe.cpp as transcribe.dll + its own ggml*.dll);
+# build.rs stages them in runtime-dlls\, which the installer bundles. v2c.exe imports
+# transcribe.dll, so a CUDA installer without it would not even start.
+if (-not $CpuOnly) {
+    $stage = Join-Path $repo 'apps\desktop\src-tauri\runtime-dlls'
+    foreach ($pattern in @('transcribe.dll', 'ggml.dll', 'ggml-base.dll', 'ggml-cpu.dll', 'ggml-cuda.dll')) {
+        if (-not (Get-ChildItem -Path $stage -Filter $pattern -ErrorAction SilentlyContinue)) {
+            throw "TEA-ASR runtime DLL missing from ${stage}: $pattern"
+        }
+    }
 }
 
 # Regex instead of ConvertFrom-Json: Windows PowerShell 5 rejects keys that differ only in case.

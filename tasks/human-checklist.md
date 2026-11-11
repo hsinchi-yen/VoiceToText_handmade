@@ -123,6 +123,26 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
   5. **Defender**：在測試機執行 `"%ProgramFiles%\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -File <安裝檔>`；有誤報就記下來（README 已寫處理方式）
   6. **Breeze 下載網址**：把轉好的 GGML 上傳到你的 Hugging Face repo 後，把 url、sha256、size 填進 `apps/desktop/src-tauri/models.json`（目前是 `PLACEHOLDER-HF-USER`，App 會顯示「尚未提供下載」）
   7. 要分享給 RTX 30／40 系列使用者時，告訴 agent 加入更多 CUDA 架構（目前只建 sm_75，新顯示卡第一次載入較慢）
+- [ ] T1.12 TEA-ASR-1.1（用新建的 CUDA 安裝檔；`tools\build-installer.ps1` 已會設定 `/utf-8` 並檢查 `transcribe.dll` 等 DLL 有被打包）
+  1. 設定頁「地端語音模型 → TEA-ASR-1.1 模型 → 下載」（約 2.18 GB；或照 `docs/local-setup.md` 手動放 `TEA-ASR-1.1-Q8_0.gguf`）
+  2. 「潤飾與用途 → 語音辨識」選「地端：TEA-ASR-1.1（NVIDIA 顯示卡）」（或「地端語音模型 → 辨識引擎」選「TEA-ASR-1.1（NVIDIA 顯示卡）」），按「儲存」，不用重開；幾秒後日誌（`%APPDATA%\v2c\logs`）出現 `GPU ASR active asr="tea_asr"`
+  3. 按住右 Ctrl 實際聽寫中文、英文、中英夾雜各數句；日誌每句出現 `providers for utterance ... asr="tea_asr"`；開著潤飾時有標點，關掉潤飾時照原樣（幾乎沒有標點）
+  4. 辨識時畫面不卡頓（TEA 約佔 2.0～2.6 GB 顯存；開著 LM Studio 3B 時 6 GB 顯示卡可能很緊，必要時把 LM Studio 改小模型或 CPU）
+  5. 全螢幕程式或 `heavy_apps` 在前景時改用 SenseVoice（浮動標籤提示），離開後約 20 秒載回 TEA
+  6. 切回「自動」或 Breeze → TEA 立即卸載、改載 Breeze；切換的那幾秒內說話，浮動標籤顯示「切換模型中…」，那句話等新模型載入後才出字
+  7. 同一時間只有一個模型：用 `nvidia-smi -l 1` 看，讓路時 GPU 用量降回來（SenseVoice 在 CPU）；工作管理員裡 v2c 的記憶體不會同時有兩個模型的量
+- [ ] T1.14 設定頁儲存按鈕、目前使用中、地端引擎選單與測試（安裝新版後）
+  1. 「潤飾與用途」的語音辨識選「地端：Breeze-ASR-25」→ 上方出現「有 1 項變更尚未儲存」（從雲端切回地端時為 2 項）、欄位有「未儲存」標示，`config.toml` 還沒變 → 按「儲存」→ `config.toml` 變成 `route.asr = "local"`、`local.asr = "breeze"`，「地端語音模型」頁同步顯示 Breeze；有雲端服務時改選雲端再切回地端也正確
+  2. 「地端語音模型 → 測試」：有顯存時顯示 Breeze／NVIDIA 顯示卡、載入與辨識耗時、顯存用量；開吃顯存的程式讓可用量不足、辨識引擎選「自動」時再測 → 顯示改用 SenseVoice 與原因；按住熱鍵說話的同時按「測試」→ 顯示「正在聽寫中」
+  3. 改幾項設定後按「取消變更」→ 回到已儲存的值；改了不儲存就點上方「詞庫」→ 先詢問（儲存後離開／捨棄並離開／留在設定頁）；改了不儲存就關視窗再從系統列打開 → 上方提示上次關閉時有未儲存變更
+  4. 有未儲存變更時從系統列切換「潤飾」→ 設定頁提示「設定已在別處變更」，可選重新載入或保留草稿
+  5. 「目前使用中」顯示的引擎與服務和日誌 `providers for utterance`（debug 等級）一致；顯存不足改用 SenseVoice 時有一句說明；設定頁沒有 LM Studio 區塊，選「地端（本機 LM Studio）」潤飾時仍走 `config.toml` 的 `[local] llm_base_url`
+  6. 把視窗縮窄，欄位會換行、不會超出畫面
+- [ ] T1.13 自訂相容端點別名（安裝含 T1.13 的新版後）
+  1. 雲端服務頁 → 現有的 `custom` 按「重新命名」→ 第 2 步「名稱（選填）」填例如「區網 Qwen」→ 走完測試與儲存；`custom-2` 同樣取另一個名字
+  2. 服務清單、「目前由誰處理」、設定頁「潤飾與用途」的下拉選單都顯示新名稱；`%APPDATA%\v2c\config.toml` 出現 `name = "…"`，`id` 仍是 `custom`／`custom-2`，原有註解還在
+  3. 改名後說一句：潤飾、辨識（交給該端點的用途）照常運作；金鑰末 4 碼不變
+  4. 把名稱清空再儲存 → 畫面改回顯示 `custom`，設定檔的 `name` 被移除
 - [ ] 各卡的實機驗收（見各卡「🧑 需人工」）
 - [ ] 檢查點 1：日常使用一週，問題記在 `tasks/dogfood-windows.md`
 

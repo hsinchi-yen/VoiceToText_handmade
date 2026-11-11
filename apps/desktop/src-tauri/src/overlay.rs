@@ -136,6 +136,8 @@ pub fn recording_view(rms: f32, hands_free: bool) -> OverlayView {
 pub fn notice_message(code: &str) -> Option<&'static str> {
     match code {
         "gpu_restored" => Some("已恢復使用顯示卡"),
+        // An utterance waits for the one local model to be swapped (T1.12).
+        "asr_switching" => Some("切換模型中…"),
         _ => None,
     }
 }
@@ -774,7 +776,7 @@ mod tests {
             assert_ne!(m, "發生錯誤", "{code} has no message");
             assert!(m.chars().count() <= 26, "{code}: message too long");
         }
-        const NOTICE_CODES: &[&str] = &["gpu_restored"];
+        const NOTICE_CODES: &[&str] = &["gpu_restored", "asr_switching"];
         for &code in NOTICE_CODES {
             let m = notice_message(code).expect(code);
             assert!(m.chars().count() <= 26, "{code}: message too long");

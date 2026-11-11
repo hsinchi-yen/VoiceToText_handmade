@@ -32,6 +32,11 @@
     sensevoice: "SenseVoice-Small（CPU，約 160 MB 下載）",
     "breeze-q5_0": "Breeze-ASR-25 q5_0（顯示卡，建議）",
     "breeze-q8_0": "Breeze-ASR-25 q8_0（顯示卡，較準、較大）",
+    "tea-asr": "TEA-ASR-1.1（顯示卡，選用，約 2.2 GB 下載）",
+  };
+  const desc = {
+    "tea-asr":
+      "台灣華語與中英夾雜辨識較準，約需 2.6 GB 顯存；幾乎不加標點，靠潤飾補上。要在設定頁的「辨識引擎」選它才會使用。",
   };
   const phaseText = {
     download: "下載中",
@@ -93,6 +98,7 @@
           {phaseText[p.phase] ?? ""} {pct(p) != null ? `${pct(p)}%（${api.mb(p.done)} / ${api.mb(p.total)}）` : ""}
         </span>
       {/if}
+      {#if desc[e.id]}<p class="hint">{desc[e.id]}</p>{/if}
       {#if errors[e.id]}<p class="bad">{errors[e.id]}</p>{/if}
     </div>
   {/each}

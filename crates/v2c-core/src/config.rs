@@ -157,6 +157,8 @@ pub enum LocalAsr {
     Auto,
     Breeze,
     SenseVoice,
+    /// TEA-ASR-1.1 on GPU (only when selected explicitly; `auto` never picks it).
+    TeaAsr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -357,6 +359,10 @@ impl CloudKind {
 pub struct CloudService {
     /// Stable id used in `[route]` and as the keyring entry name.
     pub id: String,
+    /// Display name chosen by the user (`OpenAiCompat` only). Shown instead of `id` when set;
+    /// never used for routing, the keyring, or logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub kind: CloudKind,
     /// Required for `OpenAiCompat`; optional override for the others.
     #[serde(default)]
@@ -434,6 +440,7 @@ mod tests {
         let mut c = Config::with_defaults();
         c.cloud.push(CloudService {
             id: "my-gemini".into(),
+            name: None,
             kind: CloudKind::Gemini,
             base_url: None,
             asr_model: Some("gemini-flash".into()),
@@ -447,6 +454,30 @@ mod tests {
             back.cloud_service("my-gemini").unwrap().kind,
             CloudKind::Gemini
         );
+    }
+
+    #[test]
+    fn cloud_name_is_optional_and_omitted_when_unset() {
+        let old = "[[cloud]]
+id = \"custom\"
+kind = \"open_ai_compat\"
+base_url = \"http://h/v1\"
+";
+        let cfg = Config::from_toml_str(old).unwrap();
+        assert_eq!(cfg.cloud_service("custom").unwrap().name, None);
+        assert!(!cfg.to_toml_string().unwrap().contains("name"));
+
+        let named = format!(
+            "{old}name = \"區網 Qwen\"
+"
+        );
+        let cfg = Config::from_toml_str(&named).unwrap();
+        assert_eq!(
+            cfg.cloud_service("custom").unwrap().name.as_deref(),
+            Some("區網 Qwen")
+        );
+        let back = Config::from_toml_str(&cfg.to_toml_string().unwrap()).unwrap();
+        assert_eq!(back, cfg);
     }
 
     #[test]

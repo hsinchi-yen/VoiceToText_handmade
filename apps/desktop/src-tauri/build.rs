@@ -29,6 +29,11 @@
 //!   the NVIDIA driver to load, so the app starts on machines without an NVIDIA GPU; there the
 //!   GPU is never used (NVML unavailable -> SenseVoice). Without the feature they are removed
 //!   from the stage folder so a CPU installer does not carry them.
+//! - TEA-ASR (feature `cuda`, T1.12): transcribe.cpp is built as a shared library, so
+//!   `transcribe.dll` and its own `ggml*.dll` (kept apart from whisper.cpp's statically linked
+//!   ggml) are copied from `DEP_TRANSCRIBE_RUNTIME_DIR` (set by `transcribe-cpp-sys`, a direct
+//!   dependency for that reason). `ggml-cuda.dll` links the CUDA runtime statically and imports
+//!   only the cuBLAS DLLs above. Without the feature they are removed from the stage folder.
 
 use std::path::{Path, PathBuf};
 
@@ -54,7 +59,9 @@ const COMMANDS: &[&str] = &[
     "settings_apply",
     "settings_set_autostart",
     "settings_input_devices",
-    "settings_test_lm",
+    "settings_preview",
+    "settings_runtime_status",
+    "settings_test_local_asr",
     "gpu_usage",
     "models_status",
     "models_download",
@@ -75,8 +82,11 @@ const SHERPA_DLLS: [&str; 4] = [
     "onnxruntime_providers_shared.dll",
 ];
 const VC_DLLS: [&str; 3] = ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"];
-/// File name prefixes of the cuBLAS DLLs (`cublas64_13.dll`, `cublasLt64_13.dll`).
+/// File name prefixes of the cuBLAS DLLs (`cublas64_13.dll`, `cublasLt64_13.dll`), imported by
+/// whisper.cpp and by transcribe.cpp's `ggml-cuda.dll`.
 const CUDA_DLL_PREFIXES: [&str; 2] = ["cublas64_", "cublasLt64_"];
+/// File name prefixes of the transcribe.cpp runtime DLLs (`transcribe.dll`, `ggml*.dll`).
+const TEA_DLL_PREFIXES: [&str; 2] = ["transcribe", "ggml"];
 const STAGE_DIR: &str = "runtime-dlls";
 
 fn main() {
@@ -132,6 +142,7 @@ fn stage_runtime_dlls() {
     }
 
     let cuda = std::env::var_os("CARGO_FEATURE_CUDA").is_some();
+    stage_tea_dlls(cuda, &stage);
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
     if cuda {
         let found = cuda_bin_dir()
@@ -156,6 +167,41 @@ fn stage_runtime_dlls() {
             }
         }
     }
+}
+
+/// transcribe.cpp's runtime DLLs: staged with `cuda`, removed from the stage folder otherwise.
+fn stage_tea_dlls(cuda: bool, stage: &Path) {
+    println!("cargo:rerun-if-env-changed=DEP_TRANSCRIBE_RUNTIME_DIR");
+    if !cuda {
+        for f in std::fs::read_dir(stage).into_iter().flatten().flatten() {
+            if is_tea_dll(&f.file_name().to_string_lossy()) {
+                let _ = std::fs::remove_file(f.path());
+            }
+        }
+        return;
+    }
+    let Some(dir) = std::env::var_os("DEP_TRANSCRIBE_RUNTIME_DIR").map(PathBuf::from) else {
+        warn("DEP_TRANSCRIBE_RUNTIME_DIR not set; TEA-ASR DLLs not staged");
+        return;
+    };
+    let mut n = 0;
+    for f in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        if is_tea_dll(&f.file_name().to_string_lossy()) {
+            stage_file(&f.path(), stage);
+            n += 1;
+        }
+    }
+    if n == 0 {
+        warn(format_args!(
+            "no transcribe.cpp DLLs in {}; a CUDA installer would miss TEA-ASR",
+            dir.display()
+        ));
+    }
+}
+
+fn is_tea_dll(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".dll") && TEA_DLL_PREFIXES.iter().any(|p| lower.starts_with(p))
 }
 
 fn is_cuda_dll(name: &str) -> bool {

@@ -7,10 +7,12 @@
   // recognition, or both). One endpoint = one service; `preset` starts a second endpoint
   // (e.g. speech on another port) from the 「完成」 step. `role` stays in the page: the
   // backend only sees which model fields are filled in.
+  // Custom endpoints may also get an optional display name (step 2); `services` is the
+  // current list, used for the default-id placeholder and the duplicate-name check.
   import * as api from "./api.js";
   import { guides, billingWarning, lanNote, roles, otherRole } from "./guides.js";
 
-  let { kinds, editing = null, preset = null, onDone, onCancel } = $props();
+  let { kinds, services = [], editing = null, preset = null, onDone, onCancel } = $props();
 
   const STEPS = ["選擇服務", "端點網址／取得金鑰", "貼上金鑰", "選擇模型", "測試連線", "指定用途", "完成"];
 
@@ -30,6 +32,7 @@
       ? {
           id: start.id,
           kind: start.kind,
+          name: start.name ?? "",
           base_url: start.base_url ?? "",
           api_key: "",
           asr_model: start.asr_model ?? "",
@@ -37,6 +40,7 @@
         }
       : {
           kind: startPreset?.kind ?? null,
+          name: "",
           base_url: startPreset?.base_url ?? "",
           api_key: "",
           asr_model: "",
@@ -63,6 +67,8 @@
   const isCompat = $derived(draft.kind === "open_ai_compat");
   const keyOptional = $derived(isCompat || (editing && editing.has_key));
   const typedLast4 = $derived(api.last4(draft.api_key));
+  // The id this service has (editing) or will get (new): shown when no name is given.
+  const defaultId = $derived(editing ? editing.id : api.nextCustomId(services));
 
   function choose(kind) {
     const k = kinds.find((x) => x.kind === kind);
@@ -94,6 +100,13 @@
     if (step === 2 && isCompat && !draft.base_url.trim()) {
       message = api.describe("base_url_required");
       return;
+    }
+    if (step === 2 && isCompat) {
+      const problem = api.nameProblem(draft.name, editing?.id ?? null, services);
+      if (problem) {
+        message = api.describe(problem);
+        return;
+      }
     }
     if (step === 3 && !keyOptional && !draft.api_key.trim()) {
       message = api.describe("key_missing");
@@ -219,6 +232,18 @@
       {#if urlLooksOff}
         <p class="hint">網址通常以 <code>/v1</code> 結尾，請確認是否漏打。</p>
       {/if}
+      <label>
+        名稱（選填）
+        <input
+          bind:value={draft.name}
+          placeholder={defaultId}
+          maxlength={api.NAME_MAX_CHARS * 2}
+          spellcheck="false"
+        />
+      </label>
+      <p class="hint">
+        例如「區網 Qwen」，最多 {api.NAME_MAX_CHARS} 個字。沒填就顯示代號 <code>{defaultId}</code>；改名不影響用途與金鑰。
+      </p>
       <fieldset class="roles">
         <legend>這個端點提供什麼？</legend>
         {#each Object.entries(roles) as [key, r] (key)}
@@ -348,7 +373,7 @@
     {/each}
   {:else if step === 7}
     <h2>完成</h2>
-    <p>已儲存「{saved?.label}」（{saved?.id}）。</p>
+    <p>已儲存「{api.displayName(saved)}」（{saved?.label}）。</p>
     {#if isCompat && otherRole[role]}
       <p class="note">
         {role === "text"

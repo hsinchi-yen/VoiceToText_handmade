@@ -36,7 +36,7 @@
 | 項目 | 決定 |
 |------|------|
 | 預設策略 | **地端優先**：安裝後不填金鑰即可使用；雲端需使用者透過「新增雲端服務」精靈主動串接（選服務 → 取得金鑰說明 → 貼金鑰 → 選模型 → 測試連線 → 指定用途），附使用說明文件 |
-| 桌面地端 ASR | Breeze-ASR-25（GPU）為主，SenseVoice-Small（CPU）備援 |
+| 桌面地端 ASR | Breeze-ASR-25（GPU）為主，SenseVoice-Small（CPU）備援；另可在設定頁手動選 TEA-ASR-1.1（GPU，2026-11-11 你決定加入；「自動」不會選它，GPU 不可用時改用 SenseVoice）。**同一時間只載入一個辨識模型**（2026-11-11 你決定）：切換時先卸載再載入；GPU 模型因顯存不足或讓路卸載後才載入 SenseVoice，GPU 恢復後換回；「自動」只決定載入哪一個 |
 | 桌面地端 LLM | 使用者自行以 **LM Studio** 起模型；本工具只走 OpenAI 相容 API（預設 `http://localhost:1234/v1`），不代裝任何軟體 |
 | 雲端 | 官方 API（Gemini、OpenAI、Claude）＋ OpenAI 相容自訂端點（可填自架服務）；雲端失敗自動退回地端 |
 | 顯示卡記憶體 | RTX 2060 同時負責畫面輸出：保留約 600 MiB（2026-11-10 實測後你決定：保留 2 GB 時 Breeze 與 LM Studio 3B 無法同時在 GPU 上），v2c＋LM Studio 上限約 4 GB；三種方案（均衡／省顯存／不用顯卡），顯存不足或遊戲、剪片時自動改用 CPU |
@@ -77,6 +77,7 @@
 |------|------|
 | Breeze-ASR-25 轉 GGML 的相容性與量化後準確度 | T0.1 驗證；備案：Whisper large-v3-turbo |
 | 6 GB VRAM 同時負責畫面、ASR、LM Studio | 保留額度＋自動讓路（T1.10b）；T0.1 實測 |
+| TEA-ASR 的執行環境 transcribe.cpp 未記載 Windows＋CUDA 建置，且與 whisper.cpp 各帶一份 ggml | T1.12 動工前查證；以 DLL 方式連結避開符號衝突；不成立則停下回報 |
 | Rust 端簡繁轉換、sherpa-onnx、NVML 綁定 crate 的成熟度 | 各任務動工前查證 |
 | 系統管理員權限的視窗無法注入（UIPI） | 偵測後提示並改放剪貼簿 |
 | 鍵盤掛勾＋模擬輸入被防毒誤判為鍵盤側錄程式；SmartScreen 警告 | T1.11 以 Windows Defender 實測；README 說明 |

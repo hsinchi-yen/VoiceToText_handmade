@@ -7,6 +7,7 @@
     model_missing: "還沒有語音模型：請到「初次設定」下載",
     model_load_failed: "語音模型載入失敗",
     asr_loading: "語音模型載入中，請稍候",
+    asr_switching: "切換語音模型中，這段語音會用新模型辨識",
     sensevoice_not_available: "SenseVoice 模型無法載入（請到「初次設定」重新下載）",
     not_configured: "未設定翻譯模型",
     inject_elevated: "目前視窗以系統管理員身分執行，無法輸入",

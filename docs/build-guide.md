@@ -81,6 +81,10 @@ $env:CARGO_BUILD_JOBS = '2'
 $env:CUDA_PATH = $cuda
 $env:CUDAToolkit_ROOT = $cuda
 $env:CMAKE_CUDA_ARCHITECTURES = '75'
+# GPU 版會一起建 TEA-ASR 的 transcribe.cpp；中文版 Windows 的 MSVC 預設用 950 字碼頁讀原始碼，
+# 不加這兩行會編譯失敗（見第 6 節）。在 Git Bash 裡要寫成 -utf-8。
+$env:CFLAGS_x86_64_pc_windows_msvc = '/utf-8'
+$env:CXXFLAGS_x86_64_pc_windows_msvc = '/utf-8'
 ```
 
 常用指令：
@@ -91,6 +95,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 cargo build --release -p v2c-cli --features cuda          # 量測工具（GPU 版）
+cargo build --release -p v2c-cli --features tea,cuda      # 量測工具（含 TEA-ASR）
 cd apps\desktop; npm ci; npm run tauri dev                # 開發模式（熱重載介面）
 cd apps\desktop; npm run tauri:build:cuda                 # 安裝檔（GPU 版）
 ```
@@ -107,6 +112,7 @@ cd apps\desktop; npm run tauri:build:cuda                 # 安裝檔（GPU 版�
 | 狀況 | 原因與處理 |
 |------|------------|
 | `unsupported Microsoft Visual Studio version! Only the versions between 2015 and 2019` | CMake 抓到舊版 CUDA（v11）。照第 1 節移除舊路徑，並刪掉舊的 CMake 快取：`Remove-Item -Recurse "$env:USERPROFILE\.v2ct\release\build\whisper-rs-sys-*"` |
+| 建置 `transcribe-cpp-sys` 時出現一連串 `error C2065`、`C2146`（`canary\model.cpp`） | MSVC 用 950 字碼頁讀 UTF-8 原始碼，註解裡的特殊字元吃掉換行。設定 `CFLAGS_x86_64_pc_windows_msvc` 與 `CXXFLAGS_x86_64_pc_windows_msvc` 為 `/utf-8`（見第 5 節；`tools\build-installer.ps1` 已自動設定）後重建 |
 | `is cmake not installed?` | PATH 沒有 CMake。把 VS Build Tools 內建的 CMake 路徑（見第 5 節）放進 PATH |
 | `v2c-cli.exe` 結束代碼 53、沒有任何輸出 | 找不到 `cublas64_13.dll`。把 `CUDA\v13.5\bin\x64` 放進 PATH（安裝版已附 DLL，不受影響） |
 | 找不到 `libclang.dll` | 設定 `LIBCLANG_PATH = C:\Program Files\LLVM\bin` |

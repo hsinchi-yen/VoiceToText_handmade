@@ -678,6 +678,7 @@ async fn e2e_real_asr_llm_polish_inject() {
     }
     cfg.cloud.push(v2c_core::config::CloudService {
         id: "lan-asr".into(),
+        name: None,
         kind: v2c_core::config::CloudKind::OpenAiCompat,
         base_url: Some(asr_url),
         asr_model: Some(var("V2C_TEST_ASR_MODEL").unwrap_or_else(|| "whisper-1".into())),

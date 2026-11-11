@@ -1,4 +1,4 @@
-//! `v2c-cli bench --asr breeze|sensevoice --model <path> <dir>`: run every fixture and report the recognised
+//! `v2c-cli bench --asr breeze|sensevoice|tea --model <path> <dir>`: run every fixture and report the recognised
 //! text, expected text, CER, ASR time, and audio duration.
 //!
 //! Fixtures are `<name>.txt` files; the matching `<name>.wav` is the recording (git-ignored).
@@ -37,7 +37,7 @@ const BENCH_LLM_TIMEOUT_MS: u64 = 10_000;
 pub struct Args {
     /// Directory with `<name>.wav` + `<name>.txt` pairs.
     pub dir: PathBuf,
-    /// ASR provider: breeze | sensevoice | <cloud id>.
+    /// ASR provider: breeze | sensevoice | tea | <cloud id>.
     #[arg(long, default_value = "breeze")]
     pub asr: String,
     /// Optional LLM for polish: lmstudio.

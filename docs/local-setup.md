@@ -1,8 +1,48 @@
 # 地端模型設定：顯示卡記憶體（VRAM）
 
-v2c 預設全部在你自己的電腦上執行：語音辨識用 Breeze-ASR-25（NVIDIA 顯示卡）或 SenseVoice-Small（CPU），潤飾用你自己開的 LM Studio。這份文件說明 v2c 怎麼和畫面輸出、遊戲、剪片軟體分享顯示卡記憶體，以及 LM Studio 和 NVIDIA 驅動的建議設定。
+v2c 預設全部在你自己的電腦上執行：語音辨識用 Breeze-ASR-25 或 TEA-ASR-1.1（NVIDIA 顯示卡）或 SenseVoice-Small（CPU），潤飾用你自己開的 LM Studio。這份文件說明 v2c 怎麼和畫面輸出、遊戲、剪片軟體分享顯示卡記憶體，以及 LM Studio 和 NVIDIA 驅動的建議設定。
 
-> **注意：本文的 VRAM 數字都是估計值**，要等 T0.1 用 `nvidia-smi` 實測後回填（見 `tasks/spike-results.md`）。實測前請以設定頁的即時使用條為準。
+> **VRAM 數字**：標「實測」的是在 RTX 2060 6 GB 上用 `nvidia-smi` 量到的（Breeze q5_0 約 1.7 GB、TEA-ASR 約 2.0～2.6 GB），其餘是估計值。實際用量依顯示卡與驅動而異，請以設定頁的即時使用條為準；v2c 每次載入模型時也會自己量一次。
+
+## 三個語音辨識引擎
+
+在設定頁「潤飾與用途 → 語音辨識」（「地端：…」幾項）或「地端語音模型 → 辨識引擎」選擇，兩個選單永遠一致；也可以在 `config.toml` 寫 `[local] asr = "..."`。按「儲存」後立即生效（幾秒內換好引擎，不用重新啟動）。
+
+| 引擎 | 設定值 | 跑在哪裡 | 特色 | 顯存（實測） |
+|------|--------|----------|------|--------------|
+| 自動（預設） | `auto` | 有 NVIDIA 且放得下 → Breeze；否則 SenseVoice | 不會自動選 TEA-ASR | — |
+| Breeze-ASR-25 | `breeze` | 顯示卡 | 台灣華語，輸出大多是繁體、有標點 | q5_0 約 1.7 GB；q8_0 約 2.1 GB |
+| TEA-ASR-1.1 | `tea_asr` | 顯示卡（只支援 GPU） | 以 Qwen3-ASR-1.7B 微調，台灣華語與中英夾雜較準，輸出繁體台灣用語（偶爾夾一個簡體字，例如「还」，會被 v2c 的繁體檢查改正）；**幾乎不加標點**，靠潤飾補上（潤飾關閉時照原樣輸出） | 約 2.0 GB（載入後），辨識時最高約 2.6 GB（Q8_0） |
+| SenseVoice-Small | `sense_voice` | CPU | 不需要顯示卡；輸出簡體，v2c 會轉成繁體 | 0 |
+
+- **同一時間只載入一個模型**：Breeze、TEA-ASR、SenseVoice 三者最多一個在記憶體裡。換模型時（改設定、讓路、恢復）一定先卸載舊的、確認釋放後才載入新的；這段期間按熱鍵說的話會等新模型載入完再辨識（浮動標籤顯示「切換模型中…」，TEA-ASR 約 10 秒、Breeze 約 3 秒）。SenseVoice 只在用得到時才載入（你選了它，或 GPU 模型讓路時暫代），GPU 恢復後就換回 GPU 模型並卸載 SenseVoice。
+- 語音辨識走雲端、勾選「雲端失敗時自動改用地端」時：地端模型若因閒置被卸載，只有在雲端真的失敗時才載入，那一句會等模型載入完（TEA-ASR 約 10 秒）。
+- 選了 `breeze` 或 `tea_asr` 時，v2c 不先檢查可用顯存（你手動指定的），但全螢幕程式、`heavy_apps` 名單、閒置卸載的規則（見下方）照樣適用；讓路時改用 SenseVoice。
+- 選了 `tea_asr` 但「不用顯卡」方案、沒有 NVIDIA／CUDA、或模型檔不在，也改用 SenseVoice，日誌會寫原因（例如 `TeaModelMissing`）。
+- 本機實測（2026-11-11，RTX 2060 6 GB，`tests/fixtures/audio` 的錄音）：10 段錄音（中文、英文、中英夾雜，各約 5～8 秒）平均 CER：TEA-ASR **1.0%**、Breeze q8_0 **3.6%**；每段辨識時間 TEA-ASR 平均 240 ms、Breeze q8_0 平均 693 ms（`--lang zh`，和 App 相同）。TEA-ASR 載入約 9.6 秒（Breeze 約 2～3 秒），之後常駐。63 秒的長錄音切成 3 段，CER 1.8%、辨識 2.4 秒。
+
+### 安裝 TEA-ASR-1.1 模型
+
+- 來源：Hugging Face [dorajim15/TEA-ASR-1.1-transcribe-cpp](https://huggingface.co/dorajim15/TEA-ASR-1.1-transcribe-cpp)（社群把 [JacobLinCool/TEA-ASR-1.1](https://huggingface.co/JacobLinCool/TEA-ASR-1.1) 轉成 transcribe.cpp 用的 GGUF；MIT）
+- 檔案：`TEA-ASR-1.1-Q8_0.gguf`，2,184,763,808 bytes（約 2.18 GB）
+- SHA-256：`2e4aeb45c9e7f421d99909e29e49a54e204d70ed0e77bebc3f18a135d78298d0`
+
+**方法一：在設定頁下載**。設定頁「地端語音模型」下方的「TEA-ASR-1.1 模型 → 下載」，會下載到 `%LOCALAPPDATA%\v2c\models\` 並驗證 SHA-256；中斷可以按「繼續下載」接著下載。
+
+**方法二：手動放置**：
+
+```powershell
+$dst = "$env:LOCALAPPDATA\v2c\models"
+New-Item -ItemType Directory -Force $dst | Out-Null
+curl.exe -L -o "$dst\TEA-ASR-1.1-Q8_0.gguf" https://huggingface.co/dorajim15/TEA-ASR-1.1-transcribe-cpp/resolve/main/TEA-ASR-1.1-Q8_0.gguf
+(Get-FileHash "$dst\TEA-ASR-1.1-Q8_0.gguf" -Algorithm SHA256).Hash   # 要和上面的 SHA-256 一樣
+```
+
+檔名必須是 `TEA-ASR-1.1-Q8_0.gguf`，直接放在 `models` 資料夾裡（不要再包一層資料夾）。
+
+**選用**：設定頁「潤飾與用途 → 語音辨識」選「地端：TEA-ASR-1.1（NVIDIA 顯示卡）」（或「地端語音模型 → 辨識引擎」選「TEA-ASR-1.1（NVIDIA 顯示卡）」），按「儲存」。日誌（`%APPDATA%\v2c\logs`）會出現 `GPU ASR active asr="tea_asr"`，之後每句話出現 `providers for utterance ... asr="tea_asr"`。
+
+技術細節：TEA-ASR 由 transcribe.cpp 執行（安裝檔附 `transcribe.dll` 與它自己的 `ggml*.dll`，和 Breeze 的 whisper.cpp 分開）；超過 30 秒的錄音會在最安靜的地方切段、依序辨識再接起來；語言固定為中文（中英夾雜時英文照樣保留）。
 
 ## 三種方案
 
@@ -36,7 +76,7 @@ v2c 每 5 秒讀一次顯示卡的可用記憶體（透過 NVIDIA 驅動附的 N
 |----|------|
 | `auto`（預設） | 啟動時載入；上面 1～4 全部生效 |
 | `always` | 一旦載入就常駐：不因閒置、低顯存或重度程式卸載（載入前仍會檢查）。適合顯存很充裕、想要每句都最快的人 |
-| `on_demand` | 不預先載入；按熱鍵才載入，閒置約 1 分鐘就卸載。最省顯存，但幾乎每句都多 1～2 秒 |
+| `on_demand` | 不預先載入；按熱鍵才載入，閒置約 1 分鐘就卸載。最省顯存，但幾乎每句都多 1～2 秒（TEA-ASR 約 10 秒）。因讓路改用 SenseVoice 後，下一次按熱鍵（且顯示卡可用時）會換回 GPU 模型；在設定頁從 SenseVoice 改成 Breeze／TEA-ASR 會立即載入 |
 
 設定範例：
 
@@ -55,6 +95,28 @@ breeze_quant = "q5_0"         # q5_0 | q8_0
 ```
 
 `heavy_apps` 填執行檔名稱（不分大小寫），可在工作管理員 →「詳細資料」頁籤查到，例如 `blender.exe`、`DaVinci Resolve`（`Resolve.exe`）、各遊戲的 `.exe`。
+
+## 確認目前用的是哪個引擎
+
+設定頁最上方的「目前使用中」顯示 v2c 實際在用的語音辨識引擎與執行位置（例如「Breeze-ASR-25 q5_0・NVIDIA 顯示卡・已載入」）、潤飾與中翻英走的服務與模型，以及顯示卡可用記憶體。設定是 Breeze 或 TEA-ASR 但實際用 SenseVoice 時（顯存不足、吃顯卡的程式在前景…），會用一句話說明原因；閒置卸載後顯示「目前沒有載入模型」，換模型的那幾秒顯示「切換模型中…」。
+
+「潤飾與用途」的語音辨識選單可以直接選地端引擎（「地端：自動」「地端：Breeze-ASR-25」「地端：TEA-ASR-1.1」「地端：SenseVoice-Small」），也可以選已串接的雲端服務；選地端引擎時會同時改「地端語音模型 → 辨識引擎」，兩個選單永遠一致。
+
+設定頁的變更要按上方「儲存」才會寫進 `config.toml` 並套用；「取消變更」回到已儲存的值。
+
+「地端語音模型」的「測試」按鈕會用內建的 3 秒測試音（不是你的聲音），實際跑一次已儲存設定會用到的地端引擎，顯示用了哪個引擎、是否在顯示卡上、載入與辨識各花多久，以及 Breeze／TEA-ASR 用了多少顯存；顯存不足而改用 SenseVoice 時會說明原因。測試只用目前載入的那一個模型（閒置卸載時才先載入），不會多載一個；正在聽寫或正在切換模型時不能測試。辨識出來的文字不會顯示，也不會記錄。
+
+## LM Studio 位址與模型
+
+「地端」潤飾與中翻英固定使用這台電腦的 LM Studio，設定頁不再顯示 LM Studio 的位址與模型欄位。預設位址是 `http://localhost:1234/v1`，模型用 LM Studio 目前載入的那個。真的需要改時，直接編輯 `config.toml`，存檔後重新啟動 v2c（系統列 → 結束，再開啟）：
+
+```toml
+[local]
+llm_base_url = "http://localhost:1234/v1"
+llm_model = "qwen2.5-3b-instruct"   # 不寫＝用 LM Studio 目前載入的模型
+```
+
+要用別台電腦的 LM Studio 或別的模型，建議到「雲端服務 → 新增雲端服務 → 自訂（OpenAI 相容端點）」新增，再到設定頁的「潤飾與用途」選它；雲端服務失敗時仍會退回本機 LM Studio。
 
 ## LM Studio 建議設定
 

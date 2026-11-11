@@ -96,6 +96,9 @@ pub fn breeze_model_file(quant: BreezeQuant) -> &'static str {
     }
 }
 
+/// GGUF file name of TEA-ASR-1.1 (T1.12), inside a models directory.
+pub const TEA_MODEL_FILE: &str = v2c_asr_local::tea::MODEL_FILE;
+
 /// Directory name of the SenseVoice-Small model (sherpa-onnx int8 release), inside a models
 /// directory.
 pub const SENSEVOICE_DIR: &str = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17";
@@ -126,6 +129,7 @@ mod tests {
             breeze_model_file(BreezeQuant::Q8_0),
             "ggml-breeze-asr-25-q8_0.bin"
         );
+        assert_eq!(TEA_MODEL_FILE, "TEA-ASR-1.1-Q8_0.gguf");
     }
 
     #[test]

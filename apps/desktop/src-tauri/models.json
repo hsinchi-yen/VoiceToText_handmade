@@ -26,6 +26,13 @@
       "sha256": null,
       "size": null,
       "placeholder": true
+    },
+    {
+      "id": "tea-asr",
+      "kind": "tea_gguf",
+      "url": "https://huggingface.co/dorajim15/TEA-ASR-1.1-transcribe-cpp/resolve/main/TEA-ASR-1.1-Q8_0.gguf",
+      "sha256": "2e4aeb45c9e7f421d99909e29e49a54e204d70ed0e77bebc3f18a135d78298d0",
+      "size": 2184763808
     }
   ]
 }
