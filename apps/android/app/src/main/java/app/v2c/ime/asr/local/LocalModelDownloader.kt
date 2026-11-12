@@ -43,11 +43,22 @@ class HttpModelFetcher(
         try {
             val code = conn.responseCode
             if (code != 200 && code != 206) throw BadResponseException("HTTP $code")
+            if (code == 206 && contentRangeStart(conn.getHeaderField("Content-Range")) != offset) {
+                throw BadResponseException("unexpected Content-Range")
+            }
             return FetchResponse(conn.inputStream, resumed = offset > 0 && code == 206)
         } catch (e: Throwable) {
             conn.disconnect()
             throw e
         }
+    }
+
+    companion object {
+        private val RANGE_START = Regex("""bytes\s+(\d+)-""")
+
+        /** Start offset of a `bytes START-END/TOTAL` header, or -1 when missing or malformed. */
+        fun contentRangeStart(header: String?): Long =
+            header?.let { RANGE_START.find(it)?.groupValues?.get(1)?.toLongOrNull() } ?: -1L
     }
 }
 
@@ -59,10 +70,12 @@ class HttpModelFetcher(
  *   matches, so a final-named file is always verified. A mismatch deletes the partial file.
  * - A dropped connection leaves the `.part` file; [start] again resumes from its length
  *   (or restarts when the server ignores Range).
+ * - Not enough free space or a write error is [DownloadFailure.STORAGE]; a read or connect
+ *   error is [DownloadFailure.INTERRUPTED].
  * - Progress and state are exposed through [state] and [addListener]; state changes may arrive
- *   on the download thread.
- *
- * The class has no Android dependencies. [download] is the synchronous core used by tests.
+ *   on the executor thread.
+ * - [start], [cancel] and [delete] return immediately and are safe on the main thread; the
+ *   work runs on [executor]. [download] is the blocking core (tests; not for the main thread).
  */
 class LocalModelDownloader(
     val spec: LocalModelSpec,
@@ -71,6 +84,7 @@ class LocalModelDownloader(
     private val executor: Executor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "v2c-model-download").apply { isDaemon = true }
     },
+    private val freeSpaceMarginBytes: Long = 64L * 1024 * 1024,
 ) {
     val modelDir: File = File(rootDir, spec.id)
 
@@ -103,9 +117,12 @@ class LocalModelDownloader(
         synchronized(lock) {
             if (running || state == DownloadState.Ready) return
             running = true
+            // Reset here, not on the executor thread: a cancel() issued right after start()
+            // must not be overwritten when the queued task finally runs.
             cancelRequested = false
+            deleteRequested = false
         }
-        executor.execute { download() }
+        executor.execute { run() }
     }
 
     /** Stops a running download; partial data is kept so [start] can resume. */
@@ -113,32 +130,43 @@ class LocalModelDownloader(
         cancelRequested = true
     }
 
-    /** Removes the model files (also partial ones). If a download is running it is stopped first. */
+    /** Removes the model files (also partial ones), stopping a running download first. Non-blocking. */
     fun delete() {
         synchronized(lock) {
-            if (running) {
-                deleteRequested = true
-                cancelRequested = true
-                return
-            }
+            deleteRequested = true
+            cancelRequested = true
+            if (running) return
+            running = true
         }
-        wipe()
+        executor.execute { run() }
     }
 
-    /** Synchronous download. Returns the final state. */
+    /** Blocking download on the calling thread. Returns the final state. */
     fun download(): DownloadState {
         synchronized(lock) {
+            if (running) return state
             running = true
             cancelRequested = false
+            deleteRequested = false
         }
+        run()
+        return state
+    }
+
+    private fun run() {
         try {
+            if (deleteRequested) {
+                wipe()
+                return
+            }
             val result = try {
                 downloadAll()
             } catch (e: IOException) {
                 DownloadState.Failed(DownloadFailure.STORAGE)
+            } catch (e: Exception) {
+                DownloadState.Failed(DownloadFailure.INTERRUPTED)
             }
             if (deleteRequested) wipe() else publish(result)
-            return state
         } finally {
             synchronized(lock) {
                 running = false
@@ -150,6 +178,19 @@ class LocalModelDownloader(
     private fun downloadAll(): DownloadState {
         if (!modelDir.isDirectory && !modelDir.mkdirs()) return DownloadState.Failed(DownloadFailure.STORAGE)
         val total = spec.totalBytes
+        val remaining = spec.files.sumOf { f ->
+            val dest = File(modelDir, f.name)
+            if (dest.isFile && dest.length() == f.sizeBytes) {
+                0L
+            } else {
+                val part = File(modelDir, f.name + ".part")
+                val have = if (part.isFile && part.length() <= f.sizeBytes) part.length() else 0L
+                f.sizeBytes - have
+            }
+        }
+        if (remaining > 0 && modelDir.usableSpace < remaining + freeSpaceMarginBytes) {
+            return DownloadState.Failed(DownloadFailure.STORAGE)
+        }
         var finishedBytes = 0L
         publish(DownloadState.Downloading(0, total))
         for (file in spec.files) {
@@ -178,11 +219,16 @@ class LocalModelDownloader(
                 copyInto(file, part, offset, doneBefore, total)
             } catch (e: BadResponseException) {
                 return DownloadState.Failed(DownloadFailure.BAD_RESPONSE)
-            } catch (e: IOException) {
+            } catch (e: ReadFailure) {
                 return DownloadState.Failed(DownloadFailure.INTERRUPTED)
+            } catch (e: IOException) {
+                return DownloadState.Failed(DownloadFailure.STORAGE)
             }
             if (cancelRequested) return DownloadState.NotDownloaded
-            if (failure != null) return failure
+            if (failure != null) {
+                if (failure.reason == DownloadFailure.BAD_RESPONSE) part.delete()
+                return failure
+            }
         }
         if (cancelRequested) return DownloadState.NotDownloaded
         publish(DownloadState.Verifying)
@@ -199,9 +245,25 @@ class LocalModelDownloader(
         return null
     }
 
+    /** A network-side IOException, kept apart from disk write errors. */
+    private class ReadFailure(cause: IOException) : IOException(cause)
+
     /** Appends the response to [part]. Returns a failure state, or null when the stream ended. */
-    private fun copyInto(file: ModelFile, part: File, offset: Long, doneBefore: Long, total: Long): DownloadState? {
-        fetcher.open(file.url, offset).use { response ->
+    private fun copyInto(
+        file: ModelFile,
+        part: File,
+        offset: Long,
+        doneBefore: Long,
+        total: Long,
+    ): DownloadState.Failed? {
+        val response = try {
+            fetcher.open(file.url, offset)
+        } catch (e: BadResponseException) {
+            throw e
+        } catch (e: IOException) {
+            throw ReadFailure(e)
+        }
+        response.use {
             val start = if (offset > 0 && !response.resumed) 0L else offset
             RandomAccessFile(part, "rw").use { out ->
                 out.setLength(start)
@@ -210,7 +272,13 @@ class LocalModelDownloader(
                 var written = start
                 var lastReport = written
                 while (!cancelRequested) {
-                    val n = response.stream.read(buf)
+                    val n = try {
+                        response.stream.read(buf)
+                    } catch (e: BadResponseException) {
+                        throw e
+                    } catch (e: IOException) {
+                        throw ReadFailure(e)
+                    }
                     if (n < 0) break
                     if (written + n > file.sizeBytes) return DownloadState.Failed(DownloadFailure.BAD_RESPONSE)
                     out.write(buf, 0, n)

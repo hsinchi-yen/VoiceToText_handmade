@@ -176,6 +176,115 @@ class LocalModelDownloaderTest {
         assertFalse(d.modelDir.exists())
     }
 
+    private val queue = ArrayDeque<Runnable>()
+    private val queuedExecutor = java.util.concurrent.Executor { queue.add(it) }
+
+    @Test
+    fun cancelRightAfterStartIsNotLost() {
+        val fetcher = FakeFetcher()
+        val d = LocalModelDownloader(spec, tmp.root, fetcher, queuedExecutor)
+        d.start()
+        d.cancel()
+        queue.removeFirst().run()
+
+        assertEquals(DownloadState.NotDownloaded, d.state)
+        assertFalse(d.isReady())
+    }
+
+    @Test
+    fun deleteRightAfterStartReturnsAtOnceAndWipes() {
+        val d = LocalModelDownloader(spec, tmp.root, FakeFetcher(), queuedExecutor)
+        d.start()
+        d.delete() // must not block or run on this thread
+        assertEquals(1, queue.size)
+        queue.removeFirst().run()
+
+        assertEquals(DownloadState.NotDownloaded, d.state)
+        assertFalse(d.modelDir.exists())
+    }
+
+    @Test
+    fun deleteIsRunOnTheExecutor() {
+        val d = LocalModelDownloader(spec, tmp.root, FakeFetcher(), queuedExecutor)
+        d.download()
+        d.delete()
+        assertTrue(d.modelDir.exists()) // nothing happened on the caller thread
+        queue.removeFirst().run()
+        assertFalse(d.modelDir.exists())
+    }
+
+    @Test
+    fun deleteDuringDownloadStopsAndRemovesFiles() {
+        lateinit var d: LocalModelDownloader
+        val fetcher = ModelFetcher { _, _ ->
+            val stream = object : InputStream() {
+                var sent = 0
+                override fun read(): Int = throw UnsupportedOperationException()
+                override fun read(b: ByteArray, off: Int, len: Int): Int {
+                    if (sent >= 100_000) d.delete()
+                    val n = minOf(len, 50_000)
+                    sent += n
+                    return n
+                }
+            }
+            FetchResponse(stream, false)
+        }
+        d = downloader(fetcher)
+
+        assertEquals(DownloadState.NotDownloaded, d.download())
+        assertFalse(d.modelDir.exists())
+    }
+
+    @Test
+    fun partLargerThanExpectedIsDiscarded() {
+        val dir = File(tmp.root, spec.id).apply { mkdirs() }
+        File(dir, "a.bin.part").writeBytes(ByteArray(blobA.size * 2))
+        val d = downloader(FakeFetcher())
+
+        assertEquals(DownloadState.Ready, d.download())
+        assertTrue(d.path("a.bin").readBytes().contentEquals(blobA))
+    }
+
+    @Test
+    fun serverSendingExtraBytesIsRejectedAndPartRemoved() {
+        val d = downloader { _, _ -> FetchResponse(ByteArrayInputStream(blobA + ByteArray(10)), false) }
+
+        assertEquals(DownloadState.Failed(DownloadFailure.BAD_RESPONSE), d.download())
+        assertFalse(File(d.modelDir, "a.bin.part").exists())
+        assertFalse(d.isReady())
+    }
+
+    @Test
+    fun notEnoughFreeSpaceFailsBeforeDownloading() {
+        val huge = spec.copy(files = listOf(ModelFile("a.bin", "mem://a", Long.MAX_VALUE / 4, sha(blobA))))
+        var called = false
+        val d = LocalModelDownloader(huge, tmp.root, { _, _ -> called = true; throw IOException() }, directExecutor)
+
+        assertEquals(DownloadState.Failed(DownloadFailure.STORAGE), d.download())
+        assertFalse(called)
+    }
+
+    @Test
+    fun connectErrorIsInterruptedNotStorage() {
+        val d = downloader { _, _ -> throw IOException("no route") }
+        assertEquals(DownloadState.Failed(DownloadFailure.INTERRUPTED), d.download())
+    }
+
+    @Test
+    fun unexpectedExceptionNeverLeavesStateDownloading() {
+        val d = downloader { _, _ -> throw IllegalStateException("boom") }
+        val s = d.download()
+        assertTrue(s is DownloadState.Failed)
+        assertEquals(s, d.state)
+    }
+
+    @Test
+    fun contentRangeStartParsing() {
+        assertEquals(300L, HttpModelFetcher.contentRangeStart("bytes 300-999/1000"))
+        assertEquals(-1L, HttpModelFetcher.contentRangeStart(null))
+        assertEquals(-1L, HttpModelFetcher.contentRangeStart("garbage"))
+    }
+
     @Test
     fun progressFractionIsClamped() {
         assertEquals(0f, DownloadState.Downloading(0, 0).fraction, 0f)

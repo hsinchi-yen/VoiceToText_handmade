@@ -23,7 +23,8 @@ import java.util.Locale
  *
  * Workflow (all on the phone, airplane mode is fine once the models are downloaded):
  * 1. `adb push tests/fixtures/audio/. /sdcard/Android/data/app.v2c.ime/files/compare/`
- *    (pairs of `name.wav` + `name.txt` with the expected text; 16-bit PCM WAV).
+ *    (pairs of `name.wav` + `name.txt` with the expected text, or `name.raw.txt` which takes
+ *    precedence; 16-bit PCM WAV).
  * 2. Open this activity, press "Download" for a model (needs network once), then "Run".
  * 3. Results appear on screen and in `files/compare/result-<model>.csv` (pull it with adb).
  *
@@ -48,7 +49,7 @@ class CompareActivity : Activity() {
             row.addView(label("${spec.displayName} (${spec.totalMegabytes} MB)"))
             row.addView(button("Download") { d.start() })
             row.addView(button("Run") { runCompare(spec) })
-            row.addView(button("Delete") { d.delete() })
+            row.addView(button("Delete") { d.delete() }) // non-blocking: runs on the downloader thread
             root.addView(row)
         }
         out = TextView(this).apply { textSize = 12f; setTextIsSelectable(true) }
@@ -101,7 +102,9 @@ class CompareActivity : Activity() {
         val latencies = ArrayList<Long>()
         var totalAudio = 0.0
         for (wav in wavs) {
-            val expected = File(wav.parentFile, wav.nameWithoutExtension + ".txt")
+            // Prefer <name>.raw.txt (what was actually said) over <name>.txt, which may be polished text.
+            val raw = File(wav.parentFile, wav.nameWithoutExtension + ".raw.txt")
+            val expected = if (raw.isFile) raw else File(wav.parentFile, wav.nameWithoutExtension + ".txt")
             if (!expected.isFile) continue
             val audio = WavReader.read(wav)
             val t0 = System.nanoTime()

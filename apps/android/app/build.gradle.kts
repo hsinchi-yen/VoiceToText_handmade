@@ -18,13 +18,16 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
-        // sherpa-onnx ships these two ABIs for us (arm64 phones, x86_64 emulator).
-        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
     buildTypes {
+        debug {
+            // x86_64 only for the emulator; it never ships in release.
+            ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        }
         release {
             isMinifyEnabled = false
+            ndk { abiFilters += "arm64-v8a" }
         }
     }
 
@@ -97,7 +100,7 @@ abstract class FetchSherpaOnnx @Inject constructor(
             tmp.delete()
             throw GradleException("SHA-256 mismatch for $url: expected $expectedSha256, got $actual")
         }
-        tmp.renameTo(dest)
+        if (!tmp.renameTo(dest)) throw GradleException("Cannot move $tmp to $dest")
         return dest
     }
 
@@ -144,7 +147,8 @@ val fetchSherpaOnnx = tasks.register<FetchSherpaOnnx>("fetchSherpaOnnx") {
     tag.set("v2.0.1")
     kotlinDir.set(layout.buildDirectory.dir("sherpa-onnx/kotlin"))
     jniLibsDir.set(layout.buildDirectory.dir("sherpa-onnx/jniLibs"))
-    cacheDir.set(layout.buildDirectory.dir("sherpa-onnx/cache"))
+    // Outside build/ so `clean` does not force a re-download (apps/android/.gradle is git-ignored).
+    cacheDir.set(rootProject.layout.projectDirectory.dir(".gradle/sherpa-onnx-cache"))
 }
 
 androidComponents {

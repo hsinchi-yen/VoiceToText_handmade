@@ -19,6 +19,9 @@ interface LocalAsr {
      * Throws [IllegalStateException] when the model is not ready.
      */
     fun transcribe(pcm: ShortArray, rate: Int): String
+
+    /** Frees native memory. Call when the keyboard goes away; [transcribe] reloads on demand. */
+    fun release() {}
 }
 
 /**
@@ -81,7 +84,7 @@ class SherpaLocalAsr(
     }
 
     @Synchronized
-    fun release() {
+    override fun release() {
         recognizer?.release()
         recognizer = null
     }

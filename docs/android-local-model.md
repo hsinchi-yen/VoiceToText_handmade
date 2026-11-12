@@ -20,7 +20,7 @@
 
 ### 1.2 候選模型
 
-下載網址的前綴都是 `https://huggingface.co/csukuangfj/<repo>/resolve/main/<檔名>`。雜湊與大小來自 Hugging Face 檔案清單的 LFS sha256；`tokens` 檔沒有 LFS 雜湊，雜湊是實際下載後計算的。
+下載網址是 `https://huggingface.co/csukuangfj/<repo>/resolve/<commit>/<檔名>`，**釘在 commit 上**（不用會移動的 `main`：上游一更新，所有人的檔案雜湊就會不符，每次重試都白下載約 240 MB）。commit：SenseVoice int8 2025-09-09 → `355f4d4884d8afd08aef04b9007a8556d7b463b2`；paraformer-zh-2023-09-14 → `def027084691107096b5ebba69785756d63de6c5`；whisper-small → `8f3c18b358db4d1f2fc1eae49d75cd20989e4309`。雜湊與大小來自 Hugging Face 檔案清單的 LFS sha256；`tokens` 檔沒有 LFS 雜湊，雜湊是實際下載後計算的。
 
 **1. SenseVoice-Small int8（預設）**，repo `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`
 
@@ -63,9 +63,9 @@
 - 從 `v2.0.1` tag 下載 5 個 Kotlin 原始檔（每個檔案的 sha256 寫死在 `KOTLIN_FILES`）與 `sherpa-onnx-v2.0.1-android.tar.bz2`（sha256 寫死在 `ANDROID_ARCHIVE_SHA256`），不符就讓建置失敗。
 - 只取 `arm64-v8a`、`x86_64` 的 `libonnxruntime.so` 與 `libsherpa-onnx-jni.so`。
 - 輸出到 `apps/android/app/build/sherpa-onnx/`（git 已忽略），以產生的 Kotlin／jniLibs 來源目錄接進每個 variant。
-- 第一次建置需要網路；下載的檔案快取在 `build/sherpa-onnx/cache/`，`clean` 會清掉。不需要安裝任何系統軟體。
+- 第一次建置需要網路；下載的檔案快取在 `apps/android/.gradle/sherpa-onnx-cache/`（git 已忽略，`clean` 不會清掉）。不需要安裝任何系統軟體。
 - 升級版本：改 `tag`，並更新六個雜湊（算法與本文相同：下載後 `sha256sum`，再與 GitHub release asset 的 `digest` 比對）。
-- APK 大小：debug APK 約 87 MB（兩個 ABI 的 onnxruntime 各約 22–29 MB）。要縮小可只留 `arm64-v8a`。
+- ABI：debug 打包 `arm64-v8a` 與 `x86_64`（模擬器用）；release 只打包 `arm64-v8a`（`buildTypes.release.ndk.abiFilters`）。debug APK 約 87 MB。
 - 開啟 minify 時要保留 `com.k2fsa.sherpa.onnx.**`（JNI 以名稱呼叫）。目前 `isMinifyEnabled = false`。
 
 ## 3. 程式結構（`app.v2c.ime.asr.local`）
@@ -80,6 +80,8 @@
 | `Cer.kt` | 字錯率與 WAV 讀取（比較工具用，放在 main 以便單元測試） |
 
 - **zh_tw 後處理**：`ZhTwConverter` 介面，預設 `Identity`。T2.3 把 `v2c-ffi` 的 `to_zh_tw` 接進 Gradle 後，由 T2.4 在建立 `SherpaLocalAsr` 時傳入。SenseVoice 輸出簡體，所以**接上之前**比較工具量到的中文 CER 會偏高（簡繁字形算成錯字）。
+- `LocalModelDownloader` 的 `start`／`cancel`／`delete` 都立刻返回、可在主執行緒呼叫，實際工作在下載執行緒。下載前先檢查可用空間（剩餘位元組＋64 MB），不足回報「儲存空間」；寫檔錯誤是「儲存空間」、讀取／連線錯誤是「中斷」；HTTP 206 的 `Content-Range` 起點必須等於要求的偏移。
+- Whisper 一次只能處理 30 秒以內的音訊；T2.4 接進鍵盤時，超過 30 秒的錄音必須先切段再逐段辨識。
 - 日誌只記模型 id、取樣數、字數、毫秒，不記辨識文字。
 - 鍵盤要用的東西：`LocalModelDownloader.state`／`addListener` 提供進度；`LocalModelPrompt(...)` 放進鍵盤版面（T2.4）。「已問過」旗標由 T2.4 存在 App 私有偏好檔。
 - 需要 `android.permission.INTERNET`：`AndroidManifest.xml` 不在本卡允許修改的範圍，主 manifest **還沒有**這個權限（T2.4 的卡片有寫），所以 release 版目前下載不會成功；debug 版在 `src/debug/AndroidManifest.xml` 加了，供比較工具使用。
@@ -89,6 +91,7 @@
 `app.v2c.ime.asr.local.debug.CompareActivity`，輸出只有數字（字錯率、延遲、即時倍率），不記錄、不顯示、不寫入辨識文字。
 
 1. 準備錄音：`tests/fixtures/audio` 裡每段 `名稱.wav`（16-bit PCM）與 `名稱.txt`（期望文字）。
+   （若 `名稱.raw.txt` 存在，工具以它為期望文字；有些 `.txt` 是潤飾後的文字，不是實際說的話。）
 2. 安裝 debug APK，放進手機：
    ```sh
    adb push tests/fixtures/audio/. /sdcard/Android/data/app.v2c.ime/files/compare/
@@ -99,6 +102,8 @@
 5. 延遲不含模型載入（暖機另外記為 `load_ms`）。
 
 ### 比較表（待填，需要人工在手機上跑）
+
+注意：SenseVoice 輸出簡體字。**必須等 `to_zh_tw`（T2.3 FFI）接進 `SherpaLocalAsr` 之後，這張表的 CER 才能當作決定預設模型的依據**；在那之前簡繁字形會被算成錯字，只能參考延遲。
 
 | 模型 | 手機型號 | CER（接 zh_tw 後） | 延遲中位數 ms | 最大延遲 ms | RTF | 載入 ms | 下載大小 |
 |------|----------|--------------------|---------------|-------------|-----|---------|----------|

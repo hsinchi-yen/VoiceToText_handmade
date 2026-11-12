@@ -35,6 +35,7 @@ data class LocalModelSpec(
 
 object LocalModels {
     private const val HF = "https://huggingface.co/csukuangfj"
+    // URLs are pinned to commits: a moved "main" would make every download fail the SHA-256 check.
 
     /** Default candidate. Chinese/English/Japanese/Korean/Cantonese, int8. */
     val SENSE_VOICE_INT8 = LocalModelSpec(
@@ -44,13 +45,13 @@ object LocalModels {
         files = listOf(
             ModelFile(
                 name = "model.int8.onnx",
-                url = "$HF/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/resolve/main/model.int8.onnx",
+                url = "$HF/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/resolve/355f4d4884d8afd08aef04b9007a8556d7b463b2/model.int8.onnx",
                 sizeBytes = 237_115_547L,
                 sha256 = "12ca1a2ae7ecf3e0019ef2822307ee0b5cadc9196569e379b4c4026f8205276d",
             ),
             ModelFile(
                 name = "tokens.txt",
-                url = "$HF/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/resolve/main/tokens.txt",
+                url = "$HF/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/resolve/355f4d4884d8afd08aef04b9007a8556d7b463b2/tokens.txt",
                 sizeBytes = 315_894L,
                 sha256 = "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
             ),
@@ -65,13 +66,13 @@ object LocalModels {
         files = listOf(
             ModelFile(
                 name = "model.int8.onnx",
-                url = "$HF/sherpa-onnx-paraformer-zh-2023-09-14/resolve/main/model.int8.onnx",
+                url = "$HF/sherpa-onnx-paraformer-zh-2023-09-14/resolve/def027084691107096b5ebba69785756d63de6c5/model.int8.onnx",
                 sizeBytes = 243_371_218L,
                 sha256 = "f36a0433bcf096bd6d6f11b80a3ac8bed110bdca632fe0d731df8d1a84475945",
             ),
             ModelFile(
                 name = "tokens.txt",
-                url = "$HF/sherpa-onnx-paraformer-zh-2023-09-14/resolve/main/tokens.txt",
+                url = "$HF/sherpa-onnx-paraformer-zh-2023-09-14/resolve/def027084691107096b5ebba69785756d63de6c5/tokens.txt",
                 sizeBytes = 75_756L,
                 sha256 = "59aba8873a2ed1e122c25fee421e25f283b63290efbde85c1f01a853d83cb6e6",
             ),
@@ -87,19 +88,19 @@ object LocalModels {
         files = listOf(
             ModelFile(
                 name = "small-encoder.int8.onnx",
-                url = "$HF/sherpa-onnx-whisper-small/resolve/main/small-encoder.int8.onnx",
+                url = "$HF/sherpa-onnx-whisper-small/resolve/8f3c18b358db4d1f2fc1eae49d75cd20989e4309/small-encoder.int8.onnx",
                 sizeBytes = 112_442_483L,
                 sha256 = "4cbe7b22fa9026b843b60a68640c747de05bafb1a11b57edc0e66c232d9f33a9",
             ),
             ModelFile(
                 name = "small-decoder.int8.onnx",
-                url = "$HF/sherpa-onnx-whisper-small/resolve/main/small-decoder.int8.onnx",
+                url = "$HF/sherpa-onnx-whisper-small/resolve/8f3c18b358db4d1f2fc1eae49d75cd20989e4309/small-decoder.int8.onnx",
                 sizeBytes = 262_226_114L,
                 sha256 = "acad50b5c782696e91b55914cc5ab4f756f1532f76e22aa6fc615f39fb69a8ee",
             ),
             ModelFile(
                 name = "small-tokens.txt",
-                url = "$HF/sherpa-onnx-whisper-small/resolve/main/small-tokens.txt",
+                url = "$HF/sherpa-onnx-whisper-small/resolve/8f3c18b358db4d1f2fc1eae49d75cd20989e4309/small-tokens.txt",
                 sizeBytes = 816_730L,
                 sha256 = "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
             ),
