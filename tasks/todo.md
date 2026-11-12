@@ -172,3 +172,19 @@
   - [x] 2026-11-11：Linux 語音辨識定案為遠端 `tea-asr-1`＋本機 SenseVoice 備援（`docs/linux-setup.md` 第 3、4 節）
   - [x] 2026-11-11：IBus 限制「輸入來源不是 v2c 時右 Ctrl 沒反應」決定保留並寫進文件（第 6.3 節）
   - [ ] 🧑 實機安裝 .deb、按住說話成功後才算通過（只有模擬測試通過，不算實機交付）
+
+## Phase 4 — 介面精簡、預設組態檔、新圖示（0.2.0，2026-11-12）
+> 計畫：`tasks/plan.md` 第 13 節；Linux 交接：`linux_handover.md`。規格直接寫在 agent 指示裡（沒有 `cards/T4.*.md`）；每張都經 Opus 獨立審查後合併到本機 main。
+- [x] W18 T4.0 設計 token＋共用元件＋4 項導覽（舊網址轉址）＋dev-mock＋`npm run check`／`npm test`
+- [x] W18 T4.1 預設組態檔 TN／RD＋`presets_*` 指令＋套用對話框（審查修正：不覆蓋非自己的服務、端點一改就刪舊金鑰、能力驗證、拒絕網路路徑）
+- [x] W18 T4.5 圖示候選；你選定方案 B（對話氣泡＋麥克風＋黃色 V），系統列淺／深兩版
+- [x] W19 T4.2 首頁（狀態卡、目前使用中、預設組態卡、常用設定立即儲存）
+- [x] W19 T4.3 設定頁（常用 4 項＋收合的「進階」、底部「重新執行初次設定」；儲存行為不變）
+- [x] W19 T4.4 服務頁依 TN／RD／其他分組；詞庫與紀錄、初次設定、浮動標籤換新樣式
+- [x] W20 T4.6a 套用圖示 B、系統列依工作列主題切換（Windows 每 3 秒讀登錄）、導覽列標誌、版本 0.2.0
+- [x] W20 T4.6b `docs/`、README 改寫
+- [x] W20 T4.7 浮動標籤：錄音＝黑底綠色心電圖波形、辨識／潤飾＝進度條、不顯示狀態文字、完成 250 ms 淡出；免持右側「按右 Ctrl 結束」
+- [x] main 上 `cargo test --workspace`、clippy、fmt、`npm run check`／`test`／`build` 全部通過
+- [ ] Windows 安裝檔 `releases/v2c_0.2.0_x64-setup.exe`
+- [ ] 🧑 檢查點 4（Windows）：安裝 0.2.0，TN、RD 各套用一次並實際說話；確認介面夠簡潔、浮動標籤順暢（見 human-checklist）
+- [ ] Linux：依 `linux_handover.md` 建置與驗收；🧑 決定 Wayland 通知是否精簡（第 4.1 節）

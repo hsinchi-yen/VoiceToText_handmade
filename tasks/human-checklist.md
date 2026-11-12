@@ -186,4 +186,17 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] T3.6 Secret Service 寫入測試：`V2C_SECRET_REAL_WRITE=1 cargo test -p v2c-platform -- --ignored secret_real_write`（會在 login 鑰匙圈建立再刪除 `v2c-test` 項目）
 - [ ] T3.7 安裝 .deb：在 `releases/linux/` 執行 `sha256sum -c --ignore-missing SHA256SUMS.txt`，再 `sudo apt install ./v2c_0.1.6_amd64.deb`，`ibus restart`，加入「v2c 語音輸入」輸入來源，實機按住右 Ctrl 說話（含切到 v2c 時由 ibus-daemon 啟動 `v2c --ibus`）。步驟見 `docs/linux-setup.md` 第 7 節（「設定」視窗加不進輸入來源時用 7.2.1 的指令）
 - [ ] T3.7（選做）AppImage：`./v2c_0.1.6_amd64.AppImage` 能否啟動（需要 libfuse2）
+## Phase 4（0.2.0：介面精簡、預設組態、新圖示、新浮動標籤）
+- [ ] 安裝 `releases\v2c_0.2.0_x64-setup.exe`（核對 `releases\SHA256SUMS.txt`）
+- [ ] 首頁 → 套用預設組態 → TN → 選「TN TEA-ASR」→ 套用：三個端點測試連線通過，首頁「預設組態」卡顯示「TN 區網服務」；再選一次「TN Breeze-ASR」並貼金鑰
+- [ ] RD（`10.88.95.2`）沒實測過：套用 RD，確認模型名稱自動偵測正確、`:8002` 是否真的需要金鑰；切回 TN 時 TN 的金鑰仍在
+- [ ] 按住右 Ctrl 說話：浮動標籤是黑底綠色波形 → 進度條 → 淡出，沒有「錄音中／完成」文字；文字輸出的感覺比 0.1.6 順
+- [ ] 雙擊右 Ctrl 免持：波形左邊綠點、右邊「按右 Ctrl 結束」；單擊結束
+- [ ] 浮動標籤外圍是透明的（淺色與深色 Windows 主題都看）
+- [ ] 系統列圖示：Windows「設定 → 個人化 → 色彩」切換工作列淺／深色，約 3 秒內圖示跟著換
+- [ ] 設定頁預設只看到常用 4 項；「進階」可展開；改一項不儲存就切頁會詢問
+- [ ] 從系統列「輸入紀錄」直接開到「詞庫與紀錄 → 輸入紀錄」分頁
+- [ ] 整體是否比 0.1.6 簡潔；有覺得複雜的地方記下來
+- [ ] Linux：照 `linux_handover.md` 第 3、4 節；決定 Wayland 通知是否只在出錯時跳出（第 4.1 節）
+
 - [ ] 錄音檔已推上 GitHub（`34fcbe2`）：`tests/fixtures/audio/README.md` 寫的是「不會進 git」，若要公開 repo 請確認
