@@ -116,13 +116,13 @@ fn tray_variant(system_uses_light: Option<u32>) -> TrayVariant {
     }
 }
 
-fn variant_icon(variant: TrayVariant) -> Option<Image<'static>> {
+fn variant_icon(variant: TrayVariant) -> Image<'static> {
     // `Image::new` borrows; `to_owned` is not needed for `'static` data.
     let bytes = match variant {
         TrayVariant::Light => TRAY_LIGHT_RGBA,
         TrayVariant::Dark => TRAY_DARK_RGBA,
     };
-    Some(Image::new(bytes, TRAY_ICON_SIZE, TRAY_ICON_SIZE))
+    Image::new(bytes, TRAY_ICON_SIZE, TRAY_ICON_SIZE)
 }
 
 /// Reads the taskbar theme from the registry (Windows); Linux always uses the dark variant.
@@ -156,7 +156,7 @@ fn current_variant() -> TrayVariant {
 
 #[cfg(not(windows))]
 fn current_variant() -> TrayVariant {
-    TrayVariant::Dark
+    tray_variant(None)
 }
 
 /// Windows has no cheap "taskbar theme changed" hook that reaches us (the webview's theme
@@ -173,8 +173,8 @@ fn watch_taskbar_theme(app: &AppHandle, initial: TrayVariant) {
             if now == shown {
                 continue;
             }
-            if let (Some(tray), Some(icon)) = (app.tray_by_id("v2c"), variant_icon(now)) {
-                if tray.set_icon(Some(icon)).is_ok() {
+            if let Some(tray) = app.tray_by_id("v2c") {
+                if tray.set_icon(Some(variant_icon(now))).is_ok() {
                     info!(variant = now.name(), "tray icon variant changed");
                     shown = now;
                 }
@@ -232,11 +232,7 @@ pub fn start(app: &AppHandle) -> tauri::Result<()> {
             }
         });
     let variant = current_variant();
-    if let Some(icon) = variant_icon(variant) {
-        builder = builder.icon(icon);
-    } else if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
-    }
+    builder = builder.icon(variant_icon(variant));
     builder.build(app)?;
     info!(variant = variant.name(), "tray icon created");
     watch_taskbar_theme(app, variant);
