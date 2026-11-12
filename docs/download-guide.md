@@ -7,7 +7,7 @@ GitHub repo 只放原始碼與文件。下面這些檔案太大、或是你本�
 | SenseVoice-Small（int8） | 約 163 MB（壓縮檔） | CPU 語音辨識（備援） | App 初次設定自動下載，或手動下載（見下方） |
 | Breeze-ASR-25 GGML q5_0 | 約 1.08 GB | GPU 語音辨識（預設） | 自己轉檔（見下方） |
 | Breeze-ASR-25 GGML q8_0 | 約 1.66 GB | GPU 語音辨識（稍準、多用約 0.5 GB 顯存） | 自己轉檔 |
-| TEA-ASR-1.1 GGUF Q8_0 | 約 2.18 GB | GPU 語音辨識（手動選用，台灣華語與中英夾雜較準） | 設定頁下載，或手動下載（見下方） |
+| TEA-ASR-1.1 GGUF Q8_0 | 約 2.18 GB | GPU 語音辨識（手動選用，台灣華語與中英夾雜較準） | 「設定 → 進階 → 地端語音模型」下載，或手動下載（見下方） |
 | LM Studio 語言模型 | 約 2 GB | 潤飾、中翻英（選用） | 在 LM Studio 裡下載 |
 | Windows 安裝檔 `v2c_<版本>_x64-setup.exe` | 約 439 MB | 安裝 v2c | 自己建置，見 [build-guide.md](build-guide.md)；建好的檔案在 repo 的 `releases\`（附 `SHA256SUMS.txt`） |
 | 測試錄音 `tests/fixtures/audio/*.wav` | 每個約 0.1～0.3 MB | `v2c-cli bench` 量測 | 自己錄，見 [tests/fixtures/audio/README.md](../tests/fixtures/audio/README.md) |
@@ -26,7 +26,7 @@ GitHub repo 只放原始碼與文件。下面這些檔案太大、或是你本�
    └─ tokens.txt
 ```
 
-也可以在 App 的「初次設定」或「設定 → 語音模型」用「匯入」選檔案，v2c 會先驗證 SHA-256 再複製進去。
+也可以在 App 的「初次設定」用「匯入」選檔案，v2c 會先驗證 SHA-256 再複製進去。
 
 開發時（`cargo run`、`v2c-cli`），模型放在 repo 根目錄的 `models\`（不進 git）。
 
@@ -75,7 +75,7 @@ powershell -ExecutionPolicy Bypass -File tools\convert-breeze\convert-breeze.ps1
 - 大小：2,184,763,808 bytes
 - SHA-256：`2e4aeb45c9e7f421d99909e29e49a54e204d70ed0e77bebc3f18a135d78298d0`
 
-設定頁「地端語音模型 → TEA-ASR-1.1 模型 → 下載」會自動下載並驗證；手動放置的步驟與使用方式見 [local-setup.md](local-setup.md#安裝-tea-asr-11-模型)。
+「設定 → 進階 → 地端語音模型 → TEA-ASR-1.1 模型 → 下載」會自動下載並驗證；手動放置的步驟與使用方式見 [local-setup.md](local-setup.md#安裝-tea-asr-11-模型)。
 
 ## LM Studio 語言模型（選用）
 
