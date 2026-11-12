@@ -188,4 +188,6 @@
 - [x] main 上 `cargo test --workspace`、clippy、fmt、`npm run check`／`test`／`build` 全部通過
 - [x] Windows 安裝檔 `releases/v2c_0.2.0_x64-setup.exe`（2026-11-12 重建，含 T4.8；CUDA 版，458.1 MiB，SHA-256 `4eb66fd4…eda162c`，建置機 Defender 掃描無威脅）
 - [ ] 🧑 檢查點 4（Windows）：安裝 0.2.0，TN、RD 各套用一次並實際說話；確認介面夠簡潔、浮動標籤順暢（見 human-checklist）
-- [ ] Linux：依 `linux_handover.md` 建置與驗收；🧑 決定 Wayland 通知是否精簡（第 4.1 節）
+- [x] Linux：`linux_handover.md` 第 3 節建置與測試通過（2026-11-12，Ubuntu 22.04）
+- [x] W21 T4.9 Wayland 通知比照 0.2.0 浮動標籤精簡：正常說話不跳通知，只在出錯、文字沒輸入時通知；免持開始跳「按右 Ctrl 結束」（`linux_app/notes.rs`、`v2c-platform` `NotifyStatus::HandsFree`）
+- [ ] 🧑 Linux 實機驗收（`linux_handover.md` 第 4.2～4.5 節）

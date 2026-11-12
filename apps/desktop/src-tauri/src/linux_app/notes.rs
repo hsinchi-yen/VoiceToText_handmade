@@ -1,6 +1,11 @@
 //! Desktop notifications on Linux (T3.4 `DbusNotifier`): controller status events on Wayland,
 //! where the overlay is off, plus IBus and kept-text notices on any session.
 //!
+//! Like the 0.2.0 overlay, which shows no status text, a normal utterance (recording,
+//! recognising, polishing, done) shows no bubble (T4.9). Only what needs the user's attention
+//! does: errors, kept text, and the hands-free hint 「按右 Ctrl 結束」 (the overlay shows it
+//! beside the waveform; Wayland has no overlay).
+//!
 //! [`StatusNotes`] maps [`StatusEvent`]s to notifications (pure, unit-tested). [`Notes`]
 //! sends them to one background thread that owns the D-Bus connection, so a slow or missing
 //! notification daemon never blocks the controller or the UI thread. Notifications carry
@@ -54,11 +59,23 @@ pub fn error_kind(code: &str) -> Option<NotifyErrorKind> {
     })
 }
 
-/// Turns the controller's status stream into notifications: one bubble per utterance,
-/// updated in place (`Recording` arrives every 50 ms; only the first one shows).
+/// Which bubble [`StatusNotes`] last opened.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum Open {
+    #[default]
+    Nothing,
+    HandsFree,
+    Error,
+}
+
+/// Turns the controller's status stream into notifications. Progress is silent; an error or
+/// the hands-free hint opens a bubble. The hint closes when the recording ends; an error from
+/// an earlier utterance closes when the next recording starts (`Recording` arrives every
+/// 50 ms; only state changes produce a note).
 #[derive(Debug, Default)]
 pub struct StatusNotes {
     recording: bool,
+    open: Open,
 }
 
 impl StatusNotes {
@@ -68,17 +85,36 @@ impl StatusNotes {
             matches!(ev, StatusEvent::Recording { .. }),
         );
         match ev {
-            StatusEvent::Recording { .. } if was_recording => None,
-            StatusEvent::Recording { .. } => Some(Note::Show(NotifyStatus::Recording)),
-            StatusEvent::Transcribing => Some(Note::Show(NotifyStatus::Recognizing)),
-            StatusEvent::Polishing => Some(Note::Show(NotifyStatus::Polishing)),
-            StatusEvent::Done { chars: 0, .. } | StatusEvent::Cancelled => Some(Note::Dismiss),
-            StatusEvent::Done { .. } => Some(Note::Show(NotifyStatus::Done)),
-            StatusEvent::MicReady => None,
-            StatusEvent::Error { code } => {
-                error_kind(code).map(|k| Note::Show(NotifyStatus::Error(k)))
+            StatusEvent::Recording { hands_free, .. } => {
+                if *hands_free && self.open != Open::HandsFree {
+                    // Replaces whatever bubble is open.
+                    self.open = Open::HandsFree;
+                    Some(Note::Show(NotifyStatus::HandsFree))
+                } else if !was_recording && self.open == Open::Error {
+                    self.open = Open::Nothing;
+                    Some(Note::Dismiss)
+                } else {
+                    None
+                }
             }
+            StatusEvent::Transcribing
+            | StatusEvent::Polishing
+            | StatusEvent::Done { .. }
+            | StatusEvent::Cancelled => self.close_hint(),
+            StatusEvent::MicReady => None,
+            StatusEvent::Error { code } => error_kind(code).map(|k| {
+                self.open = Open::Error;
+                Note::Show(NotifyStatus::Error(k))
+            }),
         }
+    }
+
+    /// Closes the hands-free hint once the recording is over; leaves an error bubble alone.
+    fn close_hint(&mut self) -> Option<Note> {
+        (self.open == Open::HandsFree).then(|| {
+            self.open = Open::Nothing;
+            Note::Dismiss
+        })
     }
 }
 
@@ -156,49 +192,68 @@ mod tests {
         }
     }
 
+    fn hf(rms: f32) -> StatusEvent {
+        StatusEvent::Recording {
+            rms,
+            hands_free: true,
+        }
+    }
+
+    fn done(chars: usize) -> StatusEvent {
+        StatusEvent::Done {
+            chars,
+            latency_ms: 900,
+        }
+    }
+
     #[test]
-    fn one_bubble_per_utterance() {
+    fn normal_utterance_shows_no_bubble() {
         let mut s = StatusNotes::default();
         let evs = [
             rec(0.1),
             rec(0.2),
-            rec(0.3),
             StatusEvent::Transcribing,
             StatusEvent::Polishing,
-            StatusEvent::Done {
-                chars: 12,
-                latency_ms: 900,
-            },
-            rec(0.1),
+            done(12),
             rec(0.1),
             StatusEvent::Cancelled,
+            rec(0.0),
+            StatusEvent::Transcribing,
+            done(0),
+            StatusEvent::MicReady,
         ];
         let notes: Vec<_> = evs.iter().filter_map(|e| s.on_status(e)).collect();
-        assert_eq!(
-            notes,
-            vec![
-                Note::Show(NotifyStatus::Recording),
-                Note::Show(NotifyStatus::Recognizing),
-                Note::Show(NotifyStatus::Polishing),
-                Note::Show(NotifyStatus::Done),
-                Note::Show(NotifyStatus::Recording),
-                Note::Dismiss,
-            ]
-        );
+        assert_eq!(notes, vec![]);
     }
 
     #[test]
-    fn nothing_recognised_closes_the_bubble() {
+    fn hands_free_hint_shows_once_and_closes_when_recording_ends() {
+        for end in [StatusEvent::Transcribing, StatusEvent::Cancelled, done(5)] {
+            let mut s = StatusNotes::default();
+            let evs = [
+                rec(0.1),
+                hf(0.1),
+                hf(0.2),
+                hf(0.3),
+                end.clone(),
+                StatusEvent::Polishing,
+                done(5),
+            ];
+            let notes: Vec<_> = evs.iter().filter_map(|e| s.on_status(e)).collect();
+            assert_eq!(
+                notes,
+                vec![Note::Show(NotifyStatus::HandsFree), Note::Dismiss],
+                "{end:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_recognised_closes_the_hint() {
         let mut s = StatusNotes::default();
-        s.on_status(&rec(0.0));
-        s.on_status(&StatusEvent::Transcribing);
-        assert_eq!(
-            s.on_status(&StatusEvent::Done {
-                chars: 0,
-                latency_ms: 10
-            }),
-            Some(Note::Dismiss)
-        );
+        s.on_status(&hf(0.0));
+        assert_eq!(s.on_status(&done(0)), Some(Note::Dismiss));
+        assert_eq!(s.on_status(&rec(0.1)), None);
     }
 
     #[test]
@@ -229,18 +284,34 @@ mod tests {
     }
 
     #[test]
-    fn notice_after_done_does_not_replace_done() {
+    fn quiet_notice_after_done_shows_nothing() {
         let mut s = StatusNotes::default();
-        s.on_status(&StatusEvent::Done {
-            chars: 3,
-            latency_ms: 1,
-        });
+        s.on_status(&done(3));
         assert_eq!(
             s.on_status(&StatusEvent::Error {
                 code: "polish_timed_out"
             }),
             None
         );
+    }
+
+    #[test]
+    fn error_after_done_stays_until_the_next_recording() {
+        let mut s = StatusNotes::default();
+        s.on_status(&rec(0.1));
+        s.on_status(&StatusEvent::Transcribing);
+        assert_eq!(
+            s.on_status(&StatusEvent::Error { code: "asr_failed" }),
+            Some(Note::Show(NotifyStatus::Error(
+                NotifyErrorKind::RecognitionFailed
+            )))
+        );
+        // A later Done or Cancelled of the same utterance does not close it.
+        assert_eq!(s.on_status(&done(0)), None);
+        assert_eq!(s.on_status(&StatusEvent::Cancelled), None);
+        // The next recording does, once.
+        assert_eq!(s.on_status(&rec(0.1)), Some(Note::Dismiss));
+        assert_eq!(s.on_status(&rec(0.1)), None);
     }
 
     #[test]
@@ -253,10 +324,13 @@ mod tests {
                 NotifyErrorKind::MicrophoneUnavailable
             )))
         );
-        // The next recording shows again.
+        // The next recording closes the error bubble; going hands-free replaces it.
+        assert_eq!(s.on_status(&rec(0.1)), Some(Note::Dismiss));
+        s.on_status(&StatusEvent::Error { code: "mic_lost" });
+        s.on_status(&StatusEvent::Cancelled);
         assert_eq!(
-            s.on_status(&rec(0.1)),
-            Some(Note::Show(NotifyStatus::Recording))
+            s.on_status(&hf(0.1)),
+            Some(Note::Show(NotifyStatus::HandsFree))
         );
     }
 
