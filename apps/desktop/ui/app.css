@@ -1,40 +1,306 @@
+/*
+ * v2c design tokens (Material 3 Expressive style, own blue-violet palette) and the global
+ * baseline. Components in ui/lib/ read only these variables; pages that are not restyled yet
+ * pick up the baseline (native controls, .hint/.ok/.bad/.link) and so still look consistent.
+ * System fonts only: no downloads, no external URLs (CSP).
+ */
+
 :root {
-  font-family: "Segoe UI", "Microsoft JhengHei UI", system-ui, sans-serif;
-  font-size: 15px;
-  color: #1f2328;
-  background: #f6f8fa;
+  color-scheme: light dark;
+
+  /* Color roles, light. */
+  --md-primary: #5a4fcf;
+  --md-on-primary: #ffffff;
+  --md-primary-container: #e3dfff;
+  --md-on-primary-container: #16095f;
+  --md-secondary-container: #e4e0f4;
+  --md-on-secondary-container: #1b1a2c;
+  --md-surface: #fcf8ff;
+  --md-surface-container-lowest: #ffffff;
+  --md-surface-container-low: #f6f2fb;
+  --md-surface-container: #f0ecf6;
+  --md-surface-container-high: #eae6f0;
+  --md-surface-container-highest: #e4e1ea;
+  --md-on-surface: #1c1b20;
+  --md-on-surface-variant: #47464f;
+  --md-outline: #78767f;
+  --md-outline-variant: #c8c5d0;
+  --md-error: #ba1a1a;
+  --md-on-error: #ffffff;
+  --md-error-container: #ffdad6;
+  --md-on-error-container: #410002;
+  --md-success: #1b6e3a;
+  --md-success-container: #c8f0d2;
+  --md-warning: #8a5a00;
+  --md-warning-container: #ffe3b0;
+  --md-scrim: rgb(0 0 0 / 0.4);
+
+  /* Shape. */
+  --md-radius-xs: 4px;
+  --md-radius-sm: 8px;
+  --md-radius-md: 12px;
+  --md-radius-lg: 16px;
+  --md-radius-xl: 28px;
+  --md-radius-full: 9999px;
+
+  /* Spacing, 4px scale. */
+  --md-space-1: 4px;
+  --md-space-2: 8px;
+  --md-space-3: 12px;
+  --md-space-4: 16px;
+  --md-space-5: 20px;
+  --md-space-6: 24px;
+  --md-space-8: 32px;
+  --md-space-10: 40px;
+  --md-space-12: 48px;
+
+  /* Type scale: size / line-height / weight per role. */
+  --md-font: "Segoe UI Variable", "Segoe UI", "Microsoft JhengHei UI", "Noto Sans CJK TC", system-ui, sans-serif;
+  --md-type-display-size: 36px;
+  --md-type-display-line: 44px;
+  --md-type-display-weight: 600;
+  --md-type-headline-size: 26px;
+  --md-type-headline-line: 34px;
+  --md-type-headline-weight: 600;
+  --md-type-title-size: 18px;
+  --md-type-title-line: 26px;
+  --md-type-title-weight: 600;
+  --md-type-title-sm-size: 15px;
+  --md-type-title-sm-line: 22px;
+  --md-type-title-sm-weight: 600;
+  --md-type-body-size: 15px;
+  --md-type-body-line: 22px;
+  --md-type-body-weight: 400;
+  --md-type-body-sm-size: 13px;
+  --md-type-body-sm-line: 19px;
+  --md-type-body-sm-weight: 400;
+  --md-type-label-size: 14px;
+  --md-type-label-line: 20px;
+  --md-type-label-weight: 600;
+  --md-type-label-sm-size: 12px;
+  --md-type-label-sm-line: 16px;
+  --md-type-label-sm-weight: 600;
+
+  /* Motion. Expressive = a slight overshoot on the emphasized curve. */
+  --md-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --md-ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+  --md-ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --md-duration-short: 120ms;
+  --md-duration-medium: 240ms;
+  --md-duration-long: 400ms;
+
+  --md-focus-ring: 0 0 0 2px var(--md-surface), 0 0 0 4px var(--md-primary);
+  --md-nav-rail-width: 80px;
+  --md-nav-bar-height: 72px;
+
+  font-family: var(--md-font);
+  font-size: var(--md-type-body-size);
+  line-height: var(--md-type-body-line);
+  color: var(--md-on-surface);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    color: #e6edf3;
-    background: #0d1117;
+    --md-primary: #c6c0ff;
+    --md-on-primary: #2a1b9a;
+    --md-primary-container: #41369f;
+    --md-on-primary-container: #e3dfff;
+    --md-secondary-container: #4a4760;
+    --md-on-secondary-container: #e4e0f4;
+    --md-surface: #141318;
+    --md-surface-container-lowest: #0f0e13;
+    --md-surface-container-low: #1c1b20;
+    --md-surface-container: #201f25;
+    --md-surface-container-high: #2b292f;
+    --md-surface-container-highest: #36343a;
+    --md-on-surface: #e5e1e9;
+    --md-on-surface-variant: #c8c5d0;
+    --md-outline: #928f99;
+    --md-outline-variant: #47464f;
+    --md-error: #ffb4ab;
+    --md-on-error: #690005;
+    --md-error-container: #93000a;
+    --md-on-error-container: #ffdad6;
+    --md-success: #7bd89a;
+    --md-success-container: #0b3d1e;
+    --md-warning: #f0bf5f;
+    --md-warning-container: #4a3300;
+    --md-scrim: rgb(0 0 0 / 0.6);
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --md-duration-short: 0ms;
+    --md-duration-medium: 0ms;
+    --md-duration-long: 0ms;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/*
+ * Page backgrounds. The overlay window is transparent: main.js/App.svelte put the class
+ * "overlay" on <html> for #/overlay (before the first paint), which skips the backgrounds and
+ * resets color-scheme (a dark/light canvas would otherwise be opaque).
+ */
+html:not(.overlay),
+html:not(.overlay) body {
+  background: var(--md-surface);
+}
+
+html.overlay {
+  color-scheme: normal;
+  background: transparent;
+}
+
+html.overlay body {
+  background: transparent;
 }
 
 body {
   margin: 0;
+  color: var(--md-on-surface);
+  font-family: var(--md-font);
+  font-size: var(--md-type-body-size);
+  line-height: var(--md-type-body-line);
+  overflow-x: hidden;
 }
 
-nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 0.75rem;
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+h1 {
+  margin: 0 0 var(--md-space-3);
+  font-size: var(--md-type-headline-size);
+  line-height: var(--md-type-headline-line);
+  font-weight: var(--md-type-headline-weight);
 }
 
-nav a {
-  color: inherit;
-  text-decoration: none;
-  opacity: 0.7;
+h2 {
+  font-size: var(--md-type-title-size);
+  line-height: var(--md-type-title-line);
+  font-weight: var(--md-type-title-weight);
 }
 
-nav a.active {
-  opacity: 1;
-  font-weight: 600;
+h3 {
+  font-size: var(--md-type-title-sm-size);
+  line-height: var(--md-type-title-sm-line);
+  font-weight: var(--md-type-title-sm-weight);
 }
 
-main {
-  padding: 1rem;
+a {
+  color: var(--md-primary);
+}
+
+/* Shared text helpers for pages that are not restyled yet. */
+.hint {
+  color: var(--md-on-surface-variant);
+  font-size: var(--md-type-body-sm-size);
+  line-height: var(--md-type-body-sm-line);
+}
+
+.ok {
+  color: var(--md-success);
+}
+
+.bad {
+  color: var(--md-error);
+}
+
+.link {
+  background: none;
+  border: none;
+  padding: 0;
+  min-height: 0;
+  color: var(--md-primary);
+  cursor: pointer;
+  text-decoration: underline;
+  font: inherit;
+}
+
+/*
+ * Baseline for native controls. :where() keeps specificity at zero, so any component or page
+ * style wins over it.
+ */
+:where(button) {
+  min-height: 36px;
+  padding: 0 var(--md-space-4);
+  border: 1px solid var(--md-outline);
+  border-radius: var(--md-radius-full);
+  background: transparent;
+  color: var(--md-primary);
+  font: inherit;
+  font-size: var(--md-type-label-size);
+  font-weight: var(--md-type-label-weight);
+  cursor: pointer;
+  transition:
+    background-color var(--md-duration-short) var(--md-ease-standard),
+    box-shadow var(--md-duration-short) var(--md-ease-standard);
+}
+
+:where(button:hover:not(:disabled)) {
+  background: color-mix(in srgb, var(--md-primary) 8%, transparent);
+}
+
+:where(button:active:not(:disabled)) {
+  background: color-mix(in srgb, var(--md-primary) 14%, transparent);
+}
+
+:where(button:disabled, input:disabled, select:disabled, textarea:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+:where(input:not([type="checkbox"], [type="radio"], [type="range"]), select, textarea) {
+  min-height: 36px;
+  padding: 0 var(--md-space-3);
+  border: 1px solid var(--md-outline);
+  border-radius: var(--md-radius-sm);
+  background: var(--md-surface-container-lowest);
+  color: var(--md-on-surface);
+  font: inherit;
+}
+
+:where(textarea) {
+  padding: var(--md-space-2) var(--md-space-3);
+}
+
+:where(input[type="checkbox"], input[type="radio"]) {
+  width: 18px;
+  height: 18px;
+  margin: 0 var(--md-space-1) 0 0;
+  vertical-align: middle;
+  accent-color: var(--md-primary);
+}
+
+:where(input::placeholder, textarea::placeholder) {
+  color: var(--md-on-surface-variant);
+  opacity: 0.8;
+}
+
+/* One visible focus ring for everything focusable by keyboard. */
+:focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: 2px;
+}
+
+:where(input:focus-visible, select:focus-visible, textarea:focus-visible) {
+  outline-offset: 0;
+  border-color: var(--md-primary);
+}
+
+:where(table) {
+  border-collapse: collapse;
+}
+
+:where(hr) {
+  border: none;
+  border-top: 1px solid var(--md-outline-variant);
+}
+
+:where(code, pre, kbd) {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.92em;
 }

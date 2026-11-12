@@ -2,58 +2,87 @@
   import { invoke } from "@tauri-apps/api/core";
   import Home from "./routes/Home.svelte";
   import Settings from "./routes/Settings.svelte";
-  import Vocab from "./routes/Vocab.svelte";
-  import History from "./routes/History.svelte";
+  import Library from "./routes/Library.svelte";
   import CloudSetup from "./routes/CloudSetup.svelte";
   import Overlay from "./routes/Overlay.svelte";
   import Onboarding from "./routes/Onboarding.svelte";
+  import NavRail from "./lib/NavRail.svelte";
+  import { NAV_ITEMS, activeNavPath, libraryTab, parseHash, resolveRoute } from "./lib/nav.js";
   import { resumeStep, skipped as onboardingSkipped } from "./onboarding/api.js";
 
-  // Hash routes: #/settings, #/vocab, ... The overlay window (T1.3) loads #/overlay.
-  const routes = {
-    "": { page: Home, label: "狀態" },
-    settings: { page: Settings, label: "設定" },
-    vocab: { page: Vocab, label: "詞庫" },
-    history: { page: History, label: "紀錄" },
-    "cloud-setup": { page: CloudSetup, label: "雲端服務" },
-    onboarding: { page: Onboarding, label: "初次設定" },
-    overlay: { page: Overlay, label: "浮動標籤" },
+  // Hash routes (see lib/nav.js): #/ #/services #/library?tab=vocab|history #/settings, plus
+  // #/onboarding (not in the menu) and #/overlay (the floating window, no menu).
+  // Old URLs (#/cloud-setup, #/vocab, #/history) are replaced by their new place.
+  const pages = {
+    "": Home,
+    services: CloudSetup,
+    library: Library,
+    settings: Settings,
+    onboarding: Onboarding,
+    overlay: Overlay,
   };
 
-  const current = () => location.hash.replace(/^#\/?/, "");
-  let route = $state(current());
+  let hash = $state(location.hash);
+  const route = $derived(resolveRoute(hash));
   $effect(() => {
-    const onHash = () => (route = current());
+    const onHash = () => (hash = location.hash);
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
+  });
+  $effect(() => {
+    if (route.redirect) location.replace(route.redirect);
+  });
+  $effect(() => {
+    document.documentElement.classList.toggle("overlay", route.path === "overlay");
   });
 
   // First run: open onboarding when no local model exists (or to resume it after the
   // restart that loads newly installed models). Not after the user skipped it.
   $effect(() => {
-    if (current() === "overlay") return;
+    if (resolveRoute(location.hash).path === "overlay") return;
     invoke("onboarding_status")
       .then((s) => {
         const open = (s.needed && !onboardingSkipped()) || resumeStep();
-        if (open && current() === "") location.hash = "#/onboarding";
+        // Only the bare home URL (empty hash or "#/"); unknown routes just show Home.
+        if (open && parseHash(location.hash).path === "") location.hash = "#/onboarding";
       })
       .catch(() => {});
   });
 
-  const Page = $derived((routes[route] ?? routes[""]).page);
-  // Every page except the overlay is always in the menu, onboarding included (2026-11-11
-  // decision: the cloud page is reachable from the first run on).
-  const menu = Object.entries(routes).filter(([path]) => path !== "overlay");
+  const Page = $derived(pages[route.path] ?? Home);
+  const overlay = $derived(route.path === "overlay");
 </script>
 
-{#if route !== "overlay"}
-  <nav>
-    {#each menu as [path, r] (path)}
-      <a href={"#/" + path} class:active={route === path}>{r.label}</a>
-    {/each}
-  </nav>
+{#if overlay}
+  <Page />
+{:else}
+  <NavRail items={NAV_ITEMS} current={activeNavPath(route.path)} />
+  <main>
+    <div class="page">
+      {#if route.path === "library"}
+        <Library tab={libraryTab(route.query)} />
+      {:else}
+        <Page />
+      {/if}
+    </div>
+  </main>
 {/if}
 
-<main>
-  <Page />
-</main>
+<style>
+  main {
+    margin-left: var(--md-nav-rail-width);
+    padding: var(--md-space-6);
+  }
+  .page {
+    max-width: 960px;
+    margin: 0 auto;
+    min-width: 0;
+  }
+  @media (max-width: 599px) {
+    main {
+      margin-left: 0;
+      padding: var(--md-space-4);
+      padding-bottom: calc(var(--md-nav-bar-height) + var(--md-space-4));
+    }
+  }
+</style>
