@@ -4,6 +4,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import * as api from "../settings/api.js";
+  import { displayName } from "../cloud-setup/api.js";
   import * as presets from "../presets/api.js";
   import RuntimeStatus from "../settings/RuntimeStatus.svelte";
   import PresetDialog from "../presets/PresetDialog.svelte";
@@ -41,6 +42,7 @@
   let asr = $state("");
   let saving = $state(false);
   let error = $state("");
+  let presetsFailed = $state(false);
 
   function onStatus(s) {
     if (!s) return;
@@ -63,7 +65,7 @@
     const uns = [];
     invoke("app_info").then((i) => (info = i)).catch(() => {});
     invoke("last_status").then(onStatus).catch(() => {});
-    presets.list().then((l) => (presetList = l)).catch(() => {});
+    presets.list().then((l) => (presetList = l)).catch(() => (presetsFailed = true));
     loadSettings();
     listen("v2c:status", (e) => onStatus(e.payload)).then((u) => (alive ? uns.push(u) : u()));
     listen("v2c:config-changed", loadSettings).then((u) => (alive ? uns.push(u) : u()));
@@ -105,7 +107,9 @@
     status?.kind === "error" && (status.code === "model_missing" || status.code === "sensevoice_not_available"),
   );
   const presetTitle = $derived(view ? activePreset(view.config.route, presetList) : "");
-  const serviceLabel = (s) => `${api.kindLabels[s.kind] ?? s.kind}：${s.display_name ?? s.name ?? s.id}`;
+  // settings_get gives cloud rows as {id, kind, supports_asr}; names live in config.cloud.
+  const serviceLabel = (s) =>
+    `${api.kindLabels[s.kind] ?? s.kind}：${displayName(view.config.cloud.find((c) => c.id === s.id) ?? s)}`;
   const asrOptions = $derived(view ? asrSelectOptions(api.localAsrOptions(view), view.cloud, serviceLabel) : []);
   const keys = [
     { combo: ["右 Ctrl"], text: "說話" },
@@ -122,7 +126,8 @@
     <div class="hero-text">
       <p class="state">{hero.title}</p>
       {#if hero.sub}<p class="sub">{hero.sub}</p>{/if}
-      {#if heroDetail}<p class="sub">{heroDetail}</p>{/if}
+      {#if hero.note}<p class="sub">{hero.note}</p>{/if}
+      {#if heroDetail && !hero.note}<p class="sub">{heroDetail}</p>{/if}
       {#if hero.tone === "ready" && status?.kind !== "recording"}
         <p class="sub">{latency != null ? `上次放開到出字 ${latency} ms` : "放開後文字會輸入到游標位置"}</p>
       {/if}
@@ -130,9 +135,9 @@
         <p class="sub"><a href="#/onboarding">前往初次設定</a>　或　<a href="#/services">改用雲端服務</a></p>
       {/if}
     </div>
-    {#if status?.kind === "recording"}
-      <div class="meter"><LinearProgress value={level} label="音量" /></div>
-    {/if}
+    <div class="meter">
+      {#if status?.kind === "recording"}<LinearProgress value={level} label="音量" />{/if}
+    </div>
     <ul class="chips" aria-label="快速鍵">
       {#each keys as k (k.text)}
         <li>
@@ -155,6 +160,7 @@
         <h2 id="preset-title">預設組態</h2>
         {#if view}
           <p class="current"><Icon name="services" size={20} /> <strong>{presetTitle}</strong></p>
+          {#if presetsFailed}<p class="hint">讀不到預設組態清單，目前組態可能顯示為「自訂」。</p>{/if}
         {:else}
           <p class="hint">讀取中…</p>
         {/if}
@@ -257,6 +263,9 @@
   }
   .sub a {
     color: inherit;
+  }
+  .meter {
+    min-height: 4px;
   }
   .meter,
   .chips {

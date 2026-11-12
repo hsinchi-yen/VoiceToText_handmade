@@ -160,7 +160,7 @@
       <Select label="語音辨識使用" bind:value={asrChoice} options={asrOptions} />
     {:else}
       <div class="group">
-        <span class="label" id="asr-label">語音辨識使用</span>
+        <span class="label">語音辨識使用</span>
         <SegmentedButton bind:value={asrChoice} options={asrOptions} label="語音辨識使用" />
       </div>
     {/if}

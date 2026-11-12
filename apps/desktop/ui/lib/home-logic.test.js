@@ -34,6 +34,17 @@ describe("heroState", () => {
   it("model loading is not a problem", () => {
     expect(heroState({ kind: "error", code: "asr_loading" }, {}).tone).toBe("loading");
   });
+  it("notice codes stay ready with a note", () => {
+    const h = heroState({ kind: "error", code: "gpu_restored" }, {});
+    expect(h.tone).toBe("ready");
+    expect(h.note).toContain("顯示卡");
+    const c = heroState({ kind: "error", code: "cloud_fell_back" }, {});
+    expect(c.tone).toBe("ready");
+    expect(c.note).toBe("雲端服務失敗，已改用地端");
+  });
+  it("hands-free recording says how to stop", () => {
+    expect(heroState({ kind: "recording", rms: 0, hands_free: true }, {}).sub).toBe("再按一下右 Ctrl 停止");
+  });
   it("other errors are problems", () => {
     expect(heroState({ kind: "error", code: "mic_not_found" }, {}).title).toBe("有問題");
   });

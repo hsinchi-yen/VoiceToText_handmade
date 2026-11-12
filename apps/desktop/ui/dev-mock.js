@@ -130,7 +130,8 @@ function settingsView(cfg) {
   return {
     config: { ...clone(cfg), cloud: clone(services) },
     asr_choice,
-    cloud: clone(services),
+    // Real settings_get returns ServiceRef rows only; names live in config.cloud.
+    cloud: services.map(({ id, kind, supports_asr }) => ({ id, kind, supports_asr })),
     breeze_q5_0: true,
     breeze_q8_0: false,
     sensevoice: true,
