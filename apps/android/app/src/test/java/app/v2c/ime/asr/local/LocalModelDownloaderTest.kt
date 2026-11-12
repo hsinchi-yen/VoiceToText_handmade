@@ -285,6 +285,113 @@ class LocalModelDownloaderTest {
         assertEquals(-1L, HttpModelFetcher.contentRangeStart("garbage"))
     }
 
+    private fun serve(url: String, offset: Long): InputStream {
+        val data = if (url.endsWith("a")) blobA else blobB
+        return ByteArrayInputStream(data.copyOfRange(offset.toInt(), data.size))
+    }
+
+    @Test
+    fun deleteArrivingWhileTheRunIsEndingIsNotLost() {
+        lateinit var d: LocalModelDownloader
+        var fired = false
+        d = downloader(FakeFetcher())
+        d.addListener {
+            // Ready is published after the run took its delete flag but before it cleared `running`.
+            if (it == DownloadState.Ready && !fired) {
+                fired = true
+                d.delete()
+            }
+        }
+
+        d.download()
+
+        assertEquals(DownloadState.NotDownloaded, d.state)
+        assertFalse(d.modelDir.exists())
+    }
+
+    @Test
+    fun cancelRightAfterStartNeverOpensTheConnection() {
+        var opens = 0
+        val d = LocalModelDownloader(spec, tmp.root, { _, _ -> opens++; throw IOException("offline") }, queuedExecutor)
+        d.start()
+        d.cancel()
+        queue.removeFirst().run()
+
+        assertEquals(0, opens)
+        assertEquals(DownloadState.NotDownloaded, d.state)
+    }
+
+    @Test
+    fun writeErrorIsStorageNotInterrupted() {
+        val dir = File(tmp.root, spec.id).apply { mkdirs() }
+        File(dir, "a.bin.part").mkdirs() // a directory where the partial file must go
+        val d = downloader(FakeFetcher())
+
+        assertEquals(DownloadState.Failed(DownloadFailure.STORAGE), d.download())
+    }
+
+    @Test
+    fun failingCloseDoesNotCountAsStorageError() {
+        val closeFails = ModelFetcher { url, offset ->
+            val inner = serve(url, offset)
+            FetchResponse(
+                object : InputStream() {
+                    override fun read(): Int = inner.read()
+                    override fun read(b: ByteArray, off: Int, len: Int): Int = inner.read(b, off, len)
+                    override fun close() = throw IOException("close failed")
+                },
+                offset > 0,
+            )
+        }
+        assertEquals(DownloadState.Ready, downloader(closeFails).download())
+
+        val readAndCloseFail = ModelFetcher { _, _ ->
+            FetchResponse(
+                object : InputStream() {
+                    override fun read(): Int = throw IOException("reset")
+                    override fun read(b: ByteArray, off: Int, len: Int): Int = throw IOException("reset")
+                    override fun close() = throw IOException("close failed")
+                },
+                false,
+            )
+        }
+        val d2 = LocalModelDownloader(spec.copy(id = "t2"), tmp.root, readAndCloseFail, directExecutor)
+        assertEquals(DownloadState.Failed(DownloadFailure.INTERRUPTED), d2.download())
+    }
+
+    @Test
+    fun startAfterCancelWhileRunIsEndingStillDownloads() {
+        lateinit var d: LocalModelDownloader
+        val offsets = mutableListOf<Long>()
+        val fetcher = ModelFetcher { url, offset ->
+            offsets += offset
+            val inner = serve(url, offset)
+            if (offsets.size == 1) {
+                FetchResponse(
+                    object : InputStream() {
+                        override fun read(): Int = inner.read()
+                        override fun read(b: ByteArray, off: Int, len: Int): Int {
+                            d.cancel()
+                            return inner.read(b, off, minOf(len, 65_536))
+                        }
+                    },
+                    false,
+                )
+            } else {
+                FetchResponse(inner, offset > 0)
+            }
+        }
+        d = downloader(fetcher)
+        // The run ends as NotDownloaded (cancelled); the user taps again before it fully finished.
+        d.addListener { if (it == DownloadState.NotDownloaded) d.start() }
+
+        d.download()
+
+        assertEquals(DownloadState.Ready, d.state)
+        assertTrue(offsets[1] > 0) // resumed from the kept partial file
+        assertTrue(d.path("a.bin").readBytes().contentEquals(blobA))
+    }
+
     @Test
     fun progressFractionIsClamped() {
         assertEquals(0f, DownloadState.Downloading(0, 0).fraction, 0f)

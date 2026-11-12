@@ -91,6 +91,7 @@ class LocalModelDownloader(
     private val listeners = CopyOnWriteArrayList<(DownloadState) -> Unit>()
     private val lock = Any()
     private var running = false
+    private var startPending = false
 
     @Volatile private var cancelRequested = false
     @Volatile private var deleteRequested = false
@@ -112,22 +113,32 @@ class LocalModelDownloader(
     /** Absolute path of a verified model file. Only meaningful when [isReady]. */
     fun path(name: String): File = File(modelDir, name)
 
-    /** Starts (or resumes) the download in the background. No-op while one is running or when ready. */
+    /**
+     * Starts (or resumes) the download in the background. No-op when ready. While a run is still
+     * finishing (for example right after [cancel]) the start is remembered and begins as soon as
+     * that run ends.
+     */
     fun start() {
         synchronized(lock) {
-            if (running || state == DownloadState.Ready) return
-            running = true
+            if (state == DownloadState.Ready) return
             // Reset here, not on the executor thread: a cancel() issued right after start()
             // must not be overwritten when the queued task finally runs.
-            cancelRequested = false
-            deleteRequested = false
+            if (!deleteRequested) cancelRequested = false
+            if (running) {
+                startPending = true
+                return
+            }
+            running = true
         }
         executor.execute { run() }
     }
 
-    /** Stops a running download; partial data is kept so [start] can resume. */
+    /** Stops a running download; partial data is kept so [start] can resume. Also drops a pending start. */
     fun cancel() {
-        cancelRequested = true
+        synchronized(lock) {
+            cancelRequested = true
+            startPending = false
+        }
     }
 
     /** Removes the model files (also partial ones), stopping a running download first. Non-blocking. */
@@ -135,6 +146,7 @@ class LocalModelDownloader(
         synchronized(lock) {
             deleteRequested = true
             cancelRequested = true
+            startPending = false
             if (running) return
             running = true
         }
@@ -153,12 +165,19 @@ class LocalModelDownloader(
         return state
     }
 
+    private fun takeDeleteRequest(): Boolean = synchronized(lock) {
+        val d = deleteRequested
+        deleteRequested = false
+        d
+    }
+
     private fun run() {
         try {
-            if (deleteRequested) {
+            if (takeDeleteRequest()) {
                 wipe()
                 return
             }
+            synchronized(lock) { startPending = false }
             val result = try {
                 downloadAll()
             } catch (e: IOException) {
@@ -166,16 +185,23 @@ class LocalModelDownloader(
             } catch (e: Exception) {
                 DownloadState.Failed(DownloadFailure.INTERRUPTED)
             }
-            if (deleteRequested) wipe() else publish(result)
+            if (takeDeleteRequest()) wipe() else publish(result)
         } finally {
-            synchronized(lock) {
-                running = false
-                deleteRequested = false
+            // A delete() or start() that arrived while this run was ending is not lost: run again.
+            val again = synchronized(lock) {
+                if (deleteRequested || startPending) {
+                    true
+                } else {
+                    running = false
+                    false
+                }
             }
+            if (again) executor.execute { run() }
         }
     }
 
     private fun downloadAll(): DownloadState {
+        if (cancelRequested) return DownloadState.NotDownloaded
         if (!modelDir.isDirectory && !modelDir.mkdirs()) return DownloadState.Failed(DownloadFailure.STORAGE)
         val total = spec.totalBytes
         val remaining = spec.files.sumOf { f ->
@@ -256,6 +282,7 @@ class LocalModelDownloader(
         doneBefore: Long,
         total: Long,
     ): DownloadState.Failed? {
+        if (cancelRequested) return null // caller maps a set cancel flag to NotDownloaded
         val response = try {
             fetcher.open(file.url, offset)
         } catch (e: BadResponseException) {
@@ -263,7 +290,7 @@ class LocalModelDownloader(
         } catch (e: IOException) {
             throw ReadFailure(e)
         }
-        response.use {
+        try {
             val start = if (offset > 0 && !response.resumed) 0L else offset
             RandomAccessFile(part, "rw").use { out ->
                 out.setLength(start)
@@ -288,6 +315,12 @@ class LocalModelDownloader(
                         publish(DownloadState.Downloading(doneBefore + written, total))
                     }
                 }
+            }
+        } finally {
+            // A failing close() is network-side noise: ignore it, never report it as STORAGE.
+            try {
+                response.close()
+            } catch (_: IOException) {
             }
         }
         return null

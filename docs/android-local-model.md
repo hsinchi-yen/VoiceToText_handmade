@@ -80,7 +80,7 @@
 | `Cer.kt` | 字錯率與 WAV 讀取（比較工具用，放在 main 以便單元測試） |
 
 - **zh_tw 後處理**：`ZhTwConverter` 介面，預設 `Identity`。T2.3 把 `v2c-ffi` 的 `to_zh_tw` 接進 Gradle 後，由 T2.4 在建立 `SherpaLocalAsr` 時傳入。SenseVoice 輸出簡體，所以**接上之前**比較工具量到的中文 CER 會偏高（簡繁字形算成錯字）。
-- `LocalModelDownloader` 的 `start`／`cancel`／`delete` 都立刻返回、可在主執行緒呼叫，實際工作在下載執行緒。下載前先檢查可用空間（剩餘位元組＋64 MB），不足回報「儲存空間」；寫檔錯誤是「儲存空間」、讀取／連線錯誤是「中斷」；HTTP 206 的 `Content-Range` 起點必須等於要求的偏移。
+- `LocalModelDownloader` 的 `start`／`cancel`／`delete` 都立刻返回、可在主執行緒呼叫，實際工作在下載執行緒。`cancel()` 之後立刻 `start()`（舊的一輪還在收尾）會被記住，舊的一輪結束後馬上續傳；`start()` 後立刻 `cancel()` 不會連線；收尾時才到的 `delete()` 也不會漏掉。下載前先檢查可用空間（剩餘位元組＋64 MB），不足回報「儲存空間」；寫檔錯誤是「儲存空間」、讀取／連線錯誤是「中斷」；HTTP 206 的 `Content-Range` 起點必須等於要求的偏移。
 - Whisper 一次只能處理 30 秒以內的音訊；T2.4 接進鍵盤時，超過 30 秒的錄音必須先切段再逐段辨識。
 - 日誌只記模型 id、取樣數、字數、毫秒，不記辨識文字。
 - 鍵盤要用的東西：`LocalModelDownloader.state`／`addListener` 提供進度；`LocalModelPrompt(...)` 放進鍵盤版面（T2.4）。「已問過」旗標由 T2.4 存在 App 私有偏好檔。

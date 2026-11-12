@@ -1,4 +1,6 @@
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.net.URI
 import java.security.MessageDigest
 import javax.inject.Inject
@@ -100,7 +102,12 @@ abstract class FetchSherpaOnnx @Inject constructor(
             tmp.delete()
             throw GradleException("SHA-256 mismatch for $url: expected $expectedSha256, got $actual")
         }
-        if (!tmp.renameTo(dest)) throw GradleException("Cannot move $tmp to $dest")
+        try {
+            // renameTo() does not overwrite on Windows; replace a stale or corrupt cached file.
+            Files.move(tmp.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        } catch (e: java.io.IOException) {
+            throw GradleException("Cannot move $tmp to $dest", e)
+        }
         return dest
     }
 
