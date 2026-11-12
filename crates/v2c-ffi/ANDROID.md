@@ -3,9 +3,9 @@
 > **Status (2026-11-12, branch `t2.5-android-release`): wired in `apps/android/app/build.gradle.kts`,
 > not yet build-verified** (no JDK/SDK/NDK/cargo-ndk where it was written). Sections 2-4 below are
 > implemented as `cargoNdk`, `generateUniffiKotlin` (typed tasks registered through
-> `addGeneratedSourceDirectory`) and `copyPresets`, all before `preBuild`; `CARGO_TARGET_DIR`
+> `addGeneratedSourceDirectory`) and `copyPresets`; `CARGO_TARGET_DIR`
 > (relative = against the repo root) and `~/.cargo/bin` (also `cargo.exe`) are honoured; release
-> builds only arm64-v8a, debug adds x86_64; `-Pv2c.skipRust=true` skips the two cargo tasks. JNA is
+> builds only arm64-v8a, debug adds x86_64; `-Pv2c.skipRust=true` leaves the generated `jniLibs` and bindings empty (lint-style runs only). JNA is
 > `net.java.dev.jna:jna:5.19.1@aar` (version in `libs.versions.toml`; 5.19.1 is the latest on Maven
 > Central, checked 2026-11-12; the 5.17.0 below was from memory). `app/proguard-rules.pro` holds the
 > R8 keep rules (JNA, `uniffi.v2c_ffi`, sherpa-onnx); R8 itself stays off until a minified build is

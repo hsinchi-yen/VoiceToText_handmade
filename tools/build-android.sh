@@ -63,7 +63,7 @@ if ! command -v "$java_bin" >/dev/null 2>&1; then
     Ubuntu: sudo apt install openjdk-17-jdk
     then:   export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64"
 else
-    java_major="$("$java_bin" -version 2>&1 | grep -m1 'version "' | sed 's/.*version "\([0-9]*\).*/\1/')"
+    java_major="$("$java_bin" -version 2>&1 | grep -m1 'version "' | sed 's/.*version "\([0-9]*\).*/\1/' || true)"
     if [[ -z "$java_major" || "$java_major" -lt 17 ]]; then
         add_missing "JDK 17 or newer required, found: ${java_major:-unknown}.
     Ubuntu: sudo apt install openjdk-17-jdk ; export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64"

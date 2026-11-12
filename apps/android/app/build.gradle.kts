@@ -206,7 +206,7 @@ androidComponents {
 // typed with declared outputs and registered as a generated source directory per variant (same
 // pattern as fetchSherpaOnnx), so Gradle wires the task dependencies itself.
 // Needs rustup targets + cargo-ndk + NDK (tools/build-android.* --check lists what is missing).
-// `-Pv2c.skipRust=true` makes the two cargo tasks do nothing (lint-style runs only: the FFI
+// `-Pv2c.skipRust=true` leaves the generated jniLibs and bindings empty (lint-style runs only: the FFI
 // Kotlin does not compile without the generated bindings).
 // ---------------------------------------------------------------------------------------------
 val repoRoot: File = rootProject.projectDir.parentFile.parentFile // apps/android -> repo root
@@ -304,7 +304,7 @@ val cargoNdk = tasks.register<CargoNdk>("cargoNdk") {
     cargo.set(cargoExe)
     abis.set(ndkAbis)
     skip.set(skipRust)
-    ndkDir.set(androidComponents.sdkComponents.ndkDirectory.map { it.asFile.path })
+    if (!skipRust) ndkDir.set(androidComponents.sdkComponents.ndkDirectory.map { it.asFile.path })
     repoDir.set(repoRoot)
     outDir.set(layout.buildDirectory.dir("v2c-ffi/jniLibs"))
     // cargo does its own incremental builds; always run it.
