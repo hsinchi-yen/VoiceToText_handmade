@@ -8,3 +8,8 @@ local.properties
 captures/
 .cxx/
 *.log
+
+# T2.5 signing secrets
+keystore.properties
+*.jks
+*.keystore
