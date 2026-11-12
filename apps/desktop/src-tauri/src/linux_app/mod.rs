@@ -16,7 +16,7 @@ pub mod launch;
 pub mod notes;
 
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::Manager;
 use tokio::sync::broadcast;
@@ -248,9 +248,24 @@ fn bridge_status_to_notes(mut rx: broadcast::Receiver<StatusEvent>, notes: Notes
     tauri::async_runtime::spawn(async move {
         let mut mapper = StatusNotes::default();
         loop {
-            match rx.recv().await {
+            // While the hands-free hint is open, wake up after a quiet spell to close it
+            // once its recording ended (the controller sends no event when it stops).
+            let received = if mapper.wants_idle() {
+                match tokio::time::timeout(notes::RECORDING_GAP, rx.recv()).await {
+                    Ok(r) => r,
+                    Err(_) => {
+                        if let Some(note) = mapper.on_idle(Instant::now()) {
+                            notes.send(note);
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                rx.recv().await
+            };
+            match received {
                 Ok(ev) => {
-                    if let Some(note) = mapper.on_status(&ev) {
+                    if let Some(note) = mapper.on_status(&ev, Instant::now()) {
                         notes.send(note);
                     }
                 }

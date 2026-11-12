@@ -68,40 +68,55 @@ enum Open {
     Error,
 }
 
+/// `Recording` arrives every 50 ms while recording; a longer gap means that recording ended
+/// (the controller sends no event when it stops, and the previous utterance's `Transcribing`
+/// / `Done` can arrive while the next one is recording).
+pub const RECORDING_GAP: Duration = Duration::from_millis(300);
+
 /// Turns the controller's status stream into notifications. Progress is silent; an error or
-/// the hands-free hint opens a bubble. The hint closes when the recording ends; an error from
-/// an earlier utterance closes when the next recording starts (`Recording` arrives every
-/// 50 ms; only state changes produce a note).
+/// the hands-free hint opens a bubble.
+/// - The hint shows once per recording and closes when that recording ends: after
+///   [`RECORDING_GAP`] without `Recording` ([`StatusNotes::on_idle`]) or on `Cancelled`.
+/// - An error stays until a new recording starts (not on the next 50 ms tick of the
+///   recording it arrived in). The hint never replaces an error.
 #[derive(Debug, Default)]
 pub struct StatusNotes {
-    recording: bool,
+    last_recording: Option<Instant>,
+    hint_shown: bool,
     open: Open,
 }
 
 impl StatusNotes {
-    pub fn on_status(&mut self, ev: &StatusEvent) -> Option<Note> {
-        let was_recording = std::mem::replace(
-            &mut self.recording,
-            matches!(ev, StatusEvent::Recording { .. }),
-        );
+    pub fn on_status(&mut self, ev: &StatusEvent, now: Instant) -> Option<Note> {
         match ev {
             StatusEvent::Recording { hands_free, .. } => {
-                if *hands_free && self.open != Open::HandsFree {
-                    // Replaces whatever bubble is open.
+                let starting = self
+                    .last_recording
+                    .is_none_or(|t| now.saturating_duration_since(t) > RECORDING_GAP);
+                self.last_recording = Some(now);
+                if starting {
+                    self.hint_shown = false;
+                }
+                if *hands_free && !self.hint_shown && self.open != Open::Error {
+                    // Replaces whatever bubble is open (one bubble id per notifier).
+                    self.hint_shown = true;
                     self.open = Open::HandsFree;
                     Some(Note::Show(NotifyStatus::HandsFree))
-                } else if !was_recording && self.open == Open::Error {
+                } else if starting && self.open != Open::Nothing {
                     self.open = Open::Nothing;
                     Some(Note::Dismiss)
                 } else {
                     None
                 }
             }
+            StatusEvent::Cancelled => {
+                self.last_recording = None;
+                self.close_hint()
+            }
             StatusEvent::Transcribing
             | StatusEvent::Polishing
             | StatusEvent::Done { .. }
-            | StatusEvent::Cancelled => self.close_hint(),
-            StatusEvent::MicReady => None,
+            | StatusEvent::MicReady => None,
             StatusEvent::Error { code } => error_kind(code).map(|k| {
                 self.open = Open::Error;
                 Note::Show(NotifyStatus::Error(k))
@@ -109,7 +124,23 @@ impl StatusNotes {
         }
     }
 
-    /// Closes the hands-free hint once the recording is over; leaves an error bubble alone.
+    /// Called when no event arrived for a while: closes the hint once its recording ended.
+    pub fn on_idle(&mut self, now: Instant) -> Option<Note> {
+        let ended = self
+            .last_recording
+            .is_none_or(|t| now.saturating_duration_since(t) > RECORDING_GAP);
+        if ended {
+            self.close_hint()
+        } else {
+            None
+        }
+    }
+
+    /// The hint is open: the caller should call [`StatusNotes::on_idle`] after a quiet spell.
+    pub fn wants_idle(&self) -> bool {
+        self.open == Open::HandsFree
+    }
+
     fn close_hint(&mut self) -> Option<Note> {
         (self.open == Open::HandsFree).then(|| {
             self.open = Open::Nothing;
@@ -206,54 +237,96 @@ mod tests {
         }
     }
 
+    fn err(code: &'static str) -> StatusEvent {
+        StatusEvent::Error { code }
+    }
+
+    /// Feeds events 50 ms apart; `None` in the list means a 1 s pause plus an idle call.
+    fn run(s: &mut StatusNotes, now: &mut Instant, evs: &[Option<StatusEvent>]) -> Vec<Note> {
+        let mut notes = Vec::new();
+        for e in evs {
+            match e {
+                Some(e) => {
+                    *now += Duration::from_millis(50);
+                    notes.extend(s.on_status(e, *now));
+                }
+                None => {
+                    *now += Duration::from_secs(1);
+                    notes.extend(s.on_idle(*now));
+                }
+            }
+        }
+        notes
+    }
+
     #[test]
     fn normal_utterance_shows_no_bubble() {
         let mut s = StatusNotes::default();
+        let mut now = Instant::now();
         let evs = [
-            rec(0.1),
-            rec(0.2),
-            StatusEvent::Transcribing,
-            StatusEvent::Polishing,
-            done(12),
-            rec(0.1),
-            StatusEvent::Cancelled,
-            rec(0.0),
-            StatusEvent::Transcribing,
-            done(0),
-            StatusEvent::MicReady,
+            Some(rec(0.1)),
+            Some(rec(0.2)),
+            None,
+            Some(StatusEvent::Transcribing),
+            Some(StatusEvent::Polishing),
+            Some(done(12)),
+            None,
+            Some(rec(0.1)),
+            Some(StatusEvent::Cancelled),
+            Some(rec(0.0)),
+            None,
+            Some(done(0)),
+            Some(StatusEvent::MicReady),
         ];
-        let notes: Vec<_> = evs.iter().filter_map(|e| s.on_status(e)).collect();
-        assert_eq!(notes, vec![]);
+        assert_eq!(run(&mut s, &mut now, &evs), vec![]);
+        assert!(!s.wants_idle());
     }
 
     #[test]
     fn hands_free_hint_shows_once_and_closes_when_recording_ends() {
-        for end in [StatusEvent::Transcribing, StatusEvent::Cancelled, done(5)] {
-            let mut s = StatusNotes::default();
-            let evs = [
-                rec(0.1),
-                hf(0.1),
-                hf(0.2),
-                hf(0.3),
-                end.clone(),
-                StatusEvent::Polishing,
-                done(5),
-            ];
-            let notes: Vec<_> = evs.iter().filter_map(|e| s.on_status(e)).collect();
-            assert_eq!(
-                notes,
-                vec![Note::Show(NotifyStatus::HandsFree), Note::Dismiss],
-                "{end:?}"
-            );
-        }
+        let mut s = StatusNotes::default();
+        let mut now = Instant::now();
+        let evs = [Some(rec(0.1)), Some(hf(0.1)), Some(hf(0.2)), Some(hf(0.3))];
+        assert_eq!(
+            run(&mut s, &mut now, &evs),
+            vec![Note::Show(NotifyStatus::HandsFree)]
+        );
+        assert!(s.wants_idle());
+        // Ticks stopped: the idle call closes it; later events add nothing.
+        let rest = [None, Some(StatusEvent::Transcribing), Some(done(5)), None];
+        assert_eq!(run(&mut s, &mut now, &rest), vec![Note::Dismiss]);
+
+        // Cancel closes it at once.
+        let mut s = StatusNotes::default();
+        let mut now = Instant::now();
+        let evs = [Some(rec(0.1)), Some(hf(0.1)), Some(StatusEvent::Cancelled)];
+        assert_eq!(
+            run(&mut s, &mut now, &evs),
+            vec![Note::Show(NotifyStatus::HandsFree), Note::Dismiss]
+        );
     }
 
     #[test]
-    fn nothing_recognised_closes_the_hint() {
+    fn previous_utterance_events_do_not_close_the_hint() {
         let mut s = StatusNotes::default();
-        s.on_status(&hf(0.0));
-        assert_eq!(s.on_status(&done(0)), Some(Note::Dismiss));
-        assert_eq!(s.on_status(&rec(0.1)), None);
+        let mut now = Instant::now();
+        // B goes hands-free while A is still being processed.
+        let evs = [
+            Some(rec(0.1)),
+            Some(hf(0.1)),
+            Some(StatusEvent::Transcribing),
+            Some(hf(0.1)),
+            Some(StatusEvent::Polishing),
+            Some(done(4)),
+            Some(hf(0.1)),
+        ];
+        assert_eq!(
+            run(&mut s, &mut now, &evs),
+            vec![Note::Show(NotifyStatus::HandsFree)]
+        );
+        // Idle while B is still recording (no gap yet) keeps it.
+        let now = s.last_recording.unwrap() + Duration::from_millis(100);
+        assert_eq!(s.on_idle(now), None);
     }
 
     #[test]
@@ -286,51 +359,84 @@ mod tests {
     #[test]
     fn quiet_notice_after_done_shows_nothing() {
         let mut s = StatusNotes::default();
-        s.on_status(&done(3));
+        let mut now = Instant::now();
         assert_eq!(
-            s.on_status(&StatusEvent::Error {
-                code: "polish_timed_out"
-            }),
-            None
+            run(
+                &mut s,
+                &mut now,
+                &[Some(done(3)), Some(err("polish_timed_out"))]
+            ),
+            vec![]
         );
     }
 
     #[test]
-    fn error_after_done_stays_until_the_next_recording() {
+    fn error_stays_until_a_new_recording_starts() {
+        let shown = Note::Show(NotifyStatus::Error(NotifyErrorKind::RecognitionFailed));
         let mut s = StatusNotes::default();
-        s.on_status(&rec(0.1));
-        s.on_status(&StatusEvent::Transcribing);
+        let mut now = Instant::now();
+        let evs = [
+            Some(rec(0.1)),
+            None,
+            Some(StatusEvent::Transcribing),
+            Some(err("asr_failed")),
+            Some(done(0)),
+            Some(StatusEvent::Cancelled),
+            None,
+        ];
+        assert_eq!(run(&mut s, &mut now, &evs), vec![shown]);
+        // The next recording closes it, once.
         assert_eq!(
-            s.on_status(&StatusEvent::Error { code: "asr_failed" }),
-            Some(Note::Show(NotifyStatus::Error(
-                NotifyErrorKind::RecognitionFailed
-            )))
+            run(&mut s, &mut now, &[Some(rec(0.1)), Some(rec(0.1))]),
+            vec![Note::Dismiss]
         );
-        // A later Done or Cancelled of the same utterance does not close it.
-        assert_eq!(s.on_status(&done(0)), None);
-        assert_eq!(s.on_status(&StatusEvent::Cancelled), None);
-        // The next recording does, once.
-        assert_eq!(s.on_status(&rec(0.1)), Some(Note::Dismiss));
-        assert_eq!(s.on_status(&rec(0.1)), None);
     }
 
     #[test]
-    fn error_during_recording_resets_the_bubble() {
+    fn error_during_recording_stays_while_recording_goes_on() {
+        let mic = Note::Show(NotifyStatus::Error(NotifyErrorKind::MicrophoneUnavailable));
         let mut s = StatusNotes::default();
-        s.on_status(&rec(0.1));
+        let mut now = Instant::now();
+        let evs = [
+            Some(rec(0.1)),
+            Some(err("mic_lost")),
+            Some(rec(0.1)),
+            Some(rec(0.1)),
+        ];
+        assert_eq!(run(&mut s, &mut now, &evs), vec![mic]);
+        // An earlier utterance's failure arriving mid-recording also stays.
+        let late = Note::Show(NotifyStatus::Error(NotifyErrorKind::RecognitionFailed));
         assert_eq!(
-            s.on_status(&StatusEvent::Error { code: "mic_lost" }),
-            Some(Note::Show(NotifyStatus::Error(
-                NotifyErrorKind::MicrophoneUnavailable
-            )))
+            run(
+                &mut s,
+                &mut now,
+                &[Some(err("asr_failed")), Some(rec(0.1)), Some(rec(0.1))]
+            ),
+            vec![late]
         );
-        // The next recording closes the error bubble; going hands-free replaces it.
-        assert_eq!(s.on_status(&rec(0.1)), Some(Note::Dismiss));
-        s.on_status(&StatusEvent::Error { code: "mic_lost" });
-        s.on_status(&StatusEvent::Cancelled);
+    }
+
+    #[test]
+    fn hint_never_replaces_an_error() {
+        let mic = Note::Show(NotifyStatus::Error(NotifyErrorKind::MicrophoneUnavailable));
+        let mut s = StatusNotes::default();
+        let mut now = Instant::now();
+        let evs = [
+            Some(rec(0.1)),
+            Some(hf(0.1)),
+            Some(err("mic_lost")),
+            Some(hf(0.1)),
+            Some(hf(0.1)),
+            None,
+        ];
         assert_eq!(
-            s.on_status(&hf(0.1)),
-            Some(Note::Show(NotifyStatus::HandsFree))
+            run(&mut s, &mut now, &evs),
+            vec![Note::Show(NotifyStatus::HandsFree), mic]
+        );
+        // Next recording closes the error; going hands-free shows the hint again.
+        assert_eq!(
+            run(&mut s, &mut now, &[Some(rec(0.1)), Some(hf(0.1))]),
+            vec![Note::Dismiss, Note::Show(NotifyStatus::HandsFree)]
         );
     }
 

@@ -63,6 +63,7 @@ bash tools/build-linux.sh                   # 產出 releases/linux/v2c_0.2.0_am
 ### 4.1 浮動標籤在 Wayland（已決定：選項 1，T4.9，2026-11-12）
 
 > 使用者指示「Windows 所優化的功能，Linux 比照辦理」，Linux 端採用選項 1：正常說話不跳通知，只在出錯、文字沒輸入時通知；免持開始時跳「免持模式：按右 Ctrl 結束」，錄音結束自動關閉。
+> 已知限制：所有通知共用同一個泡泡（`DbusNotifier` 的 `replaces_id`）。「文字沒有輸入」的通知（8 秒）還在時進入免持，會被免持提示取代；IBus 重新連上時的關閉也會關掉當下的泡泡。錄音結束的判斷是「300 ms 沒有錄音事件」（controller 停止錄音時不送事件）。
 
 - Linux 的浮動標籤只在非 Wayland（X11）開啟（`overlay_enabled()` 依 `XDG_SESSION_TYPE` 判斷，見 `src-tauri/src/main.rs`）；**Wayland 改用桌面通知**（`linux_app/notes.rs` → `crates/v2c-platform/src/linux/notify.rs` 的 `notification_for`），通知內容仍是「錄音中／辨識中／潤飾中」文字。
 - 這和 0.2.0「錄音／辨識／潤飾不顯示文字、只用波形與進度條」的設計不一致。通知無法畫波形，可選：
