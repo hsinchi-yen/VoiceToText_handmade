@@ -36,7 +36,7 @@ Use these CSS variables instead of hard-coded colors; light/dark switch by `pref
 | `Tabs` | Tab bar with roving tabindex and arrow keys | `value` (bindable id), `tabs` `[{id,label,icon?}]`, `idPrefix`, `label`, `onchange`. The caller renders the panel with `role="tabpanel"`, `id="{idPrefix}-panel-{id}"`, `aria-labelledby="{idPrefix}-tab-{id}"` (see `routes/Library.svelte`) |
 | `Banner` | Inline message | `variant` info\|success\|warning\|error, `title`, `onclose` (adds a dismiss button), children, `actions` snippet |
 | `LinearProgress` | Progress bar | `value` 0..1 (null = indeterminate), `label` |
-| `NavRail` | Main menu: left rail, bottom bar below 600px | `items` `[{path,label,icon}]`, `current`, `label` (used by `App.svelte`) |
+| `NavRail` | Main menu: left rail (with the v2c logo on top), bottom bar without logo below 600px | `items` `[{path,label,icon}]`, `current`, `label` (used by `App.svelte`) |
 | `Icon` | Inline SVG icon | `name`, `size` (24), `label` (omit for decorative) |
 
 Icon names (`icons.js`): home, services, cloud, library, settings, mic, check, error, warning, info,

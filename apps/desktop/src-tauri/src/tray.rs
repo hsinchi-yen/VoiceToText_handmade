@@ -10,6 +10,7 @@
 
 use std::path::Path;
 
+use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, Wry};
@@ -83,6 +84,108 @@ pub fn edit_config_text(text: &str, action: ConfigAction) -> Option<String> {
     apply(&mut new, action);
     config_edit::edit_text(text, &old, &new)
 }
+/// Which tray glyph to show: the glyph colour must contrast with the taskbar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrayVariant {
+    /// Dark glyph, for a light taskbar.
+    Light,
+    /// Light glyph, for a dark taskbar.
+    Dark,
+}
+
+impl TrayVariant {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+}
+
+// 32x32 straight-alpha RGBA, rendered from `icons/src/candidate-b-tray-*.svg`. Raw pixels (next
+// to the reviewable `.png` copies) avoid enabling tauri's `image-png`, which pulls in new crates.
+const TRAY_LIGHT_RGBA: &[u8] = include_bytes!("../icons/tray/tray-light.rgba");
+const TRAY_DARK_RGBA: &[u8] = include_bytes!("../icons/tray/tray-dark.rgba");
+const TRAY_ICON_SIZE: u32 = 32;
+
+/// `SystemUsesLightTheme` (1 = light taskbar) to a variant; 0 or missing means dark.
+fn tray_variant(system_uses_light: Option<u32>) -> TrayVariant {
+    match system_uses_light {
+        Some(1) => TrayVariant::Light,
+        _ => TrayVariant::Dark,
+    }
+}
+
+fn variant_icon(variant: TrayVariant) -> Option<Image<'static>> {
+    // `Image::new` borrows; `to_owned` is not needed for `'static` data.
+    let bytes = match variant {
+        TrayVariant::Light => TRAY_LIGHT_RGBA,
+        TrayVariant::Dark => TRAY_DARK_RGBA,
+    };
+    Some(Image::new(bytes, TRAY_ICON_SIZE, TRAY_ICON_SIZE))
+}
+
+/// Reads the taskbar theme from the registry (Windows); Linux always uses the dark variant.
+#[cfg(windows)]
+fn current_variant() -> TrayVariant {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+    let subkey: Vec<u16> = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let value: Vec<u16> = "SystemUsesLightTheme"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut data: u32 = 0;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    // SAFETY: both names are NUL-terminated; `data`/`size` point to a live u32 and its size.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            std::ptr::addr_of_mut!(data).cast(),
+            &mut size,
+        )
+    };
+    tray_variant((status == 0).then_some(data))
+}
+
+#[cfg(not(windows))]
+fn current_variant() -> TrayVariant {
+    TrayVariant::Dark
+}
+
+/// Windows has no cheap "taskbar theme changed" hook that reaches us (the webview's theme
+/// event follows the app theme, not the taskbar), so a small thread re-reads the registry
+/// value every few seconds and calls `set_icon` only when the variant changed.
+#[cfg(windows)]
+fn watch_taskbar_theme(app: &AppHandle, initial: TrayVariant) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let mut shown = initial;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            let now = current_variant();
+            if now == shown {
+                continue;
+            }
+            if let (Some(tray), Some(icon)) = (app.tray_by_id("v2c"), variant_icon(now)) {
+                if tray.set_icon(Some(icon)).is_ok() {
+                    info!(variant = now.name(), "tray icon variant changed");
+                    shown = now;
+                }
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn watch_taskbar_theme(_app: &AppHandle, _initial: TrayVariant) {}
+
 /// Builds the tray icon and its menu.
 pub fn start(app: &AppHandle) -> tauri::Result<()> {
     let polish_on = app.state::<AppState>().config.polish.enabled;
@@ -128,11 +231,15 @@ pub fn start(app: &AppHandle) -> tauri::Result<()> {
                 show_main(tray.app_handle(), "");
             }
         });
-    if let Some(icon) = app.default_window_icon() {
+    let variant = current_variant();
+    if let Some(icon) = variant_icon(variant) {
+        builder = builder.icon(icon);
+    } else if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone());
     }
     builder.build(app)?;
-    info!("tray icon created");
+    info!(variant = variant.name(), "tray icon created");
+    watch_taskbar_theme(app, variant);
     Ok(())
 }
 
@@ -201,6 +308,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d.join("config.toml")
+    }
+
+    #[test]
+    fn tray_variant_follows_the_taskbar_theme() {
+        assert_eq!(tray_variant(Some(1)), TrayVariant::Light);
+        assert_eq!(tray_variant(Some(0)), TrayVariant::Dark);
+        assert_eq!(tray_variant(None), TrayVariant::Dark);
+        assert_eq!(tray_variant(Some(7)), TrayVariant::Dark);
+    }
+
+    #[test]
+    fn embedded_tray_icons_have_the_expected_size() {
+        let pixels = (TRAY_ICON_SIZE * TRAY_ICON_SIZE * 4) as usize;
+        assert_eq!(TRAY_LIGHT_RGBA.len(), pixels);
+        assert_eq!(TRAY_DARK_RGBA.len(), pixels);
     }
 
     #[test]
