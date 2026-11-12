@@ -204,7 +204,7 @@ impl Registry {
         service_id: &str,
     ) -> Result<String, FfiError> {
         // 16-bit little-endian mono: an odd byte count is a broken buffer.
-        if pcm_le.is_empty() || pcm_le.len() % 2 != 0 || rate == 0 {
+        if pcm_le.is_empty() || !pcm_le.len().is_multiple_of(2) || rate == 0 {
             return Err(FfiError::InvalidAudio);
         }
         let svc = self.service(service_id)?;
@@ -214,8 +214,10 @@ impl Registry {
             .ok_or(FfiError::Unsupported)?;
         let clip = AudioClip {
             samples: pcm_le
-                .chunks_exact(2)
-                .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0)
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| f32::from(i16::from_le_bytes(*b)) / 32768.0)
                 .collect(),
             sample_rate: rate,
         };
