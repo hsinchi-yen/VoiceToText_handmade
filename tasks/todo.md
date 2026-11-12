@@ -88,7 +88,7 @@
 
 ## Phase 2 — Android
 - [x] T2.0 依 2026-11-12 的決定改寫 Phase 2 文件（`v2cplan.md` Android 各列與模型分工、`tasks/plan.md` 第 8 節、卡片 T2.1～T2.6、分派流程）：只有語音輸入＋中翻英、沒有設定頁；系統辨識＋本機模型＋區網 TEA／Breeze 融合；Typeless 式操作；Android 16／17；原 T2.7（預設組態搬進 core）取消
-- [ ] W8 T2.1 語音鍵盤 IME 最小路徑（Typeless 式大麥克風＋系統辨識）
+- [ ] W8 T2.1 語音鍵盤 IME 最小路徑（Typeless 式大麥克風＋系統辨識）— 程式碼完成（assembleDebug／lint／testDebugUnitTest 通過）；🧑 待辦：側載手機實測（LINE、Chrome；回報機型與 Android 版本）
 - [ ] W8 T2.3 v2c-ffi（uniffi＋cargo-ndk；`choose_asr`、`load_lan_services`、`transcribe_pcm`、`translate`）
   - [ ] 🧑 安裝 Android Rust 工具（見 human-checklist）
 - [ ] W9 T2.2 退格與換行
