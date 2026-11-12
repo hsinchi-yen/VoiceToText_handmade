@@ -22,7 +22,9 @@
 //! Validation rejects the whole preset (nothing is written) with a short error code.
 //! Keys: only ids listed in `needs_key` are accepted; a key is stored before `config.toml` is
 //! written and put back if the write fails (like `save_service`). If an existing preset
-//! service's host changes, its old key is deleted unless a new one is given.
+//! service's kind or endpoint (scheme, host, port, path) changes, its old key is deleted unless a
+//! new one is given (the wizard's rule); an identical endpoint keeps it. `[route] asr` in a
+//! file is ignored: the user's choice always wins.
 //!
 //! Logs: preset name (`TN`, `RD`, or `file`), service count, error code, elapsed ms. Never
 //! keys, never the file path.
@@ -42,8 +44,8 @@ use zeroize::Zeroize;
 
 use super::cloud::{
     blocking, check_caller, check_name_unique, config_lock, config_path, load_config,
-    normalize_name, parse_asr_timeout, secret_store, set_str, set_value, test_draft, update_config,
-    upsert_service, CloudDraft, MsInput,
+    normalize_name, parse_asr_timeout, same_endpoint, secret_store, set_str, set_value, test_draft,
+    update_config, upsert_service, CloudDraft, MsInput,
 };
 use crate::tray::CONFIG_CHANGED_EVENT;
 
@@ -56,6 +58,10 @@ const BUILTINS: &[(&str, &str)] = &[
     ("TN", include_str!("../../presets/TN_CUSTOM_LLM_ADDR.toml")),
     ("RD", include_str!("../../presets/RD_CUSTOM_LLM_ADDR.toml")),
 ];
+
+/// Base ids of the built-in service kinds (`cloud.rs` `id_base`) plus `local`: no preset
+/// prefix may start with one of these.
+const RESERVED_BASES: &[&str] = &["openai", "gemini", "claude", "custom", "local"];
 
 /// Top-level sections a preset may use.
 const WHITELIST: &[&str] = &["preset", "cloud", "route"];
@@ -235,6 +241,11 @@ fn validate(preset: &mut Preset, cfg: &Config) -> Result<(), &'static str> {
     if prefix.is_empty() || preset.services.is_empty() {
         return Err("preset_invalid");
     }
+    // A prefix must not start like a built-in service id (`gemini`, `custom-2`, `local`...).
+    let lower = prefix.to_lowercase();
+    if RESERVED_BASES.iter().any(|b| lower.starts_with(b)) {
+        return Err("preset_id_prefix");
+    }
     let mut seen = HashSet::new();
     for svc in &preset.services {
         if !svc.id.starts_with(&prefix) {
@@ -242,6 +253,13 @@ fn validate(preset: &mut Preset, cfg: &Config) -> Result<(), &'static str> {
         }
         if !seen.insert(svc.id.clone()) {
             return Err("preset_duplicate_id");
+        }
+        // A preset may update its own services only, never a service of another kind.
+        if cfg
+            .cloud_service(&svc.id)
+            .is_some_and(|existing| existing.kind != CloudKind::OpenAiCompat)
+        {
+            return Err("preset_id_conflict");
         }
     }
     // Names must not clash with services outside this preset or with each other.
@@ -272,6 +290,28 @@ fn validate(preset: &mut Preset, cfg: &Config) -> Result<(), &'static str> {
         others.push(svc.clone());
     }
     let ids: HashSet<&str> = preset.services.iter().map(|s| s.id.as_str()).collect();
+    // Capabilities: every speech recognition choice needs an ASR model and every text target
+    // a text model. `[route] asr` in the file is ignored: the user's choice always wins.
+    let has_asr = |id: &String| {
+        id == LOCAL
+            || preset
+                .services
+                .iter()
+                .any(|s| &s.id == id && s.asr_model.is_some())
+    };
+    let has_llm = |id: &String| {
+        id == LOCAL
+            || preset
+                .services
+                .iter()
+                .any(|s| &s.id == id && s.llm_model.is_some())
+    };
+    if !preset.meta.asr_choices.iter().all(has_asr)
+        || !has_llm(&preset.route.polish)
+        || !has_llm(&preset.route.translate)
+    {
+        return Err("preset_bad_reference");
+    }
     let refs_ok = !preset.meta.asr_choices.is_empty()
         && preset.meta.asr_choices.iter().all(|c| is_ref(c, &ids))
         && preset
@@ -289,6 +329,12 @@ fn validate(preset: &mut Preset, cfg: &Config) -> Result<(), &'static str> {
 }
 
 fn read_preset_file(path: &str) -> Result<String, &'static str> {
+    use std::io::Read;
+
+    // No network shares: a slow or hostile server must not stall the app.
+    if path.starts_with("\\\\") || path.starts_with("//") {
+        return Err("preset_unreadable");
+    }
     let p = Path::new(path);
     let is_toml = p
         .extension()
@@ -297,14 +343,19 @@ fn read_preset_file(path: &str) -> Result<String, &'static str> {
     if !is_toml {
         return Err("preset_not_toml");
     }
-    let meta = std::fs::metadata(p).map_err(|_| "preset_unreadable")?;
-    if !meta.is_file() {
+    let file = std::fs::File::open(p).map_err(|_| "preset_unreadable")?;
+    if !file.metadata().map_err(|_| "preset_unreadable")?.is_file() {
         return Err("preset_unreadable");
     }
-    if meta.len() > MAX_FILE_BYTES {
+    // Read at most one byte past the limit, whatever the metadata claims.
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "preset_unreadable")?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err("preset_too_large");
     }
-    std::fs::read_to_string(p).map_err(|_| "preset_unreadable")
+    String::from_utf8(bytes).map_err(|_| "preset_unreadable")
 }
 
 fn load_source(source: &PresetSource) -> Result<Resolved, &'static str> {
@@ -362,8 +413,9 @@ async fn detect_models(r: &mut Resolved, http: &CloudHttp) {
 
 async fn detect_one(svc: &CloudService, http: &CloudHttp, t: &TimeoutConfig) -> Option<String> {
     let url = svc.base_url.clone()?;
+    // The id only labels the log line of the probe; it matches no saved service.
     let draft = CloudDraft {
-        id: None,
+        id: Some(svc.id.clone()),
         kind: CloudKind::OpenAiCompat,
         name: None,
         base_url: Some(url),
@@ -507,15 +559,6 @@ fn restore_keys(stored: &dyn SecretStore, changes: &[KeyChange]) {
     }
 }
 
-/// Lower-cased host of the service's endpoint.
-fn host_of(svc: &CloudService) -> Option<String> {
-    let url = route::effective_base_url(svc).ok()?;
-    reqwest::Url::parse(&url)
-        .ok()?
-        .host_str()
-        .map(str::to_ascii_lowercase)
-}
-
 fn apply_resolved(
     config_path: &Path,
     stored: &dyn SecretStore,
@@ -553,10 +596,12 @@ fn apply_resolved(
             .iter()
             .find(|(id, _)| *id == svc.id)
             .map(|(_, k)| k);
-        let host_changed = cfg
+        // Same rule as the wizard: a changed kind or endpoint (scheme, host, port, path)
+        // drops the old key; an identical endpoint keeps it.
+        let endpoint_changed = cfg
             .cloud_service(&svc.id)
-            .is_some_and(|prev| host_of(prev) != host_of(svc));
-        if new.is_none() && !host_changed {
+            .is_some_and(|prev| !same_endpoint(prev, svc));
+        if new.is_none() && !endpoint_changed {
             continue;
         }
         let Ok(old) = stored.get(&svc.id) else {
@@ -1093,7 +1138,7 @@ mod tests {
     }
 
     #[test]
-    fn host_change_deletes_old_key_unless_new_given() {
+    fn endpoint_change_deletes_old_key_unless_new_given() {
         let dir = TempDir::new("host");
         let store = MemorySecretStore::new();
         apply(
@@ -1104,36 +1149,40 @@ mod tests {
             &Keys::of(&[("tn-breeze-asr", KEY)]),
         )
         .unwrap();
-        // Same host, different path: key stays.
-        let same_host = TN.replace(":8002/v1", ":9999/v1");
-        let out = apply(
-            &dir.config(),
-            &store,
-            &same_host,
-            "tn-tea-asr",
-            &Keys::default(),
-        )
-        .unwrap();
+        // Identical endpoint (trailing slash, host case): key stays.
+        let same = TN.replace("http://10.20.30.23:8002/v1", "http://10.20.30.23:8002/v1/");
+        let out = apply(&dir.config(), &store, &same, "tn-tea-asr", &Keys::default()).unwrap();
         assert!(out.key_missing.is_empty());
         assert_eq!(key_of(&store, "tn-breeze-asr").as_deref(), Some(KEY));
-        // New host: key dropped and reported missing.
-        let moved = TN.replace("10.20.30.23:8002", "10.9.9.9:8002");
+        // Port, path, scheme or host changes each drop the key.
+        for (from, to) in [
+            (":8002/v1", ":9999/v1"),
+            (":8002/v1", ":8002/v2"),
+            ("http://10.20.30.23:8002", "https://10.20.30.23:8002"),
+            ("10.20.30.23:8002", "10.9.9.9:8002"),
+        ] {
+            apply(&dir.config(), &store, TN, "tn-tea-asr", &Keys::default()).unwrap();
+            store.set("tn-breeze-asr", &ApiKey::new(KEY)).unwrap();
+            assert_eq!(key_of(&store, "tn-breeze-asr").as_deref(), Some(KEY));
+            let moved = TN.replace(from, to);
+            let out = apply(
+                &dir.config(),
+                &store,
+                &moved,
+                "tn-tea-asr",
+                &Keys::default(),
+            )
+            .unwrap();
+            assert_eq!(out.key_missing, vec!["tn-breeze-asr"], "{to}");
+            assert_eq!(key_of(&store, "tn-breeze-asr"), None, "{to}");
+        }
+        // Changed endpoint plus a new key: the new key is kept.
+        apply(&dir.config(), &store, TN, "tn-tea-asr", &Keys::default()).unwrap();
+        let moved = TN.replace(":8002/v1", ":9999/v1");
         let out = apply(
             &dir.config(),
             &store,
             &moved,
-            "tn-tea-asr",
-            &Keys::default(),
-        )
-        .unwrap();
-        assert_eq!(out.key_missing, vec!["tn-breeze-asr"]);
-        assert_eq!(key_of(&store, "tn-breeze-asr"), None);
-        // New host plus a new key: the new key is kept.
-        let moved2 = TN.replace("10.20.30.23:8002", "10.8.8.8:8002");
-        let out = apply(
-            &dir.config(),
-            &store,
-            &moved2,
             "tn-tea-asr",
             &Keys::of(&[("tn-breeze-asr", "fresh-key-1234")]),
         )
@@ -1143,6 +1192,145 @@ mod tests {
             key_of(&store, "tn-breeze-asr").as_deref(),
             Some("fresh-key-1234")
         );
+    }
+
+    #[test]
+    fn preset_cannot_overwrite_a_foreign_service() {
+        let dir = TempDir::new("conflict");
+        let original = "[[cloud]]
+id = \"gemini\"
+kind = \"gemini\"
+
+[route]
+polish = \"gemini\"
+";
+        std::fs::write(dir.config(), original).unwrap();
+        let store = MemorySecretStore::new();
+        store.set("gemini", &ApiKey::new(KEY)).unwrap();
+        let text = TN
+            .replace("tn-", "g")
+            .replace("gqwen", "gemini")
+            .replace("\"gtea-asr\"", "\"gtea\"");
+        assert_eq!(
+            apply(&dir.config(), &store, &text, "gtea", &Keys::default()),
+            Err("preset_id_conflict")
+        );
+        assert_eq!(std::fs::read_to_string(dir.config()).unwrap(), original);
+        assert_eq!(key_of(&store, "gemini").as_deref(), Some(KEY));
+        let cfg = load_config(&dir.config()).unwrap();
+        assert_eq!(cfg.cloud_service("gemini").unwrap().kind, CloudKind::Gemini);
+    }
+
+    #[test]
+    fn reserved_or_empty_prefixes_are_rejected() {
+        let dir = TempDir::new("prefix");
+        let store = MemorySecretStore::new();
+        for prefix in [
+            "", "  ", "openai-", "Gemini", "claude-x", "custom", "custom-2", "local", "localx",
+        ] {
+            let text = TN.replace("id_prefix = \"tn-\"", &format!("id_prefix = \"{prefix}\""));
+            let got = apply(&dir.config(), &store, &text, "tn-tea-asr", &Keys::default());
+            assert!(
+                matches!(got, Err("preset_invalid" | "preset_id_prefix")),
+                "{prefix:?}: {got:?}"
+            );
+        }
+        assert!(!dir.config().exists());
+    }
+
+    #[test]
+    fn capabilities_are_validated_and_file_route_asr_is_ignored() {
+        let dir = TempDir::new("caps");
+        let store = MemorySecretStore::new();
+        let cases = [
+            // An ASR choice without an ASR model.
+            TN.replace("asr_model = \"tea-asr-1\"", ""),
+            // Polish / translate target without a text model.
+            TN.replace("llm_model = \"Qwen3.8-27B-UD-Q6_K_L\"", ""),
+            TN.replace("translate = \"tn-qwen\"", "translate = \"tn-tea-asr\""),
+        ];
+        for text in cases {
+            assert_eq!(
+                apply(
+                    &dir.config(),
+                    &store,
+                    &text,
+                    "tn-breeze-asr",
+                    &Keys::default()
+                ),
+                Err("preset_bad_reference")
+            );
+        }
+        assert!(!dir.config().exists());
+        // `[route] asr` in the file never wins over the user's choice.
+        let text = TN.replace(
+            "polish = \"tn-qwen\"",
+            "asr = \"nope\"
+polish = \"tn-qwen\"",
+        );
+        apply(
+            &dir.config(),
+            &store,
+            &text,
+            "tn-breeze-asr",
+            &Keys::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            load_config(&dir.config()).unwrap().route.asr,
+            "tn-breeze-asr"
+        );
+    }
+
+    /// Fails `set` for one id, like a keyring that stops working half way.
+    struct FlakyStore {
+        inner: MemorySecretStore,
+        fail_set: &'static str,
+    }
+    impl SecretStore for FlakyStore {
+        fn get(&self, id: &str) -> v2c_core::Result<Option<ApiKey>> {
+            self.inner.get(id)
+        }
+        fn set(&self, id: &str, key: &ApiKey) -> v2c_core::Result<()> {
+            if id == self.fail_set {
+                return Err(v2c_core::V2cError::Storage("boom".into()));
+            }
+            self.inner.set(id, key)
+        }
+        fn delete(&self, id: &str) -> v2c_core::Result<()> {
+            self.inner.delete(id)
+        }
+    }
+
+    #[test]
+    fn keyring_failure_mid_loop_rolls_back_earlier_keys() {
+        let dir = TempDir::new("flaky");
+        let text = TN.replace(
+            "needs_key = [\"tn-breeze-asr\"]",
+            "needs_key = [\"tn-tea-asr\", \"tn-breeze-asr\"]",
+        );
+        let store = FlakyStore {
+            inner: MemorySecretStore::new(),
+            fail_set: "tn-breeze-asr",
+        };
+        store
+            .inner
+            .set("tn-tea-asr", &ApiKey::new("old-tea-key"))
+            .unwrap();
+        let got = apply(
+            &dir.config(),
+            &store,
+            &text,
+            "tn-tea-asr",
+            &Keys::of(&[("tn-tea-asr", KEY), ("tn-breeze-asr", KEY)]),
+        );
+        assert_eq!(got, Err("keyring_failed"));
+        assert_eq!(
+            key_of(&store.inner, "tn-tea-asr").as_deref(),
+            Some("old-tea-key")
+        );
+        assert_eq!(key_of(&store.inner, "tn-breeze-asr"), None);
+        assert!(!dir.config().exists(), "config must not be written");
     }
 
     // ---- model detection ----
@@ -1243,6 +1431,12 @@ mod tests {
             load_source(&src(&dir.0.join("none.toml"))).unwrap_err(),
             "preset_unreadable"
         );
+        for unc in ["\\\\host\\share\\p.toml", "//host/share/p.toml"] {
+            assert_eq!(
+                load_source(&PresetSource::File(unc.into())).unwrap_err(),
+                "preset_unreadable"
+            );
+        }
         assert_eq!(
             load_source(&PresetSource::Builtin("XX".into())).unwrap_err(),
             "preset_unknown"

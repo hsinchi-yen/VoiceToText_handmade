@@ -462,7 +462,7 @@ fn normalized_endpoint(svc: &CloudService) -> Option<String> {
 }
 
 /// Same kind and same (normalised) effective endpoint.
-fn same_endpoint(a: &CloudService, b: &CloudService) -> bool {
+pub(crate) fn same_endpoint(a: &CloudService, b: &CloudService) -> bool {
     a.kind == b.kind
         && normalized_endpoint(a).is_some()
         && normalized_endpoint(a) == normalized_endpoint(b)

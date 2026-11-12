@@ -1,6 +1,7 @@
 <script>
   // 套用預設組態 (T4.1): choose a preset, preview it, pick the speech recognition endpoint,
   // apply, then test each endpoint. Plain HTML + CSS; colours come from --md-* tokens.
+  import { onMount } from "svelte";
   import * as api from "./api.js";
 
   let { onclose = () => {} } = $props();
@@ -17,7 +18,7 @@
   // id -> { state: "testing" | "done", result?, error? }
   let tests = $state({});
 
-  $effect(() => {
+  onMount(() => {
     api.list().then((l) => (builtins = l)).catch((c) => (error = api.describe(c)));
   });
 
@@ -79,8 +80,8 @@
 
   async function runTests() {
     tests = Object.fromEntries(applied.services.map((s) => [s.id, { state: "testing" }]));
-    // The running config reloads on v2c:config-changed; give it a moment so stored keys apply.
-    await new Promise((r) => setTimeout(r, 600));
+    // The backend emits v2c:config-changed before presets_apply returns; tauri 2.12 runs its
+    // listen_any handler (the engine reload) synchronously inside emit, so no wait is needed.
     await Promise.all(
       applied.services.map(async (s) => {
         try {
@@ -92,6 +93,10 @@
     );
   }
 
+  const nameOf = (id) => {
+    const s = preview?.services.find((x) => x.id === id);
+    return s ? (s.name ?? s.id) : id === "local" ? "本機" : id;
+  };
   const purposeText = (s) => s.purposes.map((p) => api.purposeLabel[p]).join("、");
 </script>
 
@@ -159,7 +164,7 @@
           檔案中的這些區段不會使用，也不會寫入設定：{preview.ignored.join("、")}
         </p>
       {/if}
-      <p class="hint">潤飾與中翻英會使用 {preview.route.polish}；其他既有服務不會被更動。</p>
+      <p class="hint">潤飾使用 {nameOf(preview.route.polish)}，中翻英使用 {nameOf(preview.route.translate)}；其他既有服務不會被更動。</p>
     {:else if step === 3 && applied}
       <p class="ok">已套用「{applied.title}」，設定立即生效。</p>
       {#if applied.key_missing.length}
