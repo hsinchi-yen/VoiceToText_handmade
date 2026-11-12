@@ -21,7 +21,8 @@ use v2c_core::secrets::{ApiKey, MemorySecretStore, SecretStore};
 use v2c_core::V2cError;
 
 /// Chinese-to-English translation can take a while on the 27B model; fixed here because the
-/// Android app has no settings (the desktop default of 3 s is for polish).
+/// Android app has no settings. Deliberately longer than the desktop `llm_cloud_ms` default
+/// of 3000 ms.
 const TRANSLATE_TIMEOUT_MS: u64 = 8000;
 
 /// Error codes only: never a message, never user text or keys.
@@ -52,6 +53,9 @@ pub enum FfiError {
     Timeout,
     #[error("invalid_audio")]
     InvalidAudio,
+    /// `translate` got empty or whitespace-only text; no request was made.
+    #[error("empty_text")]
+    EmptyText,
     #[error("internal")]
     Internal,
 }
@@ -195,11 +199,12 @@ impl Registry {
 
     pub(crate) async fn transcribe(
         &self,
-        samples: Vec<i16>,
+        pcm_le: Vec<u8>,
         rate: u32,
         service_id: &str,
     ) -> Result<String, FfiError> {
-        if samples.is_empty() || rate == 0 {
+        // 16-bit little-endian mono: an odd byte count is a broken buffer.
+        if pcm_le.is_empty() || pcm_le.len() % 2 != 0 || rate == 0 {
             return Err(FfiError::InvalidAudio);
         }
         let svc = self.service(service_id)?;
@@ -208,7 +213,10 @@ impl Registry {
             .map_err(FfiError::from)?
             .ok_or(FfiError::Unsupported)?;
         let clip = AudioClip {
-            samples: samples.iter().map(|&s| f32::from(s) / 32768.0).collect(),
+            samples: pcm_le
+                .chunks_exact(2)
+                .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0)
+                .collect(),
             sample_rate: rate,
         };
         let t = asr
@@ -219,6 +227,9 @@ impl Registry {
     }
 
     pub(crate) async fn translate(&self, text: &str, service_id: &str) -> Result<String, FfiError> {
+        if text.trim().is_empty() {
+            return Err(FfiError::EmptyText);
+        }
         let svc = self.service(service_id)?;
         let llm: Box<dyn LlmProvider> = build_cloud_llm(
             svc,
@@ -244,15 +255,15 @@ impl Registry {
 static REGISTRY: RwLock<Option<Arc<Registry>>> = RwLock::new(None);
 
 pub(crate) fn set_registry(r: Registry) {
-    if let Ok(mut g) = REGISTRY.write() {
-        *g = Some(Arc::new(r));
-    }
+    // A poisoned lock only means another thread panicked; the value is replaced anyway.
+    let mut g = REGISTRY.write().unwrap_or_else(|e| e.into_inner());
+    *g = Some(Arc::new(r));
 }
 
 pub(crate) fn registry() -> Result<Arc<Registry>, FfiError> {
     REGISTRY
         .read()
-        .map_err(|_| FfiError::Internal)?
+        .unwrap_or_else(|e| e.into_inner())
         .clone()
         .ok_or(FfiError::NotLoaded)
 }
@@ -413,7 +424,7 @@ mod tests {
             let r = mock_registry(&server.uri(), Some("k-123"));
             let out = runtime()
                 .unwrap()
-                .block_on(r.transcribe(vec![100; 1600], 16000, "t-asr"))
+                .block_on(r.transcribe(vec![100; 3200], 16000, "t-asr"))
                 .unwrap();
             assert_eq!(out, "hello");
         });
@@ -428,28 +439,33 @@ mod tests {
                     .mount(server),
             );
             let r = mock_registry(&server.uri(), None);
-            let run = |samples: Vec<i16>, rate, id: &str| {
-                runtime().unwrap().block_on(r.transcribe(samples, rate, id))
+            let run = |pcm: Vec<u8>, rate, id: &str| {
+                runtime().unwrap().block_on(r.transcribe(pcm, rate, id))
             };
             assert_eq!(
-                run(vec![1; 160], 16000, "t-asr").unwrap_err(),
+                run(vec![1; 320], 16000, "t-asr").unwrap_err(),
                 FfiError::Unauthorized
             );
             assert_eq!(
-                run(vec![1; 160], 16000, "nope").unwrap_err(),
+                run(vec![1; 320], 16000, "nope").unwrap_err(),
                 FfiError::UnknownService
+            );
+            // Odd byte length is not 16-bit PCM.
+            assert_eq!(
+                run(vec![1; 321], 16000, "t-asr").unwrap_err(),
+                FfiError::InvalidAudio
             );
             assert_eq!(
                 run(vec![], 16000, "t-asr").unwrap_err(),
                 FfiError::InvalidAudio
             );
             assert_eq!(
-                run(vec![1], 0, "t-asr").unwrap_err(),
+                run(vec![1; 2], 0, "t-asr").unwrap_err(),
                 FfiError::InvalidAudio
             );
             // A service without an ASR model.
             assert_eq!(
-                run(vec![1; 160], 16000, "t-llm").unwrap_err(),
+                run(vec![1; 320], 16000, "t-llm").unwrap_err(),
                 FfiError::Unsupported
             );
         });
@@ -472,6 +488,43 @@ mod tests {
                 .block_on(r.translate("早安", "t-llm"))
                 .unwrap();
             assert_eq!(out, "Good morning.");
+        });
+    }
+
+    #[test]
+    fn translate_rejects_blank_text_without_a_request() {
+        with_server(|server, rt| {
+            let r = mock_registry(&server.uri(), None);
+            for blank in ["", "   ", "\n\t "] {
+                let e = runtime()
+                    .unwrap()
+                    .block_on(r.translate(blank, "t-llm"))
+                    .unwrap_err();
+                assert_eq!(e, FfiError::EmptyText);
+            }
+            assert!(rt.block_on(server.received_requests()).unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn transcribe_times_out_per_service() {
+        with_server(|server, rt| {
+            rt.block_on(
+                Mock::given(method("POST"))
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .set_body_json(serde_json::json!({ "text": "late" }))
+                            .set_delay(Duration::from_secs(1)),
+                    )
+                    .mount(server),
+            );
+            // `t-asr` has asr_timeout_ms = 500.
+            let r = mock_registry(&server.uri(), None);
+            let e = runtime()
+                .unwrap()
+                .block_on(r.transcribe(vec![1; 320], 16000, "t-asr"))
+                .unwrap_err();
+            assert_eq!(e, FfiError::Timeout);
         });
     }
 }

@@ -32,17 +32,13 @@ pub fn load_lan_services(tn_toml: String, rd_toml: String) -> Result<LanServices
     Ok(summary)
 }
 
-/// Recognises 16-bit mono PCM with an OpenAI-compatible ASR service from
+/// Recognises 16-bit little-endian mono PCM (Kotlin `ByteArray`; odd length is `InvalidAudio`) with an OpenAI-compatible ASR service from
 /// [`load_lan_services`] (its own timeout; Breeze uses its preset key). Returns the raw
 /// transcript; run it through [`to_zh_tw`] before typing it.
 #[uniffi::export]
-pub fn transcribe_pcm(
-    samples: Vec<i16>,
-    rate: u32,
-    service_id: String,
-) -> Result<String, FfiError> {
+pub fn transcribe_pcm(pcm_le: Vec<u8>, rate: u32, service_id: String) -> Result<String, FfiError> {
     let registry = services::registry()?;
-    services::runtime()?.block_on(registry.transcribe(samples, rate, &service_id))
+    services::runtime()?.block_on(registry.transcribe(pcm_le, rate, &service_id))
 }
 
 /// Chinese -> English with the given LLM service (the LAN Qwen).

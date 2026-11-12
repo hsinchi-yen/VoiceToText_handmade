@@ -43,7 +43,6 @@ val cargoNdk by tasks.registering(Exec::class) {
     inputs.dir(repoRoot.resolve("crates/v2c-core/src"))
     outputs.dir("${projectDir}/src/main/jniLibs")
 }
-tasks.named("preBuild") { dependsOn(cargoNdk, generateUniffiKotlin) }
 ```
 
 `CARGO_TARGET_DIR` must stay the shared `C:\Users\lance.tn\.v2ct` (build cache only); the
@@ -51,40 +50,59 @@ tasks.named("preBuild") { dependsOn(cargoNdk, generateUniffiKotlin) }
 
 ## 3. Generate the Kotlin bindings
 
-The library-mode generator reads the built library (any target's `.so`, or the host build).
-The `bindgen` feature keeps the generator out of the Android build.
+Generated sources are never committed: they go to `app/build/generated/uniffi` and are
+registered as a source dir. Hand-written Kotlin wrappers live in
+`app/src/main/java/app/v2c/ime/ffi/` (the Android package T2.1 uses is `app.v2c.ime`); the
+generated code declares `package uniffi.v2c_ffi`.
 
-```sh
-cargo build -p v2c-ffi --release
-cargo run -p v2c-ffi --features bindgen --bin uniffi-bindgen -- generate \
-  --library "$CARGO_TARGET_DIR/release/v2c_ffi.dll" \
-  --language kotlin \
-  --out-dir apps/android/app/src/main/java/ffi_generated
-```
-
-(On Linux/macOS use `libv2c_ffi.so` / `.dylib`.) The generated file declares
-`package uniffi.v2c_ffi`; the card's allowed path is `apps/android/app/src/main/java/**/ffi/**`,
-so put the output under `.../java/<app package path>/ffi/` (or add a Gradle `Exec` task that
-generates into `build/generated` and registers it as a source dir; that is the cleaner choice
-and avoids committing generated code):
+The library-mode generator reads a built library; use the cargo-ndk output so the bindings match
+exactly what ships. The `bindgen` feature keeps the generator out of the Android build.
 
 ```kotlin
 val generateUniffiKotlin by tasks.registering(Exec::class) {
+    dependsOn(cargoNdk)
     val repoRoot = rootProject.projectDir.parentFile.parentFile
     workingDir = repoRoot
     val out = layout.buildDirectory.dir("generated/uniffi")
+    // Same directory cargo/cargo-ndk use (the shared build cache, not repo/target).
+    val targetDir = System.getenv("CARGO_TARGET_DIR") ?: "target"
     commandLine(
         "cargo", "run", "-p", "v2c-ffi", "--features", "bindgen", "--bin", "uniffi-bindgen", "--",
-        "generate", "--library", "target/release/libv2c_ffi.so" /* adjust to host/NDK output */,
+        "generate",
+        "--library", "$targetDir/aarch64-linux-android/release/libv2c_ffi.so",
         "--language", "kotlin", "--out-dir", out.get().asFile.path,
     )
     outputs.dir(out)
 }
 android.sourceSets["main"].java.srcDir(layout.buildDirectory.dir("generated/uniffi"))
+tasks.named("preBuild") { dependsOn(cargoNdk, generateUniffiKotlin) }
 ```
 
-Runtime dependency of the generated code: `implementation("net.java.dev.jna:jna:5.17.0@aar")`
-(check the current version when wiring; the `@aar` form is the Android one).
+Host-only check (no NDK needed), as used to verify this crate:
+
+```sh
+cargo build -p v2c-ffi
+cargo run -p v2c-ffi --features bindgen --bin uniffi-bindgen -- generate \
+  --library "$CARGO_TARGET_DIR/debug/v2c_ffi.dll" --language kotlin --out-dir tests/tmp/kt
+```
+
+(On Linux/macOS use `libv2c_ffi.so` / `.dylib`.)
+
+Runtime dependency of the generated code: `implementation("net.java.dev.jna:jna:5.17.0@aar")`.
+The JNA version is from memory: check the current release when wiring. The `@aar` form is the
+Android one.
+
+### R8 / ProGuard (release builds)
+
+Add to `app/proguard-rules.pro`; without them R8 strips JNA/uniffi classes and the app crashes
+at the first FFI call:
+
+```
+-keep class com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.** { *; }
+-keep class uniffi.v2c_ffi.** { *; }
+-dontwarn java.awt.**
+```
 
 ## 4. Preset assets
 
@@ -116,8 +134,8 @@ val services = withContext(Dispatchers.IO) { loadLanServices(tn, rd) } // once, 
 | `loadLanServices(tn, rd)` | must succeed before `transcribePcm` / `translate`; throws `FfiException.Config` on a bad file |
 | `chooseAsr(lan, systemAvailable, localModelReady, pick)` | pure; `AsrPlan.hint` explains an unusable source |
 | `lanServiceId(lan, source)` | `Lan.Tn` + `AsrSource.LanTea` -> `"tn-tea-asr"` |
-| `transcribePcm(samples: List<Short>, rate: UInt, serviceId)` | 16 kHz mono PCM16 from `AudioRecord`; returns the raw transcript |
-| `translate(text, serviceId)` | Qwen service id, e.g. `"tn-qwen"` / `"rd-qwen"` |
+| `transcribePcm(pcmLe: ByteArray, rate: UInt, serviceId)` | 16 kHz mono PCM, 16-bit little-endian bytes (an odd length throws `InvalidAudio`); returns the raw transcript |
+| `translate(text, serviceId)` | Qwen service id, e.g. `"tn-qwen"` / `"rd-qwen"`; blank text throws `EmptyText` without a request. Timeout is a fixed 8000 ms, deliberately longer than the desktop `llm_cloud_ms` default of 3000 ms (27B model, no settings page) |
 
 Errors arrive as `FfiException` subclasses (codes only, no text).
 
