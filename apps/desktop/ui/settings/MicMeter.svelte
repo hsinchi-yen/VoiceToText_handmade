@@ -2,6 +2,7 @@
   // Microphone check: level meter fed by `v2c:mic-level` (levels only; audio is never kept).
   import { listen } from "@tauri-apps/api/event";
   import * as api from "./api.js";
+  import { Button, LinearProgress } from "../lib/index.js";
 
   let { device = null, onHeard = () => {} } = $props();
 
@@ -45,42 +46,30 @@
 
 <div class="mic">
   {#if running}
-    <button onclick={stop}>停止測試</button>
+    <Button variant="tonal" onclick={stop}>停止測試</Button>
   {:else}
-    <button onclick={start}>測試麥克風</button>
+    <Button variant="tonal" icon="mic" onclick={start}>測試麥克風</Button>
   {/if}
-  <div class="meter" aria-label="麥克風音量"><div style:width={`${level * 100}%`}></div></div>
-  {#if running}
-    <span class="hint">{peak > 0.15 ? "有聽到聲音" : "請說幾句話…"}</span>
-  {/if}
+  <div class="meter"><LinearProgress value={level} label="麥克風音量" /></div>
 </div>
+{#if running}
+  <p class="hint">{peak > 0.15 ? "有聽到聲音" : "請說幾句話…"}</p>
+{/if}
 {#if error}<p class="bad">{error}</p>{/if}
 
 <style>
   .mic {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    margin: 0.4rem 0;
+    gap: var(--md-space-3);
+    margin: var(--md-space-3) 0;
   }
   .meter {
     flex: 1;
+    min-width: 0;
     max-width: 260px;
-    height: 8px;
-    background: color-mix(in srgb, currentColor 15%, transparent);
-    border-radius: 4px;
-    overflow: hidden;
   }
-  .meter div {
-    height: 100%;
-    background: #2da44e;
-    transition: width 50ms linear;
-  }
-  .hint {
-    opacity: 0.75;
-    font-size: 0.9em;
-  }
-  .bad {
-    color: #cf222e;
+  p {
+    margin: 0 0 var(--md-space-2);
   }
 </style>

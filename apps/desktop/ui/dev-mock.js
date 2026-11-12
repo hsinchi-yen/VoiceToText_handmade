@@ -59,7 +59,7 @@ const config = {
     { exe: "LINE.exe", newline: "shift_enter", always_paste: false },
   ],
   history: { enabled: true, retention_days: 7, exclude_apps: ["KeePass.exe"] },
-  gpu: { profile: "balanced", vram_reserve_mb: 1024, keep_loaded: true, idle_unload_minutes: 10, yield_on_fullscreen: true, heavy_apps: ["Premiere Pro.exe"] },
+  gpu: { profile: "balanced", vram_reserve_mb: 1024, keep_loaded: "auto", idle_unload_minutes: 10, yield_on_fullscreen: true, heavy_apps: ["Premiere Pro.exe"] },
 };
 
 let autostart = false;
