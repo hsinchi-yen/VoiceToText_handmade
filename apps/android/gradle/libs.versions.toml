@@ -9,6 +9,8 @@ activityCompose = "1.13.0"
 lifecycle = "2.11.0"
 savedstate = "1.5.0"
 junit = "4.13.2"
+# JNA 5.19.1: latest on Maven Central (checked 2026-11-12, published 2026-06); used as @aar.
+jna = "5.19.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }

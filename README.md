@@ -120,6 +120,7 @@ v2c 就會自動使用。建議設定與顯示卡記憶體的分配請看 [docs/
 | [docs/lan-server-guide.md](docs/lan-server-guide.md) | 在區網的 Ubuntu 電腦架設語音辨識與文字模型 |
 | [docs/local-setup.md](docs/local-setup.md) | 地端模型：顯示卡記憶體、LM Studio 設定 |
 | [docs/linux-setup.md](docs/linux-setup.md) | Linux 版安裝與設定（測試中） |
+| [docs/android-install.md](docs/android-install.md) | Android 語音鍵盤：建置 APK、簽署、側載、使用 |
 | [docs/build-guide.md](docs/build-guide.md) | 從原始碼建置 |
 | [docs/download-guide.md](docs/download-guide.md) | 模型與工具的下載位置 |
 
@@ -215,6 +216,13 @@ cd apps/desktop && npm run tauri build                  # 不含 CUDA 的安裝�
 
 用 `tools\build-installer.ps1` 建置時，安裝檔會放在 repo 的 `releases\`（不進 git）；手動執行 `npm run tauri build` 則在 `<CARGO_TARGET_DIR 或 target>\release\bundle\nsis\`。
 Breeze 模型的轉檔方式見 [tools/convert-breeze/README.md](tools/convert-breeze/README.md)。
+
+## Android（語音鍵盤）
+
+Android 版是語音輸入法：點一下麥克風說話，文字直接輸入；「中→英」鍵說中文、輸出英文。辨識來源有區網 TEA／Breeze、手機系統辨識、可下載的本機模型（離線）。沒有設定頁。
+
+- APK 不放進 git，請自己建置：`bash tools/build-android.sh --check`（Windows：`powershell -ExecutionPolicy Bypass -File tools\build-android.ps1 -Check`）會列出缺少的工具與簽署金鑰；全部就緒後不加 `--check` 直接建置，成品在 `releases/v2c_<版本>_android.apk`，雜湊在 `releases/SHA256SUMS.txt`。
+- 安裝（側載）、授權麥克風、啟用並切換鍵盤、點一下／按住說話、長按小圖示切換辨識來源、本機模型下載、需要公司網路的功能：見 [docs/android-install.md](docs/android-install.md)。
 
 ## Linux（測試中）
 

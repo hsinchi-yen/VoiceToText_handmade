@@ -162,7 +162,8 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] T2.2 退格與換行（合併後）：在 LINE、Chrome、Gmail 測退格長按、選取刪除、emoji 刪除、換行與送出；LINE 的「Enter 送出」開、關兩種都要測
 - [ ] T2.4 網路情境：公司 Wi-Fi 或 VPN 下自動走 TEA；長按小圖示切 Breeze／系統／本機；關 Wi-Fi 後自動改系統辨識；區網伺服器關閉時不卡頓；中翻英輸出英文
 - [ ] T2.6 本機模型：用 `tests/fixtures/audio` 的錄音在手機跑比較工具，依比較表決定預設模型；飛航模式下能輸入
-- [ ] T2.5 產生 APK 簽署金鑰（`keytool`，說明見 `docs/android-install.md`）；照說明側載安裝一遍
+- [ ] T2.5 產生 APK 簽署金鑰（`keytool`，指令見 `docs/android-install.md` 第 1.2 節，也會由腳本印出）並建立 `apps/android/keystore.properties`；備份金鑰（弄丟就不能更新已安裝的 App）
+- [ ] T2.5 先跑 `bash tools/build-android.sh --check`（Windows：`tools\build-android.ps1 -Check`），裝好缺的工具後建置；第一次建置是 T2.3 Gradle 接線的首次驗證（`cargoNdk`、綁定產生、16 KB 對齊）；再照說明側載安裝一遍
 - [ ] 檢查點 2：手機日常使用一週
 - [ ] 決定 Linux 用哪台電腦（同一台雙系統或另一台），並提供規格
 
