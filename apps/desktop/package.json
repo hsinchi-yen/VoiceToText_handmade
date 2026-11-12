@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./jsconfig.json",
+    "test": "vitest run",
     "tauri": "tauri",
     "tauri:build:cuda": "tauri build --features cuda"
   },
@@ -17,6 +19,9 @@
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "@tauri-apps/cli": "2.12.4",
     "svelte": "5.57.3",
-    "vite": "8.3.6"
+    "svelte-check": "4.7.8",
+    "typescript": "5.9.3",
+    "vite": "8.3.6",
+    "vitest": "5.1.0"
   }
 }

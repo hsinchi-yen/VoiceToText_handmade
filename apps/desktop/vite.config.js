@@ -5,6 +5,8 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 export default defineConfig({
   root: "ui",
   plugins: [svelte({ configFile: false })],
+  // Unit tests for the pure helpers (run with `npm test`).
+  test: { include: ["lib/**/*.test.js"] },
   clearScreen: false,
   server: {
     port: 1420,
