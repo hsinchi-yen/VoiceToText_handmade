@@ -34,7 +34,7 @@
 每張卡都經過獨立審查（Opus）才合併。Windows 上 `cargo test --workspace`（桌面 206 項）、clippy、fmt、`npm run check`（0／0）、`npm test`（40 項）、`npm run build` 全部通過。
 
 ### 預設組態重點（細節見 `docs/cloud-setup.md`、`presets.rs` 模組說明）
-- TN＝`10.20.30.23`、RD＝`10.88.95.2`；各有 TEA-ASR `:8001`、Breeze-ASR `:8002`（需金鑰、逾時 8000）、Qwen3.8 27B `:8000`（潤飾／中翻英）。
+- TN＝`10.20.30.23`、RD＝`10.88.95.2`；各有 TEA-ASR `:8001`、Breeze-ASR `:8002`（需金鑰、內建預設金鑰 `tn8227` 套用時自動存入、逾時 8000）、Qwen3.8 27B `:8000`（潤飾／中翻英）。
 - 套用時選 TEA 或 Breeze 當語音辨識；文字模型向 `/v1/models` 自動偵測，只有一個模型才採用，否則用檔內 `Qwen3.8-27B-UD-Q6_K_L`。
 - 只寫 `[[cloud]]` 與 `[route]`；**不改 `[local]`**。TN↔RD 切換兩組服務與金鑰都保留，使用者自己的服務不動。
 - 端點（kind／scheme／host／port／path）一改就刪舊金鑰；網路路徑（`\\`、`//`）與 > 64 KiB 的檔案一律拒絕。
@@ -83,7 +83,7 @@ Linux 的 webview 是 WebKitGTK（Windows 是 WebView2／Chromium），開 App �
 ### 4.4 預設組態在 Linux
 - `docs/linux-setup.md` 第 7.3 節：方法一「首頁 → 套用預設組態」、方法二手動改 `config.toml`。
 - **注意**：預設組態不改 `[local]`。Linux 定案是遠端 `tea-asr-1`＋本機 SenseVoice 備援，所以仍要確認 `~/.local/share/v2c/models/` 有 SenseVoice 模型，且 `[local] asr = "sense_voice"`（初次設定或設定 → 進階 → 地端語音模型）。若希望套用預設組態時在 Linux 自動設 `local.asr = sense_voice`，需另開卡（會動到 `presets.rs` 的白名單規則）。
-- 套用時選 Breeze-ASR 需要貼金鑰，存進 GNOME 登入鑰匙圈；TEA-ASR `:8001` 不需要金鑰。
+- 套用時選 Breeze-ASR 不用貼金鑰：內建預設金鑰會自動存進 GNOME 登入鑰匙圈（要換別的金鑰才在欄位輸入）；TEA-ASR `:8001` 不需要金鑰。
 
 ### 4.5 實機驗收清單（Linux）
 1. `git pull` 後第 3 節的指令全部通過；`bash tools/build-linux.sh` 產出 0.2.0 的 .deb／AppImage。
@@ -91,7 +91,7 @@ Linux 的 webview 是 WebKitGTK（Windows 是 WebView2／Chromium），開 App �
 3. 首頁 → 套用預設組態 → TN → 選「TN TEA-ASR」→ 套用 → 三個端點測試連線通過；首頁「預設組態」卡顯示「TN 區網服務」。
 4. 按住右 Ctrl 說一句：文字輸出；（X11）浮動標籤是綠色波形 → 進度條 → 淡出，沒有狀態文字；（Wayland）依第 4.1 節的決定。
 5. 雙擊右 Ctrl 進免持：（X11）波形右側有「按右 Ctrl 結束」。
-6. 切到 RD 再切回 TN：服務頁 TN、RD 兩組都在；Breeze 金鑰沒被要求重貼。
+6. 切到 RD 再切回 TN：服務頁 TN、RD 兩組都在；Breeze 金鑰沒被要求重貼（本來就不用貼，內建預設金鑰會自動存入）。
 7. 設定頁預設只看到常用 4 項，「進階」收合；改一項不儲存就切頁會詢問。
 8. 詞庫與紀錄：從系統列「輸入紀錄」直接開到紀錄分頁。
 9. 結果記到 `tasks/human-checklist.md` Phase 4 與 Phase 3 的對應項目。

@@ -103,7 +103,7 @@ v2c 就會自動使用。建議設定與顯示卡記憶體的分配請看 [docs/
 ## 服務與預設組態（選用）
 
 **公司區網（TN／RD）**：「首頁 → 套用預設組態」→ 選 TN 或 RD → 選語音辨識（TEA-ASR 或 Breeze-ASR）→「套用」，一次設好語音辨識、潤飾、中翻英。
-Breeze-ASR 需要 API 金鑰（可以稍後到「服務」頁補）。也可以按「從檔案載入」使用自己寫的預設組態檔。詳見 [docs/cloud-setup.md](docs/cloud-setup.md)。
+內建預設組態已附區網 Breeze-ASR 的共用預設金鑰，不用自己輸入金鑰。也可以按「從檔案載入」使用自己寫的預設組態檔。詳見 [docs/cloud-setup.md](docs/cloud-setup.md)。
 
 **其他服務**：到「服務」頁按「新增服務」，用精靈串接 Gemini、OpenAI、Claude 或自訂的 OpenAI 相容端點，並指定把語音辨識／潤飾／中翻英哪些交給它。
 雲端服務會依用量向你收費。各家取得金鑰的方法請看 [docs/cloud-setup.md](docs/cloud-setup.md)，推薦的模型與設定請看 [docs/cloud-models.md](docs/cloud-models.md)。

@@ -9,6 +9,9 @@ id_prefix = "tn-"
 asr_choices = ["tn-tea-asr", "tn-breeze-asr"]
 # Endpoints that need an API key (asked in the dialog, stored in the OS keyring).
 needs_key = ["tn-breeze-asr"]
+# Default keys, stored when the user does not type one. This is the LAN server's shared key,
+# deliberately committed to git per the project owner's decision (2026-11-12).
+default_keys = { "tn-breeze-asr" = "tn8227" }
 # Ask the endpoint for its model list; use it when it names exactly one model.
 detect_llm_model = true
 
