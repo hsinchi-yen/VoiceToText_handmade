@@ -186,6 +186,6 @@
 - [x] W20 T4.7 浮動標籤：錄音＝黑底綠色心電圖波形、辨識／潤飾＝進度條、不顯示狀態文字、完成 250 ms 淡出；免持右側「按右 Ctrl 結束」
 - [x] T4.8 TN／RD 預設組態內建 Breeze-ASR 共用預設金鑰 `tn8227`（你決定進 git）；套用順序：輸入的 → 已存且端點未變的 → 預設；預設金鑰寫入失敗只略過並提示，不會讓套用失敗
 - [x] main 上 `cargo test --workspace`、clippy、fmt、`npm run check`／`test`／`build` 全部通過
-- [x] Windows 安裝檔 `releases/v2c_0.2.0_x64-setup.exe`（2026-11-12，CUDA 版，458.1 MiB，SHA-256 `263d2f5b…8f8373`，建置機 Defender 掃描無威脅）
+- [x] Windows 安裝檔 `releases/v2c_0.2.0_x64-setup.exe`（2026-11-12 重建，含 T4.8；CUDA 版，458.1 MiB，SHA-256 `4eb66fd4…eda162c`，建置機 Defender 掃描無威脅）
 - [ ] 🧑 檢查點 4（Windows）：安裝 0.2.0，TN、RD 各套用一次並實際說話；確認介面夠簡潔、浮動標籤順暢（見 human-checklist）
 - [ ] Linux：依 `linux_handover.md` 建置與驗收；🧑 決定 Wayland 通知是否精簡（第 4.1 節）
