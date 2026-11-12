@@ -95,7 +95,7 @@
   - [ ] 🧑 安裝 Android Rust 工具（見 human-checklist）
 - [x] W9 T2.2 退格與換行 — 已合併（2026-11-12，你核准與 T2.6 一起合併）；長按加速與 imeOptions 判斷為純 Kotlin 並有單元測試
   - [ ] 🧑 實機測試（見 human-checklist Phase 2：LINE、Chrome、Gmail）
-- [ ] W9 T2.6 手機本機模型（sherpa-onnx；候選比較）— 第 2 輪審查通過（`85a57f5`）；5 個小建議修完（`d0e4d0b`）
+- [ ] W9 T2.6 手機本機模型（sherpa-onnx；候選比較）— 已合併（2026-11-12，你核准）：程式、下載狀態機、測試、比較工具；第 3 輪審查通過（Windows 上曾建置通過；Linux 上的最後修正只做了純 JVM 單元測試，見 android_handover.md）；待人工：實機跑比較工具、定案預設模型（見 docs/android-local-model.md）
   - [ ] 🧑 手機比較候選模型並決定預設
 - [ ] W10 T2.4 區網偵測、辨識路由、來源小圖示、中翻英鍵
 - [ ] W10b T2.5 release APK 與安裝說明
