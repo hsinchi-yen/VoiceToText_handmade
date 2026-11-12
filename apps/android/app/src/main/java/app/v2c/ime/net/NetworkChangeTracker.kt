@@ -16,6 +16,16 @@ class NetworkChangeTracker {
         return true
     }
 
+    /**
+     * Records [id] as current only when no network has been seen yet (first keyboard open, when
+     * the LAN was just probed on that network); a known network is kept so a change made while
+     * the keyboard was hidden is still reported.
+     */
+    @Synchronized
+    fun seedIfUnknown(id: Long?) {
+        if (current == null && id != null) current = id
+    }
+
     /** True when the network that was current is lost; a late loss of an older one is ignored. */
     @Synchronized
     fun onLost(id: Long): Boolean {

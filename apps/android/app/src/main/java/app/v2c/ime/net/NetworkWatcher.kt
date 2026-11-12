@@ -26,6 +26,7 @@ class NetworkWatcher(context: Context, private val onChanged: () -> Unit) {
 
     fun start() {
         if (callback != null || manager == null) return
+        tracker.seedIfUnknown(manager.activeNetwork?.networkHandle)
         try {
             manager.registerDefaultNetworkCallback(cb)
             callback = cb

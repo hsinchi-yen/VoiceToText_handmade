@@ -28,4 +28,22 @@ class NetworkChangeTrackerTest {
         assertTrue(t.onLost(2))
         assertTrue(t.onAvailable(2)) // coming back is a change again
     }
+
+    @Test
+    fun seedingTheCurrentNetworkMakesTheFirstCallbackNoChange() {
+        val t = NetworkChangeTracker()
+        t.seedIfUnknown(7L)
+        assertFalse(t.onAvailable(7L))
+        assertTrue(t.onAvailable(8L))
+    }
+
+    @Test
+    fun seedingNeverHidesAChangeMadeWhileHidden() {
+        val t = NetworkChangeTracker()
+        t.onAvailable(7L)
+        t.seedIfUnknown(8L) // keyboard reopened on another network
+        assertTrue(t.onAvailable(8L))
+        t.seedIfUnknown(null)
+        assertFalse(t.onAvailable(8L))
+    }
 }
