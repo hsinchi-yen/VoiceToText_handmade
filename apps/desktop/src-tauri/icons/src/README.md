@@ -6,7 +6,7 @@
 |------|------|------|
 | A | `candidate-a.svg` / `candidate-a-tray.svg` | 兩層向內收斂的聲波形成「V」，尖端接一條文字游標：語音變成游標處的文字。 |
 | B（已選定） | `candidate-b.svg`、`candidate-b-tray-light.svg`、`candidate-b-tray-dark.svg` | 白色對話氣泡內有紫色麥克風，粗黃色「V」形托架向上環抱麥克風：說話變成對話。 |
-| C | `candidate-b.svg`、`candidate-b-tray-light.svg`、`candidate-b-tray-dark.svg` | 五條聲波長條階梯式下降，輪廓形成「V」，語音向下匯入 V 尖端的 AI 代理節點（實心圓，左右各一顆衛星點）。 |
+| C | `candidate-c.svg`、`candidate-c-tray-light.svg`、`candidate-c-tray-dark.svg` | 五條聲波長條階梯式下降，輪廓形成「V」，語音向下匯入 V 尖端的 AI 代理節點（實心圓，左右各一顆衛星點）。 |
 
 ## 候選 B 的托盤版本
 
