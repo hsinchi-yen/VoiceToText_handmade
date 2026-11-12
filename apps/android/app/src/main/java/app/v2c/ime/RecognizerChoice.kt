@@ -3,6 +3,11 @@ package app.v2c.ime
 /** Which system recognizer to use for the next utterance. */
 enum class RecognizerKind { ON_DEVICE, SYSTEM, NONE }
 
+/** Platform-independent classification of SpeechRecognizer error codes. */
+enum class ErrorClass { LANGUAGE, NO_SPEECH, NETWORK, PERMISSION, OTHER }
+
+data class ErrorOutcome(val kind: ErrorKind, val markOnDeviceUnsupported: Boolean)
+
 /**
  * Pure selection / fallback policy for the system recognizer (no Android dependencies).
  *
@@ -20,6 +25,27 @@ object RecognizerChoice {
         onDeviceServiceAvailable && !onDeviceUnsupported -> RecognizerKind.ON_DEVICE
         systemRecognitionAvailable -> RecognizerKind.SYSTEM
         else -> RecognizerKind.NONE
+    }
+
+    /**
+     * Maps a recognizer error to what the UI should show, given the recognizer that was active
+     * when the error arrived. Language errors never produce the install hint.
+     */
+    fun resolveError(
+        current: RecognizerKind,
+        errorClass: ErrorClass,
+        systemRecognitionAvailable: Boolean,
+    ): ErrorOutcome = when (errorClass) {
+        ErrorClass.LANGUAGE ->
+            if (shouldFallBackToSystem(current, true, systemRecognitionAvailable)) {
+                ErrorOutcome(ErrorKind.SAY_AGAIN, markOnDeviceUnsupported = true)
+            } else {
+                ErrorOutcome(ErrorKind.LANGUAGE_UNSUPPORTED, markOnDeviceUnsupported = false)
+            }
+        ErrorClass.NO_SPEECH -> ErrorOutcome(ErrorKind.NO_SPEECH, false)
+        ErrorClass.NETWORK -> ErrorOutcome(ErrorKind.NETWORK, false)
+        ErrorClass.PERMISSION -> ErrorOutcome(ErrorKind.NO_PERMISSION, false)
+        ErrorClass.OTHER -> ErrorOutcome(ErrorKind.GENERIC, false)
     }
 
     /** True when the failure should switch away from the on-device recognizer and ask to retry. */

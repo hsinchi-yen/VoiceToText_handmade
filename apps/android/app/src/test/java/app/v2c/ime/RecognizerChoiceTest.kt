@@ -33,6 +33,36 @@ class RecognizerChoiceTest {
     }
 
     @Test
+    fun onDeviceLanguageErrorFallsBackAndAsksToSayAgain() {
+        val o = RecognizerChoice.resolveError(RecognizerKind.ON_DEVICE, ErrorClass.LANGUAGE, true)
+        assertEquals(ErrorKind.SAY_AGAIN, o.kind)
+        assertTrue(o.markOnDeviceUnsupported)
+    }
+
+    @Test
+    fun systemLanguageErrorIsNotTheInstallHint() {
+        val o = RecognizerChoice.resolveError(RecognizerKind.SYSTEM, ErrorClass.LANGUAGE, true)
+        assertEquals(ErrorKind.LANGUAGE_UNSUPPORTED, o.kind)
+        assertFalse(o.markOnDeviceUnsupported)
+    }
+
+    @Test
+    fun onDeviceLanguageErrorWithoutSystemRecognizerIsNotTheInstallHint() {
+        val o = RecognizerChoice.resolveError(RecognizerKind.ON_DEVICE, ErrorClass.LANGUAGE, false)
+        assertEquals(ErrorKind.LANGUAGE_UNSUPPORTED, o.kind)
+        assertFalse(o.markOnDeviceUnsupported)
+    }
+
+    @Test
+    fun otherErrorClassesMapToTheirKinds() {
+        val k = RecognizerKind.SYSTEM
+        assertEquals(ErrorKind.NO_SPEECH, RecognizerChoice.resolveError(k, ErrorClass.NO_SPEECH, true).kind)
+        assertEquals(ErrorKind.NETWORK, RecognizerChoice.resolveError(k, ErrorClass.NETWORK, true).kind)
+        assertEquals(ErrorKind.NO_PERMISSION, RecognizerChoice.resolveError(k, ErrorClass.PERMISSION, true).kind)
+        assertEquals(ErrorKind.GENERIC, RecognizerChoice.resolveError(k, ErrorClass.OTHER, true).kind)
+    }
+
+    @Test
     fun noFallbackWithoutSystemRecognizerOrOnSystemOrNonLanguageError() {
         assertFalse(RecognizerChoice.shouldFallBackToSystem(RecognizerKind.ON_DEVICE, true, false))
         assertFalse(RecognizerChoice.shouldFallBackToSystem(RecognizerKind.SYSTEM, true, true))

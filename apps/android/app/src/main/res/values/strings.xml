@@ -16,6 +16,7 @@
     <string name="error_unavailable">此裝置沒有語音辨識服務，請安裝或更新 Google 語音服務</string>
     <string name="error_no_speech">沒有聽到聲音，請再試一次</string>
     <string name="error_generic">辨識失敗，請再試一次</string>
+    <string name="error_language_unsupported">此辨識服務不支援中文（台灣）</string>
     <string name="error_say_again">已切換辨識方式，請再說一次</string>
     <string name="error_network">辨識服務需要網路，請稍後再試</string>
     <string name="action_retry">重試</string>

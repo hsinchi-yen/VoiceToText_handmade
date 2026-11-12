@@ -1,5 +1,6 @@
 package app.v2c.ime
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -21,6 +22,7 @@ enum class ErrorKind(@StringRes val message: Int) {
     NO_SPEECH(R.string.error_no_speech),
     NETWORK(R.string.error_network),
     SAY_AGAIN(R.string.error_say_again),
+    LANGUAGE_UNSUPPORTED(R.string.error_language_unsupported),
     GENERIC(R.string.error_generic),
 }
 
@@ -89,12 +91,15 @@ class VoiceSession(
             fail(ErrorKind.NO_PERMISSION)
             return
         }
+        // Ordering constraint: release the old recognizer FIRST. releaseRecognizer() resets
+        // currentKind, and createRecognizer() sets it; reversing this would leave currentKind
+        // as NONE and break the language-error fallback in onError.
+        releaseRecognizer()
         val rec = createRecognizer()
         if (rec == null) {
             fail(ErrorKind.UNAVAILABLE)
             return
         }
-        releaseRecognizer()
         recognizer = rec
         rec.setRecognitionListener(listener)
         levels = FloatArray(WAVE_BARS)
@@ -196,27 +201,26 @@ class VoiceSession(
         override fun onError(error: Int) {
             // Some services send ERROR_CLIENT / BUSY after results or after destroy; ignore those.
             if (!isActive) return
-            val languageError = error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
-                error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
-            if (RecognizerChoice.shouldFallBackToSystem(currentKind, languageError, systemAvailable())) {
-                onDeviceUnsupported = true
-                releaseRecognizer()
-                fail(ErrorKind.SAY_AGAIN)
-                return
-            }
+            // Resolve with the still-active kind BEFORE releasing (release resets currentKind).
+            val outcome = RecognizerChoice.resolveError(currentKind, classify(error), systemAvailable())
+            if (outcome.markOnDeviceUnsupported) onDeviceUnsupported = true
             releaseRecognizer()
-            val kind = when (error) {
-                SpeechRecognizer.ERROR_NO_MATCH,
-                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> ErrorKind.NO_SPEECH
-                SpeechRecognizer.ERROR_NETWORK,
-                SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
-                SpeechRecognizer.ERROR_SERVER -> ErrorKind.NETWORK
-                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> ErrorKind.NO_PERMISSION
-                SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
-                SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> ErrorKind.UNAVAILABLE
-                else -> ErrorKind.GENERIC
-            }
-            fail(kind)
+            fail(outcome.kind)
+        }
+
+        // ERROR_LANGUAGE_* are API 31 constants; they are inlined ints and older systems never
+        // return them, so comparing here is safe.
+        @SuppressLint("InlinedApi")
+        private fun classify(error: Int): ErrorClass = when (error) {
+            SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
+            SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> ErrorClass.LANGUAGE
+            SpeechRecognizer.ERROR_NO_MATCH,
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> ErrorClass.NO_SPEECH
+            SpeechRecognizer.ERROR_NETWORK,
+            SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+            SpeechRecognizer.ERROR_SERVER -> ErrorClass.NETWORK
+            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> ErrorClass.PERMISSION
+            else -> ErrorClass.OTHER
         }
     }
 
