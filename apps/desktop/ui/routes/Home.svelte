@@ -1,6 +1,7 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import PresetDialog from "../presets/PresetDialog.svelte";
 
   // Status codes from src-tauri/src/controller.rs (StatusEvent). Never contains user text.
   const errorText = {
@@ -25,6 +26,7 @@
 
   let info = $state(null);
   let status = $state(null);
+  let presetOpen = $state(false);
 
   function describe(s) {
     if (!s) return "待命中：按住右 Ctrl 說話";
@@ -73,6 +75,11 @@
   <li>Shift + 右 Ctrl：說中文、輸出英文（需要翻譯模型）。</li>
   <li>Esc：取消這段錄音。</li>
 </ul>
+
+<p><button onclick={() => (presetOpen = true)}>套用預設組態</button></p>
+{#if presetOpen}
+  <PresetDialog onclose={() => (presetOpen = false)} />
+{/if}
 
 {#if info}
   <p class="info">

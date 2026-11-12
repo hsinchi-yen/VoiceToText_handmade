@@ -1,0 +1,42 @@
+# Built-in LAN preset (RD). Applied from the app's "preset" dialog (T4.1).
+# Only [preset], [[cloud]] and [route] are read; everything else is ignored.
+
+[preset]
+title = "RD 區網服務"
+# Every service id below must start with this prefix.
+id_prefix = "rd-"
+# Speech recognition endpoints the user can choose between.
+asr_choices = ["rd-tea-asr", "rd-breeze-asr"]
+# Endpoints that need an API key (asked in the dialog, stored in the OS keyring).
+needs_key = ["rd-breeze-asr"]
+# Ask the endpoint for its model list; use it when it names exactly one model.
+detect_llm_model = true
+
+[route]
+# asr is set from the user's choice; polish and translate go to the LLM.
+polish = "rd-qwen"
+translate = "rd-qwen"
+cloud_fallback_to_local = true
+
+[[cloud]]
+id = "rd-tea-asr"
+name = "RD TEA-ASR"
+kind = "open_ai_compat"
+base_url = "http://10.88.95.2:8001/v1"
+asr_model = "tea-asr-1"
+
+[[cloud]]
+id = "rd-breeze-asr"
+name = "RD Breeze-ASR"
+kind = "open_ai_compat"
+base_url = "http://10.88.95.2:8002/v1"
+asr_model = "breeze-asr-25"
+# Breeze is slower than the global default.
+asr_timeout_ms = 8000
+
+[[cloud]]
+id = "rd-qwen"
+name = "RD Qwen3.8 27B"
+kind = "open_ai_compat"
+base_url = "http://10.88.95.2:8000/v1"
+llm_model = "Qwen3.8-27B-UD-Q6_K_L"
