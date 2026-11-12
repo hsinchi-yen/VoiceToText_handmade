@@ -249,6 +249,41 @@ export const commands = {
   },
   cloud_open_key_page: () => null,
 
+  // presets (T4.1)
+  presets_list: () => [
+    { name: "TN", title: "TN 區網服務", id_prefix: "tn-", services: [{ id: "tn-tea-asr" }, { id: "tn-breeze-asr" }, { id: "tn-qwen" }] },
+    { name: "RD", title: "RD 區網服務", id_prefix: "rd-", services: [{ id: "rd-tea-asr" }, { id: "rd-breeze-asr" }, { id: "rd-qwen" }] },
+  ],
+  presets_preview: async ({ source }) => {
+    await delay(200);
+    const p = source.builtin === "RD" ? "rd" : "tn";
+    const host = p === "rd" ? "10.88.95.2" : "10.20.30.23";
+    const up = p.toUpperCase();
+    return {
+      title: `${up} 區網服務`,
+      id_prefix: `${p}-`,
+      services: [
+        { id: `${p}-tea-asr`, name: `${up} TEA-ASR`, base_url: `http://${host}:8001/v1`, asr_model: "tea-asr-1", llm_model: null, model_source: null, asr_timeout_ms: null, purposes: ["asr"], needs_key: false, has_key: false },
+        { id: `${p}-breeze-asr`, name: `${up} Breeze-ASR`, base_url: `http://${host}:8002/v1`, asr_model: "breeze-asr-25", llm_model: null, model_source: null, asr_timeout_ms: 8000, purposes: ["asr"], needs_key: true, has_key: false },
+        { id: `${p}-qwen`, name: `${up} Qwen3.8 27B`, base_url: `http://${host}:8000/v1`, asr_model: null, llm_model: "Qwen3.8-27B-UD-Q6_K_L", model_source: "detected", asr_timeout_ms: null, purposes: ["polish", "translate"], needs_key: false, has_key: false },
+      ],
+      route: { polish: `${p}-qwen`, translate: `${p}-qwen`, cloud_fallback_to_local: true },
+      asr_choices: [{ id: `${p}-tea-asr`, name: `${up} TEA-ASR` }, { id: `${p}-breeze-asr`, name: `${up} Breeze-ASR` }],
+      needs_key: [`${p}-breeze-asr`],
+      ignored: [],
+    };
+  },
+  presets_apply: async ({ source, asrChoice }) => {
+    await delay(300);
+    const pv = await commands.presets_preview({ source });
+    config.route.asr = asrChoice;
+    config.route.polish = pv.route.polish;
+    config.route.translate = pv.route.translate;
+    await emit("v2c:config-changed", null);
+    return { title: pv.title, asr_choice: asrChoice, services: pv.services, key_missing: pv.needs_key.includes(asrChoice) ? [asrChoice] : [] };
+  },
+  presets_pick_file: () => null,
+
   // vocabulary
   vocab_get: () => ({ text: vocab, max_entries: 500, max_entry_chars: 40 }),
   vocab_set: ({ text }) => {
