@@ -20,6 +20,7 @@
 <style>
   .group {
     display: inline-flex;
+    width: fit-content;
     max-width: 100%;
     border: 1px solid var(--md-outline);
     border-radius: var(--md-radius-full);

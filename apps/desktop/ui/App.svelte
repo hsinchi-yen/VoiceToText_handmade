@@ -7,7 +7,7 @@
   import Overlay from "./routes/Overlay.svelte";
   import Onboarding from "./routes/Onboarding.svelte";
   import NavRail from "./lib/NavRail.svelte";
-  import { NAV_ITEMS, activeNavPath, libraryTab, resolveRoute } from "./lib/nav.js";
+  import { NAV_ITEMS, activeNavPath, libraryTab, parseHash, resolveRoute } from "./lib/nav.js";
   import { resumeStep, skipped as onboardingSkipped } from "./onboarding/api.js";
 
   // Hash routes (see lib/nav.js): #/ #/services #/library?tab=vocab|history #/settings, plus
@@ -32,6 +32,9 @@
   $effect(() => {
     if (route.redirect) location.replace(route.redirect);
   });
+  $effect(() => {
+    document.documentElement.classList.toggle("overlay", route.path === "overlay");
+  });
 
   // First run: open onboarding when no local model exists (or to resume it after the
   // restart that loads newly installed models). Not after the user skipped it.
@@ -40,7 +43,8 @@
     invoke("onboarding_status")
       .then((s) => {
         const open = (s.needed && !onboardingSkipped()) || resumeStep();
-        if (open && resolveRoute(location.hash).path === "") location.hash = "#/onboarding";
+        // Only the bare home URL (empty hash or "#/"); unknown routes just show Home.
+        if (open && parseHash(location.hash).path === "") location.hash = "#/onboarding";
       })
       .catch(() => {});
   });

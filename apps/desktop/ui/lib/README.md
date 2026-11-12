@@ -32,7 +32,7 @@ Use these CSS variables instead of hard-coded colors; light/dark switch by `pref
 | `Card` | Surface container | `variant` filled\|elevated\|outlined, `tag` (default div), `padding`, children |
 | `ListItem` | List row | `headline`, `supporting`, `leading` / `trailing` snippets, `href` (link) or `onclick` (button), `selected`, children |
 | `Dialog` | Modal dialog (native `<dialog>`: focus trapped, Esc closes, focus restored) | `open` (bindable), `title`, `dismissible` (default true; false blocks Esc and backdrop), `onclose`, children, `actions` snippet |
-| `SegmentedButton` | Single choice, 2 to 4 options | `value` (bindable), `options` `[{value,label,icon?,disabled?}]`, `label` (group name), `disabled`, `onchange` |
+| `SegmentedButton` | Single choice, 2 to 4 options; always content-sized (`fit-content`), never stretches in grid/flex parents | `value` (bindable), `options` `[{value,label,icon?,disabled?}]`, `label` (group name), `disabled`, `onchange` |
 | `Tabs` | Tab bar with roving tabindex and arrow keys | `value` (bindable id), `tabs` `[{id,label,icon?}]`, `idPrefix`, `label`, `onchange`. The caller renders the panel with `role="tabpanel"`, `id="{idPrefix}-panel-{id}"`, `aria-labelledby="{idPrefix}-tab-{id}"` (see `routes/Library.svelte`) |
 | `Banner` | Inline message | `variant` info\|success\|warning\|error, `title`, `onclose` (adds a dismiss button), children, `actions` snippet |
 | `LinearProgress` | Progress bar | `value` 0..1 (null = indeterminate), `label` |

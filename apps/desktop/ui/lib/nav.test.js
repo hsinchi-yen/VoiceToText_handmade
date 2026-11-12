@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeNavPath, libraryTab, parseHash, resolveRoute } from "./nav.js";
+import { activeNavPath, libraryHref, libraryTab, parseHash, resolveRoute } from "./nav.js";
 
 describe("parseHash", () => {
   it("handles empty and root hashes", () => {
@@ -59,5 +59,23 @@ describe("activeNavPath", () => {
     expect(activeNavPath("library")).toBe("library");
     expect(activeNavPath("")).toBe("");
     expect(activeNavPath("onboarding")).toBeNull();
+  });
+});
+
+describe("library tab round trip", () => {
+  it("libraryHref resolves back to the same tab, and the old URL re-selects it", () => {
+    for (const tab of ["vocab", "history"]) {
+      const r = resolveRoute(libraryHref(tab));
+      expect(r.path).toBe("library");
+      expect(libraryTab(r.query)).toBe(tab);
+      expect(r.redirect).toBeNull();
+    }
+    // Tray "輸入紀錄" after the user switched to vocab: old URL redirects to the history tab.
+    const r = resolveRoute("#/history");
+    expect(libraryTab(resolveRoute(r.redirect).query)).toBe("history");
+  });
+  it("a bare unknown route keeps an empty raw path only for home", () => {
+    expect(parseHash("#/foo").path).toBe("foo");
+    expect(parseHash("#/").path).toBe("");
   });
 });

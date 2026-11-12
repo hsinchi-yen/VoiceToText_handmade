@@ -97,7 +97,6 @@
   font-size: var(--md-type-body-size);
   line-height: var(--md-type-body-line);
   color: var(--md-on-surface);
-  background: var(--md-surface);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -144,13 +143,27 @@
   box-sizing: border-box;
 }
 
-html {
+/*
+ * Page backgrounds. The overlay window is transparent: main.js/App.svelte put the class
+ * "overlay" on <html> for #/overlay (before the first paint), which skips the backgrounds and
+ * resets color-scheme (a dark/light canvas would otherwise be opaque).
+ */
+html:not(.overlay),
+html:not(.overlay) body {
   background: var(--md-surface);
+}
+
+html.overlay {
+  color-scheme: normal;
+  background: transparent;
+}
+
+html.overlay body {
+  background: transparent;
 }
 
 body {
   margin: 0;
-  background: var(--md-surface);
   color: var(--md-on-surface);
   font-family: var(--md-font);
   font-size: var(--md-type-body-size);
