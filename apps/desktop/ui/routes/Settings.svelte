@@ -194,7 +194,7 @@
 
   $effect(() => {
     load();
-    // The tray and the 雲端服務 page also change config.toml (and so does our own 「儲存」).
+    // The tray, the Home quick controls and the 服務 page also change config.toml (and so does our own 「儲存」).
     const un = listen("v2c:config-changed", async () => {
       if (saving) return;
       let fresh;
@@ -269,7 +269,7 @@
     <div class="dock">
       {#if incoming}
         <Banner variant="warning">
-          設定已在別處變更（系統列或雲端服務頁）。
+          設定已在別處變更（系統列、首頁或服務頁）。
           {#snippet actions()}
             <Button variant="tonal" onclick={reloadIncoming}>重新載入（捨棄草稿）</Button>
             <Button variant="text" onclick={keepDraft}>保留草稿</Button>

@@ -145,11 +145,11 @@
       </div>
       {#if !haveModel}
         <p class="hint">
-          至少需要一個語音模型才能繼續。下載失敗也不影響 v2c 其他功能，可以稍後再回來（「設定 → 地端語音模型」或「狀態」頁都有入口）。
+          至少需要一個語音模型才能繼續。下載失敗也不影響 v2c 其他功能，可以稍後再回來（「設定」頁最下面的「重新執行初次設定」，或首頁的「前往初次設定」）。
         </p>
         <div class="alt">
           <p>不想下載，或下載一直失敗？也可以改用雲端語音辨識（需要你自己的金鑰，例如 OpenAI、Gemini，或區網的相容端點）。</p>
-          <Button variant="tonal" onclick={() => skip("#/cloud-setup")}>略過，改用雲端服務</Button>
+          <Button variant="tonal" onclick={() => skip("#/services")}>略過，改用雲端服務</Button>
         </div>
       {/if}
     {:else if step === "mic"}

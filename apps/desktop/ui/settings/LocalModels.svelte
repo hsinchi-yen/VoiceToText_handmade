@@ -117,7 +117,7 @@
   {#if !view.tea_build}
     <!-- No CUDA build (the Linux package, dev builds): the model could not run here, so do
          not offer the 2.2 GB download. Windows release builds have CUDA and are unchanged. -->
-    <span class="hint">這個版本無法在本機執行（需要 NVIDIA 顯示卡與 CUDA 版）。要用 TEA-ASR，請在「雲端服務」接上提供它的伺服器。</span>
+    <span class="hint">這個版本無法在本機執行（需要 NVIDIA 顯示卡與 CUDA 版）。要用 TEA-ASR，請在「服務」頁接上提供它的伺服器（公司區網可直接用首頁的「套用預設組態」）。</span>
   {:else if tea?.installed || view.tea_asr}
     <span>已安裝</span>
   {:else if teaBusy}

@@ -45,7 +45,7 @@
   </div>
   <p class="hint">
     潤飾與中翻英的「地端」是這台電腦的 LM Studio（<button class="link" onclick={() => api.openDoc("local-setup")}>設定說明</button>）；沒開時潤飾改用規則式去贅字。
-    要用雲端服務或別台電腦，請到 <a href="#/services">雲端服務</a> 串接（選用，雲端會依用量收費）。
+    要用雲端服務或別台電腦，請到 <a href="#/services">服務</a> 頁串接（選用，雲端會依用量收費）。
   </p>
 </Card>
 
