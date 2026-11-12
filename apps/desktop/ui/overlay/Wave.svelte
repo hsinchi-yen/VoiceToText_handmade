@@ -1,19 +1,22 @@
 <script>
-  import { LevelHistory, buildTrace } from "./wave.js";
+  import { LevelHistory, LevelSampler, buildTrace } from "./wave.js";
 
   // Green oscilloscope/ECG trace driven by the ~20 Hz `level` of the recording view. Levels go
   // into a time-stamped history; every animation frame the trace is rebuilt from it (with
   // interpolation) so it scrolls right to left smoothly at display rate. The rAF loop only
   // exists while this component is mounted, i.e. while the overlay shows "recording".
-  let { level = 0 } = $props();
+  // `view` is a new object per overlay event, so the effect below also runs for repeated equal
+  // levels (needed to tell "steady" from "no events").
+  let { view } = $props();
 
   const history = new LevelHistory();
+  const sampler = new LevelSampler(history);
   const now = () => performance.now() / 1000;
 
   let canvas;
 
   $effect(() => {
-    history.push(level, now());
+    sampler.setLevel(view.level ?? 0, now());
   });
 
   $effect(() => {
@@ -48,6 +51,7 @@
 
     function frame() {
       if (stopped) return;
+      sampler.tick(now());
       fit();
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, cw, ch);

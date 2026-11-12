@@ -75,7 +75,7 @@
         {#if view.hands_free}
           <span class="hf-dot" title="免持"></span>
         {/if}
-        <Wave level={view.level ?? 0} />
+        <Wave {view} />
       {:else if isProgress}
         <Progress kind={view.kind} />
       {:else}

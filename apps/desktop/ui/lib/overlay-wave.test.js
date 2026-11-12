@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   LevelHistory,
+  LevelSampler,
   ProgressEstimator,
   POLISH_TARGET,
   TRANSCRIBE_TARGET,
@@ -147,5 +148,44 @@ describe("ProgressEstimator", () => {
     p.setPhase("recording", 1);
     p.setPhase("transcribing", 2);
     expect(p.value(2)).toBe(0);
+  });
+});
+
+describe("LevelSampler", () => {
+  it("silence then speech: samples older than the jump stay near 0", () => {
+    const h = new LevelHistory();
+    const s = new LevelSampler(h);
+    s.setLevel(0, 0);
+    let t = 0;
+    for (; t < 2; t += 1 / 60) s.tick(t); // 2 s of silence, no new events
+    s.setLevel(0.8, t);
+    const jump = t;
+    for (; t < jump + 0.3; t += 1 / 60) {
+      s.tick(t);
+      s.setLevel(0.8, t);
+    }
+    expect(h.sampleAt(jump - 0.1)).toBeLessThan(0.02);
+    expect(h.sampleAt(jump - 1)).toBe(0);
+    expect(h.sampleAt(t)).toBeGreaterThan(0.7);
+    // The trace's older part is flat while the onset sits at the right edge.
+    const tr = buildTrace(h, t, 100);
+    expect(Math.max(...tr.slice(0, 60).map(Math.abs))).toBeLessThan(0.15);
+  });
+
+  it("a stall decays towards 0 instead of holding the last value", () => {
+    const h = new LevelHistory();
+    const s = new LevelSampler(h);
+    s.setLevel(0.9, 0);
+    expect(s.effective(0.2)).toBeCloseTo(0.9, 5);
+    expect(s.effective(0.6)).toBeLessThan(0.9);
+    expect(s.effective(3)).toBeLessThan(0.01);
+  });
+
+  it("samples at a steady cadence", () => {
+    const h = new LevelHistory();
+    const s = new LevelSampler(h);
+    for (let t = 0; t < 1; t += 1 / 60) s.tick(t);
+    expect(h.t.length).toBeGreaterThanOrEqual(18);
+    expect(h.t.length).toBeLessThanOrEqual(21);
   });
 });

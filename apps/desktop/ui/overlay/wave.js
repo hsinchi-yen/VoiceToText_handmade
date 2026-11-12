@@ -144,3 +144,42 @@ export class ProgressEstimator {
     }
   }
 }
+
+// ---- Steady sampling ----------------------------------------------------------------------
+
+export const SAMPLE_SECS = 0.05;
+export const STALL_SECS = 0.3;
+const STALL_TAU = 0.15;
+
+/**
+ * Feeds the history at a steady cadence from the animation loop, whether or not level events
+ * arrive (they are deduplicated upstream: a constant 0 sends nothing new to the UI). If events
+ * stop for longer than STALL_SECS the level decays towards 0 instead of freezing.
+ */
+export class LevelSampler {
+  constructor(history) {
+    this.history = history;
+    this.level = 0;
+    this.eventAt = -Infinity;
+    this.pushedAt = -Infinity;
+  }
+
+  /** An overlay level event arrived (even if the value is unchanged). */
+  setLevel(level, now) {
+    this.level = clamp01(level);
+    this.eventAt = now;
+  }
+
+  effective(now) {
+    const stale = now - this.eventAt - STALL_SECS;
+    return stale > 0 ? this.level * Math.exp(-stale / STALL_TAU) : this.level;
+  }
+
+  /** Call every frame; pushes a sample when at least SAMPLE_SECS passed since the last one. */
+  tick(now) {
+    if (now - this.pushedAt >= SAMPLE_SECS) {
+      this.history.push(this.effective(now), now);
+      this.pushedAt = now;
+    }
+  }
+}
