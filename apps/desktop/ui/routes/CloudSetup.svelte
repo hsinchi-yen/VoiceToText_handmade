@@ -1,12 +1,15 @@
 <script>
-  // 雲端服務 page (T1.7b): connected services + 「新增雲端服務」 wizard (plan §6.2).
+  // 服務 page (T1.7b, restyled T4.4): connected services grouped by preset + wizard (plan §6.2).
   import { listen } from "@tauri-apps/api/event";
   import * as api from "../cloud-setup/api.js";
   import Wizard from "../cloud-setup/Wizard.svelte";
   import ServiceList from "../cloud-setup/ServiceList.svelte";
   import RouteSummary from "../cloud-setup/RouteSummary.svelte";
+  import * as presetsApi from "../presets/api.js";
+  import { Banner } from "../lib/index.js";
 
   let kinds = $state([]);
+  let presets = $state([]);
   let services = $state([]);
   let loaded = $state(false);
   let message = $state("");
@@ -23,6 +26,8 @@
   async function refresh() {
     try {
       [kinds, services] = await Promise.all([api.kinds(), api.list()]);
+      // Only used to group the list; a failure just means everything lands in 「其他」.
+      presets = await presetsApi.list().catch(() => []);
       message = "";
     } catch (code) {
       message = api.describe(code);
@@ -44,11 +49,11 @@
   }
 </script>
 
-<h1>雲端服務</h1>
-
 {#if !loaded}
-  <p>載入中…</p>
+  <h1>服務</h1>
+  <p class="hint">載入中…</p>
 {:else if wizard}
+  <h1>{wizard.id ? "修改服務" : "新增服務"}</h1>
   {#key wizardKey}
     <Wizard
       {kinds}
@@ -60,39 +65,50 @@
     />
   {/key}
 {:else}
-  <p class="hint">預設全部使用地端模型，不需要任何金鑰。串接雲端服務是選用的。</p>
+  <h1>服務</h1>
+  <p class="hint lead">公司區網請用<a href="#/">首頁的「套用預設組態」</a></p>
   <RouteSummary {services} />
-  <details class="howto">
-    <summary>區網或自架伺服器有兩個網址（文字模型、語音辨識）時怎麼設定？</summary>
-    <ol>
-      <li>按「新增雲端服務」→「自訂相容端點」，填文字模型的網址（例如 <code>http://10.0.0.5:8000/v1</code>），選「文字模型」，填模型名稱，測試後勾「潤飾」「中翻英」。</li>
-      <li>最後一步按「再新增一個端點」，把連接埠改成語音辨識的（例如 <code>:8002/v1</code>），選「語音辨識」，填模型名稱，測試後勾「語音辨識」。</li>
-      <li>兩個服務各自保存金鑰；上面的「目前由誰處理」會顯示每個用途交給哪個網址。</li>
-    </ol>
-  </details>
   <ServiceList
     {services}
+    {presets}
     onAdd={() => openWizard({})}
     onEdit={(s) => openWizard(s)}
     onChanged={refresh}
   />
+  <details class="howto">
+    <summary>區網或自架伺服器有兩個網址（文字模型、語音辨識）時怎麼設定？</summary>
+    <ol>
+      <li>按「新增服務」→「自訂相容端點」，填文字模型的網址（例如 <code>http://10.0.0.5:8000/v1</code>），選「文字模型」，填模型名稱，測試後勾「潤飾」「中翻英」。</li>
+      <li>最後一步按「再新增一個端點」，把連接埠改成語音辨識的（例如 <code>:8002/v1</code>），選「語音辨識」，填模型名稱，測試後勾「語音辨識」。</li>
+      <li>兩個服務各自保存金鑰；上面的「各用途由誰處理」會顯示每個用途交給哪個網址。</li>
+    </ol>
+  </details>
 {/if}
 
-{#if message}<p class="bad">{message}</p>{/if}
+{#if message}<div class="msg"><Banner variant="error">{message}</Banner></div>{/if}
 
 <style>
-  .hint {
-    opacity: 0.75;
-    font-size: 0.9em;
-  }
-  .bad {
-    color: #cf222e;
+  .lead {
+    margin: 0 0 var(--md-space-4);
   }
   .howto {
-    margin: 0 0 1rem;
-    font-size: 0.95em;
+    margin: var(--md-space-4) 0;
+    padding: var(--md-space-3) var(--md-space-4);
+    border-radius: var(--md-radius-md);
+    background: var(--md-surface-container-low);
+    font-size: var(--md-type-body-sm-size);
+    line-height: var(--md-type-body-sm-line);
   }
   .howto summary {
     cursor: pointer;
+    color: var(--md-on-surface);
+    font-weight: 600;
+  }
+  .howto ol {
+    margin: var(--md-space-2) 0 0;
+    padding-left: var(--md-space-5);
+  }
+  .msg {
+    margin-top: var(--md-space-4);
   }
 </style>

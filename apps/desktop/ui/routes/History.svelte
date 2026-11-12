@@ -1,6 +1,7 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import { Banner, Button, Card } from "../lib/index.js";
 
   // Error codes from src-tauri/src/commands/history.rs. Never contain user text.
   const errorText = {
@@ -95,30 +96,30 @@
 </script>
 
 <h1>輸入紀錄</h1>
-<p class="hint">
+<p class="hint lead">
   最近的輸入結果（預設最多 200 筆、保留 7 天後自動刪除）。內容已加密保存在本機；密碼管理器等「不記錄的 App」不會留下紀錄。
 </p>
 
 <div class="toolbar">
   {#if confirmClear}
     <span>確定要清除全部 {items.length} 筆紀錄？此動作無法復原。</span>
-    <button class="danger" onclick={clearAll}>確定清除</button>
-    <button onclick={() => (confirmClear = false)}>取消</button>
+    <Button variant="tonal" danger onclick={clearAll}>確定清除</Button>
+    <Button variant="text" onclick={() => (confirmClear = false)}>取消</Button>
   {:else}
-    <button class="danger" disabled={items.length === 0} onclick={() => (confirmClear = true)}>
+    <Button variant="outlined" danger icon="trash" disabled={items.length === 0} onclick={() => (confirmClear = true)}>
       全部清除
-    </button>
+    </Button>
   {/if}
-  {#if message}<span class="message" role="status">{message}</span>{/if}
 </div>
+{#if message}<div class="status"><Banner variant="info" onclose={() => (message = "")}>{message}</Banner></div>{/if}
 
 {#if loaded && items.length === 0}
-  <p class="empty">目前沒有紀錄。</p>
+  <p class="hint">目前沒有紀錄。</p>
 {/if}
 
 <ul>
   {#each items as item (item.id)}
-    <li>
+    <Card tag="li" variant="outlined" padding="var(--md-space-3) var(--md-space-4)">
       <div class="meta">
         <span>{fmt.format(new Date(item.created_at * 1000))}</span>
         {#if item.id < 0}
@@ -131,62 +132,58 @@
       </div>
       <p class="text">{item.text}</p>
       <div class="actions">
-        <button onclick={() => copy(item)}>複製</button>
-        <button onclick={() => reoutput(item.id)} title="切回上一個視窗並輸入這段文字">
+        <Button variant="text" icon="copy" onclick={() => copy(item)}>複製</Button>
+        <Button variant="text" icon="refresh" onclick={() => reoutput(item.id)} title="切回上一個視窗並輸入這段文字">
           重新輸出
-        </button>
-        <button onclick={() => remove(item.id)}>刪除</button>
+        </Button>
+        <Button variant="text" danger icon="trash" onclick={() => remove(item.id)}>刪除</Button>
       </div>
-    </li>
+    </Card>
   {/each}
 </ul>
 
 <style>
-  .hint,
-  .empty {
-    opacity: 0.7;
-    font-size: 0.9rem;
+  .lead {
+    margin: 0 0 var(--md-space-3);
   }
   .toolbar {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.5rem;
-    margin: 0.75rem 0;
+    gap: var(--md-space-2);
+    margin: var(--md-space-3) 0;
   }
-  .message {
-    opacity: 0.85;
+  .status {
+    margin-bottom: var(--md-space-3);
   }
   ul {
+    display: grid;
+    gap: var(--md-space-2);
     list-style: none;
     padding: 0;
     margin: 0;
   }
-  li {
-    padding: 0.6rem 0;
-    border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent);
-  }
   .meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.75rem;
-    font-size: 0.8rem;
-    opacity: 0.65;
+    gap: var(--md-space-1) var(--md-space-3);
+    color: var(--md-on-surface-variant);
+    font-size: var(--md-type-label-sm-size);
+    line-height: var(--md-type-label-sm-line);
   }
   .tag {
-    color: #2f81f7;
-    opacity: 1;
+    color: var(--md-primary);
+    font-weight: 600;
   }
   .text {
-    margin: 0.3rem 0;
+    margin: var(--md-space-1) 0;
     white-space: pre-wrap;
     word-break: break-word;
   }
   .actions {
     display: flex;
-    gap: 0.5rem;
-  }
-  button.danger {
-    color: #cf222e;
+    flex-wrap: wrap;
+    gap: var(--md-space-1);
+    margin: 0 calc(-1 * var(--md-space-3));
   }
 </style>

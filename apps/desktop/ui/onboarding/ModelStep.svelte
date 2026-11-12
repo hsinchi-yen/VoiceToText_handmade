@@ -2,6 +2,7 @@
   // Download / import the local speech models, with progress (`v2c:model-progress`).
   import { listen } from "@tauri-apps/api/event";
   import * as api from "./api.js";
+  import { Banner, Button, Card, LinearProgress } from "../lib/index.js";
 
   let { recommended, onInstalled } = $props();
 
@@ -70,91 +71,82 @@
   const pct = (p) => (p?.total ? Math.floor((p.done / p.total) * 100) : null);
 </script>
 
-{#if note}<p class="bad">{note}</p>{/if}
+{#if note}<Banner variant="error">{note}</Banner>{/if}
 {#if !st}
   <p>讀取中…</p>
 {:else}
   <p class="hint">模型存放在 {st.models_dir}，只需要下載一次；下載中斷可以接著繼續。</p>
-  {#each shown as e (e.id)}
-    <div class="model">
-      <div class="row">
-        <b>{label[e.id] ?? e.id}</b>
-        {#if e.installed}
-          <span class="ok">已安裝</span>
-        {:else if busy[e.id]}
-          <button onclick={() => api.cancel(e.id)}>暫停</button>
-        {:else if e.downloadable}
-          <button onclick={() => run(e.id, () => api.download(e.id))}>
-            {e.partial_bytes > 0 ? `繼續下載（已下載 ${api.mb(e.partial_bytes)}）` : `下載（${api.mb(e.size)}）`}
-          </button>
-        {:else}
-          <span class="hint">尚未提供下載</span>
+  <div class="models">
+    {#each shown as e (e.id)}
+      <Card variant="outlined" padding="var(--md-space-3) var(--md-space-4)">
+        <div class="row">
+          <b>{label[e.id] ?? e.id}</b>
+          {#if e.installed}
+            <span class="ok">已安裝</span>
+          {:else if busy[e.id]}
+            <Button variant="outlined" onclick={() => api.cancel(e.id)}>暫停</Button>
+          {:else if e.downloadable}
+            <Button variant="tonal" icon="download" onclick={() => run(e.id, () => api.download(e.id))}>
+              {e.partial_bytes > 0 ? `繼續下載（已下載 ${api.mb(e.partial_bytes)}）` : `下載（${api.mb(e.size)}）`}
+            </Button>
+          {:else}
+            <span class="hint">尚未提供下載</span>
+          {/if}
+        </div>
+        {#if busy[e.id] && progress[e.id]}
+          {@const p = progress[e.id]}
+          <div class="bar"><LinearProgress value={(pct(p) ?? 0) / 100} label="下載進度" /></div>
+          <span class="hint">
+            {phaseText[p.phase] ?? ""} {pct(p) != null ? `${pct(p)}%（${api.mb(p.done)} / ${api.mb(p.total)}）` : ""}
+          </span>
         {/if}
-      </div>
-      {#if busy[e.id] && progress[e.id]}
-        {@const p = progress[e.id]}
-        <div class="bar"><div style:width={`${pct(p) ?? 0}%`}></div></div>
-        <span class="hint">
-          {phaseText[p.phase] ?? ""} {pct(p) != null ? `${pct(p)}%（${api.mb(p.done)} / ${api.mb(p.total)}）` : ""}
-        </span>
-      {/if}
-      {#if desc[e.id]}<p class="hint">{desc[e.id]}</p>{/if}
-      {#if errors[e.id]}<p class="bad">{errors[e.id]}</p>{/if}
-    </div>
-  {/each}
+        {#if desc[e.id]}<p class="hint">{desc[e.id]}</p>{/if}
+        {#if errors[e.id]}<p class="bad">{errors[e.id]}</p>{/if}
+      </Card>
+    {/each}
 
+    {#if recommended === "breeze_q5_0"}
+      <Card variant="outlined" padding="var(--md-space-3) var(--md-space-4)">
+        <div class="row">
+          <b>從本機檔案匯入 Breeze 模型</b>
+          <Button variant="outlined" icon="upload" disabled={busy["breeze-import"]} onclick={() => run("breeze-import", api.importBreeze)}>
+            選擇 .bin 檔…
+          </Button>
+        </div>
+        <p class="hint">選擇 tools/convert-breeze 轉好的 ggml-breeze-asr-25-q5_0.bin 或 q8_0.bin，會複製到模型資料夾。</p>
+        {#if busy["breeze-import"] && progress["breeze-import"]}
+          <div class="bar"><LinearProgress value={(pct(progress["breeze-import"]) ?? 0) / 100} label="匯入進度" /></div>
+        {/if}
+        {#if errors["breeze-import"]}<p class="bad">{errors["breeze-import"]}</p>{/if}
+      </Card>
+    {/if}
+  </div>
   {#if recommended === "breeze_q5_0"}
-    <div class="model">
-      <div class="row">
-        <b>從本機檔案匯入 Breeze 模型</b>
-        <button disabled={busy["breeze-import"]} onclick={() => run("breeze-import", api.importBreeze)}>
-          選擇 .bin 檔…
-        </button>
-      </div>
-      <p class="hint">選擇 tools/convert-breeze 轉好的 ggml-breeze-asr-25-q5_0.bin 或 q8_0.bin，會複製到模型資料夾。</p>
-      {#if busy["breeze-import"] && progress["breeze-import"]}
-        <div class="bar"><div style:width={`${pct(progress["breeze-import"]) ?? 0}%`}></div></div>
-      {/if}
-      {#if errors["breeze-import"]}<p class="bad">{errors["breeze-import"]}</p>{/if}
-    </div>
     <p class="hint">建議同時下載 SenseVoice：玩遊戲或顯存不足時，v2c 會自動改用它（CPU）。</p>
   {/if}
 {/if}
 
 <style>
-  .model {
-    margin: 0.6rem 0;
-    padding: 0.5rem 0.75rem;
-    border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
-    border-radius: 6px;
+  .models {
+    display: grid;
+    gap: var(--md-space-3);
+    margin: var(--md-space-3) 0;
   }
   .row {
     display: flex;
-    gap: 0.75rem;
+    gap: var(--md-space-3);
     align-items: center;
     justify-content: space-between;
     flex-wrap: wrap;
   }
   .bar {
-    height: 8px;
-    margin: 0.4rem 0 0.2rem;
-    background: color-mix(in srgb, currentColor 15%, transparent);
-    border-radius: 4px;
-    overflow: hidden;
-  }
-  .bar div {
-    height: 100%;
-    background: #2f81f7;
+    margin: var(--md-space-2) 0 var(--md-space-1);
   }
   .ok {
-    color: #2da44e;
+    color: var(--md-success);
     font-weight: 600;
   }
   .hint {
-    opacity: 0.75;
-    font-size: 0.9em;
-  }
-  .bad {
-    color: #cf222e;
+    margin: var(--md-space-1) 0;
   }
 </style>
