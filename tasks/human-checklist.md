@@ -151,7 +151,17 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] 檢查點 1：日常使用一週，問題記在 `tasks/dogfood-windows.md`
 
 ## Phase 2
-- [ ] 側載 APK 到手機實測；回報手機型號與 Android 版本
+- [ ] Android Rust 工具（T2.3 開工前；agent 不安裝工具，請你執行）：
+  ```powershell
+  rustup target add aarch64-linux-android x86_64-linux-android
+  cargo install cargo-ndk
+  $env:ANDROID_NDK_HOME = "$env:LOCALAPPDATA\Android\Sdk\ndk\28.2.13676358"   # 建議設成使用者環境變數
+  ```
+  已確認存在：Android SDK（platform 36、37，build-tools 36.0.0）、NDK 28.2、JDK 17（`JAVA_HOME`）。
+- [ ] 側載 APK 到手機實測；回報手機型號與 Android 版本（16 或 17）
+- [ ] T2.4 網路情境：公司 Wi-Fi 或 VPN 下自動走 TEA；長按小圖示切 Breeze／系統／本機；關 Wi-Fi 後自動改系統辨識；區網伺服器關閉時不卡頓；中翻英輸出英文
+- [ ] T2.6 本機模型：用 `tests/fixtures/audio` 的錄音在手機跑比較工具，依比較表決定預設模型；飛航模式下能輸入
+- [ ] T2.5 產生 APK 簽署金鑰（`keytool`，說明見 `docs/android-install.md`）；照說明側載安裝一遍
 - [ ] 檢查點 2：手機日常使用一週
 - [ ] 決定 Linux 用哪台電腦（同一台雙系統或另一台），並提供規格
 

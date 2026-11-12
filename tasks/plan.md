@@ -226,7 +226,7 @@ breeze_quant = "q5_0"         # q5_0 | q8_0（q8 較準、多約 0.6 GB）
 
 - 模型名稱全部放設定檔，不寫死。
 - 逾時：ASR 5 秒、LLM 3 秒；失敗時浮動標籤顯示錯誤，紀錄中保留 ASR 原文以便重送。
-- 金鑰：`v2c-core` 定義 `SecretStore` trait，`keyring` feature 只依賴與 OS 無關的 `keyring-core`；桌面 App 啟動時以 `windows-native-keyring-store` 安裝 Windows 認證管理員作為預設 store（T1.7 查證：`keyring` 4.x 建議應用程式改用 `keyring-core`）；Android 另接 Keystore。設定檔只存 provider 名稱。
+- 金鑰：`v2c-core` 定義 `SecretStore` trait，`keyring` feature 只依賴與 OS 無關的 `keyring-core`；桌面 App 啟動時以 `windows-native-keyring-store` 安裝 Windows 認證管理員作為預設 store（T1.7 查證：`keyring` 4.x 建議應用程式改用 `keyring-core`）；Android 不存金鑰（只用打包的區網預設金鑰，見第 8.2 節）。設定檔只存 provider 名稱。
 - 雲端 HTTP client 一律不跟隨轉址（避免 `x-api-key` 等自訂金鑰標頭被帶到其他主機）；官方服務的 base_url 必須是 https（loopback 除外）。
 
 ### 6.1 預設模型（地端優先）
@@ -292,7 +292,7 @@ Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫�
 - 紀錄：最近 200 筆（預設保留 7 天），可複製、重新輸出、刪除、清空。
 
 **隱私規則（history.rs 與全程式）**
-- 紀錄的文字欄位以 Windows DPAPI（`CryptProtectData`，綁定目前使用者）加密後才寫入 SQLite；Linux 改用 Secret Service 存的金鑰加密，Android 用 Keystore。
+- 紀錄的文字欄位以 Windows DPAPI（`CryptProtectData`，綁定目前使用者）加密後才寫入 SQLite；Linux 改用 Secret Service 存的金鑰加密；Android 沒有輸入紀錄（2026-11-12 你決定）。
 - `history.retention_days = 7`；啟動時與每小時清除過期紀錄。
 - `history.exclude_apps`：前景 App 在清單內就不寫紀錄（預設：1Password、Bitwarden、KeePassXC 等密碼管理器）。
 - **日誌（`tracing`）永不記錄辨識文字、潤飾結果、詞庫內容**，只記長度、耗時、provider、錯誤碼。由單元測試檢查日誌輸出不含測試句子。
@@ -306,14 +306,49 @@ Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫�
 ## 8. Android（apps/android）
 
 - `V2cImeService : InputMethodService`；`onCreateInputView` 回傳 `ComposeView`（必須手動設定 `ViewTreeLifecycleOwner` 與 `SavedStateRegistryOwner`，否則 Compose 會當掉）。
-- 鍵盤：大麥克風鍵（按住說話 / 點一下開始、再點一下結束）、中翻英鍵（只在設定了 LLM 時顯示）、退格、換行、切回原輸入法（`switchToPreviousInputMethod()`）。
-- 辨識：`SpeechRecognizer`，`EXTRA_LANGUAGE = "zh-TW"`、`EXTRA_PARTIAL_RESULTS`（顯示在鍵盤上方預覽）、`EXTRA_PREFER_OFFLINE`；API 31+ 優先 `createOnDeviceSpeechRecognizer`。
-- 權限：IME 無法自己請求 `RECORD_AUDIO`，由設定 Activity 引導授權並啟用鍵盤。
-- 內建辨識不可用（`SpeechRecognizer.isRecognitionAvailable()` 為 false，或回傳語言不支援錯誤）：若已串接雲端 ASR（Gemini / OpenAI / 相容端點），改由 Kotlin 用 `AudioRecord` 錄 16 kHz PCM，經 `v2c-ffi` 送雲端辨識；都沒有則在鍵盤上顯示「請安裝或更新 Google 語音服務」並附前往 Play 商店的按鈕。
-- 輸出：結果經 `v2c-ffi` 的 `zh_tw` 轉換 → `currentInputConnection.commitText()`。
+- 範圍（2026-11-12 你決定）：Android 版**只有語音輸入與中翻英**，沒有設定頁、沒有輸入紀錄、沒有串接雲端精靈、沒有詞庫、沒有潤飾。唯一的 Activity 是首次啟動引導（授權麥克風、啟用並切換到 v2c 鍵盤）。
+- 鍵盤按鍵：大麥克風鍵（語音輸入）、中翻英鍵、退格（長按連續刪除）、換行（依 `imeOptions` 決定送出或換行）、辨識來源小圖示（第 8.1 節）。不放「切回原輸入法」鍵，改用 Android 16／17 導覽列的切換鍵盤按鈕。
+- 操作風格（2026-11-12 你決定，比照 Typeless 的 Android 語音鍵盤）：
+  - 沒有字母鍵；畫面中央是一顆大麥克風，主要操作是**點一下開始、再點一下結束並送出**；按住超過約 300 ms 視為按住說話、放開送出（門檻是程式內常數）。
+  - 中翻英鍵的操作和麥克風相同：說中文，送出英文。
+  - 狀態依序為：待命 → 錄音（波形＋計時；再點一下或放開就結束）→ 辨識中（進度）→ 完成（文字直接 `commitText`，不另外確認）→ 待命。錯誤時顯示簡短原因與重試。
+  - 鍵盤上不顯示辨識中的文字（和桌面 0.2.0 浮動標籤一致），不做部分結果預覽。
+  - 浮動泡泡（無障礙服務，搭配其他鍵盤使用）不做。
+- 版本與建置（你的手機是 Android 16／17）：
+  - `compileSdk`／`targetSdk` 36～37，`minSdk` 28。
+  - 【實作前確認】當時穩定版 AGP、Kotlin（2.x，Compose 用 Kotlin 內建的 Compose Compiler Gradle plugin）、Compose BOM、NDK 版本的相容組合，以及 Google Play 的 targetSdk 要求。版本集中在 `gradle/libs.versions.toml`。
+  - Android 15 起強制 edge-to-edge，鍵盤要正確處理 insets（手勢列）。
+  - 所有原生 `.so` 必須 16 KB 頁面對齊：`cargo-ndk` 用的 NDK 要預設 16 KB 對齊，或加 `-Wl,-z,max-page-size=16384`；sherpa-onnx 預編庫要確認是 16 KB 版本。驗證用 `zipalign -c -P 16 -v 4` 或 Android Studio 的 APK Analyzer。
+- 權限：IME 無法自己請求 `RECORD_AUDIO`，由首次啟動引導 Activity 授權並啟用鍵盤。
+- 輸出：所有辨識來源的結果都經 `v2c-ffi` 的 `to_zh_tw` 轉換 → `currentInputConnection.commitText()`。
+
+### 8.1 辨識來源與路由（2026-11-12 你決定：系統辨識＋本機模型＋區網遠端融合）
+
+三種來源：
+- **區網 ASR**：TN／RD 的 TEA-ASR `:8001`（預設）或 Breeze-ASR `:8002`。端點來自打包進 APK 的 TN／RD 預設組態檔（`apps/desktop/src-tauri/presets/*.toml` 原樣複製），Breeze 用檔內的預設金鑰，不需使用者輸入。Kotlin 用 `AudioRecord` 錄 16 kHz PCM，經 FFI `transcribe_pcm` 交給 `v2c-core` 的相容端點 ASR（使用各服務的 `asr_timeout_ms`）。
+- **系統辨識**：`SpeechRecognizer`，`EXTRA_LANGUAGE = "zh-TW"`、`EXTRA_PREFER_OFFLINE`（不顯示部分結果，見上方操作風格）；API 31+ 優先 `createOnDeviceSpeechRecognizer`。它自己錄音。
+- **本機模型**：sherpa-onnx 官方 Android 支援（Kotlin API＋預編 `jniLibs`），在 Kotlin 層呼叫，不經 Rust（`v2c-asr-local` 的 `sherpa-onnx` crate 會下載桌面預編庫，不一定支援 `aarch64-linux-android`）。預設 SenseVoice-Small int8（約 230 MB），T2.6 在手機實測候選後定案。不包進 APK：**第一次切到本機模型時，鍵盤詢問一次是否下載**，下載到 App 私有目錄並檢查 SHA-256。輸入是 `AudioRecord` 的 PCM。
+
+每句話開始時的選擇（純函式 `choose_asr(lan, system_available, local_model_ready, pick) -> AsrPlan`，在 `crates/v2c-ffi`，比照 `trigger.rs` 單元測試；不放進 `v2c-core`）。`lan` 是偵測結果（TN、RD 或連不到）；`pick` 是鍵盤上的手動選擇，預設「自動」：
+
+| 情況（自動） | 主要 | 失敗時 |
+|------|------|--------|
+| 區網連得到（TN 或 RD） | 該區網的 TEA-ASR | 本機模型（已下載時，用同一段 PCM）；沒有則提示重說 |
+| 區網連不到 | 系統辨識 | 本機模型（已下載時；系統辨識自己錄音，所以要使用者重說） |
+| 系統辨識不可用、本機模型未下載、區網連不到 | 鍵盤提示「請安裝或更新 Google 語音服務」（附 Play 商店按鈕）或「下載本機模型」 | — |
+
+- **手動切換（沒有設定頁）**：長按麥克風旁的辨識來源小圖示，跳出 自動／區網 TEA／區網 Breeze／系統／本機模型。選了自動以外的項目就強制使用該來源，不可用時顯示原因，不靜默改用別的。選擇記在 App 私有的偏好檔，下次開鍵盤沿用。小圖示平常顯示目前來源（例如「TEA」「系統」「本機」）。
+- **區網偵測**：對 TN、RD 兩個區網的 TEA 端點各做 `GET /v1/models`，逾時 800 ms（程式內常數），先回應的那個就是目前的區網；結果快取，在 `ConnectivityManager.NetworkCallback` 的網路變更與鍵盤開啟時重測，不在每句話都測。
+- 日誌只記來源、長度、延遲、錯誤碼。
+
+### 8.2 遠端與網路
+
+- 中翻英：FFI `translate()`（`v2c-core` 的 LLM provider），用目前區網的 Qwen `:8000`；連不到區網時中翻英鍵變灰，點了顯示「需要連上公司網路」。潤飾不做。
+- 設定來源：TN／RD 兩個預設組態 `.toml` 原樣打包進 APK assets，由 FFI 讀出：`[[cloud]]` 用 `v2c-core` 現有的 `CloudService` 型別，`[preset] default_keys` 用 `v2c-ffi` 內的小型結構。Android 不套用、不合併、不寫回設定檔，所以不需要把桌面的 `presets.rs` 搬進 `v2c-core`，也不改 `v2c-core` 公開介面。
+- 金鑰：只有 Breeze 的內建預設金鑰，直接從打包的組態檔讀進記憶體，不存 Keystore（使用者不輸入任何金鑰）。
+- 明文 HTTP：`network_security_config` 只對 `10.20.30.23`、`10.88.95.2` 允許 cleartext。
 - Rust 核心：`cargo-ndk` 編 `arm64-v8a`（必要時加 `x86_64` 給模擬器）；uniffi 產生 Kotlin 綁定；FFI 提供**同步**函式（內部自帶 tokio runtime），Kotlin 在 `Dispatchers.IO` 呼叫，避開 uniffi async 的複雜度。
-- 金鑰：Android Keystore 加密後存 DataStore。
-- 最低版本：Android 9（API 28），以 `switchToPreviousInputMethod` 為準。
+- 最低版本：Android 9（API 28）；目標與實測裝置是 Android 16／17。
 
 ---
 
@@ -388,7 +423,9 @@ v2c-asr-local ──(依賴 core 的 trait)
 v2c-platform/windows ──(core 的 inject_plan、trigger)
 v2c-cli ──(core + asr-local + platform)         ← Phase 0 量測工具
 apps/desktop ──(core + asr-local + platform)    ← Phase 1
-v2c-ffi ──(core) → apps/android                 ← Phase 2
+v2c-ffi ──(core) → apps/android                 ← Phase 2（choose_asr 純邏輯在 v2c-ffi）
+sherpa-onnx Android（Kotlin，本機模型）→ apps/android   ← Phase 2（T2.6）
+apps/desktop/src-tauri/presets/*.toml（複製到 APK assets）→ v2c-ffi   ← Phase 2
 v2c-platform/linux → apps/desktop              ← Phase 3
 apps/desktop/ui 重構＋presets（不改 v2c-core） ← Phase 4（第 13 節）
 ```
@@ -448,13 +485,16 @@ apps/desktop/ui 重構＋presets（不改 v2c-core） ← Phase 4（第 13 節�
 
 | 任務 | 主要檔案 | 驗收 |
 |------|----------|------|
-| T2.1 語音鍵盤最小路徑 | `V2cImeService.kt`、`KeyboardView.kt`、`SetupActivity.kt` | 在 LINE、Chrome 按住麥克風輸入中/英/夾雜；內建辨識不可用時顯示安裝提示 |
-| T2.2 功能鍵 | `KeyboardView.kt` | 點擊模式、退格、換行、切回原輸入法 |
-| T2.3 Rust 核心接入 | `crates/v2c-ffi`、Gradle 的 cargo-ndk 任務 | `zh_tw` 轉換與紀錄可用；APK 內含 `.so` |
-| T2.4 中翻英鍵＋雲端 ASR 備援 | FFI `translate()`、`transcribe_pcm()`、`AudioRecord` | 設定 LLM 後才顯示翻譯鍵；內建辨識不可用且已串接雲端 ASR 時改走雲端 |
-| T2.5 設定頁與 APK | `SettingsActivity.kt`、Keystore、串接雲端精靈（同第 6.2 節） | 不填金鑰即可語音輸入；依精靈串接雲端後出現中翻英鍵；側載 APK 在你的手機安裝並使用 |
+| T2.1 語音鍵盤最小路徑 | `V2cImeService.kt`、`KeyboardView.kt`、`SetupActivity.kt`、Gradle 專案 | Typeless 式大麥克風（點一下開始／再點結束、按住說話）＋系統辨識；在 LINE、Chrome 輸入中/英/夾雜；內建辨識不可用時顯示安裝提示；targetSdk 36～37 |
+| T2.2 退格與換行 | `KeyboardView.kt` | 退格長按連續刪除；換行依 `imeOptions` |
+| T2.3 Rust 核心接入 | `crates/v2c-ffi`、Gradle 的 cargo-ndk 任務 | `to_zh_tw`、`transcribe_pcm`、`translate`、`load_lan_services`、`choose_asr` 可用；`choose_asr` 測試涵蓋第 8.1 節路由表每一列；APK 內含 16 KB 對齊的 `.so` |
+| T2.6 本機模型 | sherpa-onnx Android、`asr/local/**` | 候選比較（🧑 手機實測）；第一次切到時詢問下載；飛航模式下能輸入；下載檢查 SHA-256 |
+| T2.4 區網偵測＋路由＋中翻英鍵 | `asr/route/**`、`recorder/**`、`translate/**`、來源小圖示 | 公司網路自動走 TEA；長按小圖示切 Breeze／系統／本機生效；關 Wi-Fi 自動改系統辨識；區網伺服器關閉時不卡頓；中翻英輸出英文 |
+| T2.5 release APK | Gradle 簽署、`docs/android-install.md` | 安裝後只需授權麥克風與啟用鍵盤；release APK 進 `releases/` 並附 SHA-256 |
 
-**檢查點 2**：手機日常使用一週。
+順序：T2.0（文件）→ W8：T2.1 ∥ T2.3 → W9：T2.2 ∥ T2.6 → W10：T2.4 → W10b：T2.5（W11 起已被 Phase 3 使用）。
+
+**檢查點**：T2.6 實測後由你決定預設本機模型；**檢查點 2**：手機日常使用一週。
 
 ### Phase 3 — Linux
 
