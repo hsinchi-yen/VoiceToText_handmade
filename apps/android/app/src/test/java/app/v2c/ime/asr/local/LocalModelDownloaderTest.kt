@@ -338,7 +338,9 @@ class LocalModelDownloaderTest {
                 object : InputStream() {
                     override fun read(): Int = inner.read()
                     override fun read(b: ByteArray, off: Int, len: Int): Int = inner.read(b, off, len)
-                    override fun close() = throw IOException("close failed")
+                    override fun close() {
+                        throw IOException("close failed")
+                    }
                 },
                 offset > 0,
             )
@@ -350,7 +352,9 @@ class LocalModelDownloaderTest {
                 object : InputStream() {
                     override fun read(): Int = throw IOException("reset")
                     override fun read(b: ByteArray, off: Int, len: Int): Int = throw IOException("reset")
-                    override fun close() = throw IOException("close failed")
+                    override fun close() {
+                        throw IOException("close failed")
+                    }
                 },
                 false,
             )
@@ -390,6 +394,30 @@ class LocalModelDownloaderTest {
         assertEquals(DownloadState.Ready, d.state)
         assertTrue(offsets[1] > 0) // resumed from the kept partial file
         assertTrue(d.path("a.bin").readBytes().contentEquals(blobA))
+    }
+
+    @Test
+    fun startRememberedDuringARunThatEndsReadyDoesNotRunAgain() {
+        val fetcher = FakeFetcher()
+        lateinit var d: LocalModelDownloader
+        d = downloader(fetcher)
+        val states = mutableListOf<DownloadState>()
+        var tapped = false
+        d.addListener {
+            states += it
+            // A second tap while the first run is still downloading.
+            if (it is DownloadState.Downloading && !tapped) {
+                tapped = true
+                d.start()
+            }
+        }
+
+        d.download()
+
+        assertEquals(DownloadState.Ready, d.state)
+        assertEquals(2, fetcher.offsets.size) // a.bin and b.txt once each
+        assertEquals(DownloadState.Ready, states.last())
+        assertEquals(1, states.count { it == DownloadState.Ready })
     }
 
     @Test

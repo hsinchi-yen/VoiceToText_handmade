@@ -178,6 +178,8 @@ class LocalModelDownloader(
                 return
             }
             synchronized(lock) { startPending = false }
+            // A start() remembered during a run that then finished Ready has nothing left to do.
+            if (state == DownloadState.Ready) return
             val result = try {
                 downloadAll()
             } catch (e: IOException) {
