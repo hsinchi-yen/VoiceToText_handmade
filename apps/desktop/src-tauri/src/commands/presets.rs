@@ -26,6 +26,12 @@
 //! new one is given (the wizard's rule); an identical endpoint keeps it. `[route] asr` in a
 //! file is ignored: the user's choice always wins.
 //!
+//! Default keys (T4.8): `[preset] default_keys = { "<id>" = "<key>" }` ships a shared LAN key
+//! for a `needs_key` service. Per such service the key is chosen in this order: typed in the
+//! dialog; an existing stored key whose endpoint is unchanged; the default key; none (then the
+//! service is reported in `key_missing`). Defaults are written for every `needs_key` service
+//! without a key, not only the chosen ASR. Key values never reach the UI or the logs.
+//!
 //! Logs: preset name (`TN`, `RD`, or `file`), service count, error code, elapsed ms. Never
 //! keys, never the file path.
 
@@ -97,6 +103,20 @@ impl std::fmt::Debug for Keys {
     }
 }
 
+/// Default keys shipped inside a preset, by service id. `Debug` shows ids only.
+#[derive(Deserialize, Default)]
+#[serde(transparent)]
+struct DefaultKeys(HashMap<String, String>);
+
+impl std::fmt::Debug for DefaultKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.0.keys()).finish()
+    }
+}
+
+/// Longest key accepted in `default_keys`.
+const MAX_DEFAULT_KEY_CHARS: usize = 256;
+
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct ServiceSummary {
     pub id: String,
@@ -128,6 +148,8 @@ pub struct ServicePreview {
     pub needs_key: bool,
     /// A key is already stored for this id.
     pub has_key: bool,
+    /// The preset ships a default key for this id (the key itself is never sent).
+    pub has_default_key: bool,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -187,6 +209,8 @@ struct PresetMeta {
     asr_choices: Vec<String>,
     #[serde(default)]
     needs_key: Vec<String>,
+    #[serde(default)]
+    default_keys: DefaultKeys,
     #[serde(default)]
     detect_llm_model: bool,
 }
@@ -288,6 +312,20 @@ fn validate(preset: &mut Preset, cfg: &Config) -> Result<(), &'static str> {
         }
         parse_asr_timeout(&svc.asr_timeout_ms.map(|n| MsInput::Number(n as f64)))?;
         others.push(svc.clone());
+    }
+    // Default keys: only for `needs_key` ids; same value rules as typed keys.
+    for (id, raw) in &mut preset.meta.default_keys.0 {
+        if !preset.meta.needs_key.contains(id) {
+            return Err("preset_bad_reference");
+        }
+        let k = raw.trim().to_owned();
+        if k.is_empty()
+            || k.chars().count() > MAX_DEFAULT_KEY_CHARS
+            || k.chars().any(char::is_control)
+        {
+            return Err("invalid_key");
+        }
+        *raw = k;
     }
     let ids: HashSet<&str> = preset.services.iter().map(|s| s.id.as_str()).collect();
     // Capabilities: every speech recognition choice needs an ASR model and every text target
@@ -509,6 +547,7 @@ fn build_preview(
                     .ok()
                     .flatten()
                     .is_some_and(|k| !k.is_empty()),
+                has_default_key: p.meta.default_keys.0.contains_key(&s.id),
             }
         })
         .collect();
@@ -588,11 +627,12 @@ fn apply_resolved(
         new_keys.push((id, ApiKey::new(k)));
     }
 
-    // Keys first (restored if the config write fails): a pasted key replaces the old one; a
-    // changed host without a new key drops the old key.
+    // Keys first (restored if the config write fails). Per service: a typed key wins; else an
+    // existing key on an unchanged endpoint stays; else the preset's default key; else a key on
+    // a changed endpoint is dropped.
     let mut changes: Vec<KeyChange> = Vec::new();
     for svc in &p.services {
-        let new = new_keys
+        let typed = new_keys
             .iter()
             .find(|(id, _)| *id == svc.id)
             .map(|(_, k)| k);
@@ -601,17 +641,26 @@ fn apply_resolved(
         let endpoint_changed = cfg
             .cloud_service(&svc.id)
             .is_some_and(|prev| !same_endpoint(prev, svc));
-        if new.is_none() && !endpoint_changed {
+        let default = p
+            .meta
+            .default_keys
+            .0
+            .get(&svc.id)
+            .map(|k| ApiKey::new(k.as_str()));
+        if typed.is_none() && !endpoint_changed && default.is_none() {
             continue;
         }
         let Ok(old) = stored.get(&svc.id) else {
             restore_keys(stored, &changes);
             return Err("keyring_failed");
         };
-        let done = match new {
-            Some(k) => stored.set(&svc.id, k),
-            None if old.is_some() => stored.delete(&svc.id),
-            None => continue,
+        let has_old = old.as_ref().is_some_and(|k| !k.is_empty());
+        let done = match (typed, &default) {
+            (Some(k), _) => stored.set(&svc.id, k),
+            (None, _) if has_old && !endpoint_changed => continue,
+            (None, Some(k)) => stored.set(&svc.id, k),
+            (None, None) if old.is_some() => stored.delete(&svc.id),
+            (None, None) => continue,
         };
         if done.is_err() {
             warn!(service = %svc.id, "preset: could not update key");
@@ -791,6 +840,7 @@ mod tests {
     const TN: &str = BUILTINS[0].1;
     const RD: &str = BUILTINS[1].1;
     const KEY: &str = "sk-TESTSECRET-abcdefgh-WXYZ";
+    const DEFAULT: &str = "tn8227";
 
     impl Keys {
         fn of(pairs: &[(&str, &str)]) -> Keys {
@@ -861,6 +911,15 @@ mod tests {
                 vec![format!("{prefix}tea-asr"), format!("{prefix}breeze-asr")]
             );
             assert_eq!(p.meta.needs_key, vec![format!("{prefix}breeze-asr")]);
+            assert_eq!(p.meta.default_keys.0.len(), 1);
+            assert_eq!(
+                p.meta
+                    .default_keys
+                    .0
+                    .get(&format!("{prefix}breeze-asr"))
+                    .map(String::as_str),
+                Some(DEFAULT)
+            );
             assert_eq!(p.route.polish, format!("{prefix}qwen"));
             assert_eq!(p.route.translate, format!("{prefix}qwen"));
             assert!(p.route.cloud_fallback_to_local);
@@ -909,7 +968,7 @@ mod tests {
         let store = MemorySecretStore::new();
         let out = apply(&dir.config(), &store, TN, "tn-tea-asr", &Keys::default()).unwrap();
         assert_eq!(out.services.len(), 3);
-        assert_eq!(out.key_missing, vec!["tn-breeze-asr"]);
+        assert!(out.key_missing.is_empty());
         let cfg = load_config(&dir.config()).unwrap();
         assert_eq!(cfg.route.asr, "tn-tea-asr");
         assert_eq!(cfg.route.polish, "tn-qwen");
@@ -957,7 +1016,7 @@ mod tests {
         )
         .unwrap();
         let rd = apply(&dir.config(), &store, RD, "rd-tea-asr", &Keys::default()).unwrap();
-        assert_eq!(rd.key_missing, vec!["rd-breeze-asr"]);
+        assert!(rd.key_missing.is_empty());
         let cfg = load_config(&dir.config()).unwrap();
         assert_eq!(cfg.cloud.len(), 6);
         assert_eq!(cfg.route.asr, "rd-tea-asr");
@@ -1173,8 +1232,13 @@ mod tests {
                 &Keys::default(),
             )
             .unwrap();
-            assert_eq!(out.key_missing, vec!["tn-breeze-asr"], "{to}");
-            assert_eq!(key_of(&store, "tn-breeze-asr"), None, "{to}");
+            // The default key replaces the old one.
+            assert!(out.key_missing.is_empty(), "{to}");
+            assert_eq!(
+                key_of(&store, "tn-breeze-asr").as_deref(),
+                Some(DEFAULT),
+                "{to}"
+            );
         }
         // Changed endpoint plus a new key: the new key is kept.
         apply(&dir.config(), &store, TN, "tn-tea-asr", &Keys::default()).unwrap();
@@ -1192,6 +1256,156 @@ mod tests {
             key_of(&store, "tn-breeze-asr").as_deref(),
             Some("fresh-key-1234")
         );
+    }
+
+    /// A copy of TN without its default key line.
+    fn tn_without_default() -> String {
+        let text: String = TN
+            .lines()
+            .filter(|l| !l.starts_with("default_keys"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(parse_preset(&text).unwrap().meta.default_keys.0.is_empty());
+        text
+    }
+
+    #[test]
+    fn endpoint_change_without_default_still_deletes_key() {
+        let dir = TempDir::new("nodefault");
+        let store = MemorySecretStore::new();
+        let plain = tn_without_default();
+        apply(
+            &dir.config(),
+            &store,
+            &plain,
+            "tn-tea-asr",
+            &Keys::default(),
+        )
+        .unwrap();
+        store.set("tn-breeze-asr", &ApiKey::new(KEY)).unwrap();
+        let moved = plain.replace(":8002/v1", ":9999/v1");
+        let out = apply(
+            &dir.config(),
+            &store,
+            &moved,
+            "tn-tea-asr",
+            &Keys::default(),
+        )
+        .unwrap();
+        assert_eq!(out.key_missing, vec!["tn-breeze-asr"]);
+        assert_eq!(key_of(&store, "tn-breeze-asr"), None);
+    }
+
+    #[test]
+    fn default_key_is_stored_for_chosen_and_unchosen_asr() {
+        for (text, breeze) in [(TN, "tn-breeze-asr"), (RD, "rd-breeze-asr")] {
+            for choice in [breeze.to_owned(), breeze.replace("breeze", "tea")] {
+                let dir = TempDir::new("defkey");
+                let store = MemorySecretStore::new();
+                let out = apply(&dir.config(), &store, text, &choice, &Keys::default()).unwrap();
+                assert!(out.key_missing.is_empty(), "{choice}");
+                assert_eq!(key_of(&store, breeze).as_deref(), Some(DEFAULT), "{choice}");
+            }
+        }
+    }
+
+    #[test]
+    fn typed_key_beats_default_and_stored_key_is_kept() {
+        let dir = TempDir::new("prio");
+        let store = MemorySecretStore::new();
+        let breeze = "tn-breeze-asr";
+        apply(
+            &dir.config(),
+            &store,
+            TN,
+            breeze,
+            &Keys::of(&[(breeze, KEY)]),
+        )
+        .unwrap();
+        assert_eq!(key_of(&store, breeze).as_deref(), Some(KEY));
+        // Nothing typed, same endpoint: the stored key stays.
+        apply(&dir.config(), &store, TN, breeze, &Keys::default()).unwrap();
+        assert_eq!(key_of(&store, breeze).as_deref(), Some(KEY));
+        // A blank typed key counts as not typed.
+        apply(
+            &dir.config(),
+            &store,
+            TN,
+            breeze,
+            &Keys::of(&[(breeze, "  ")]),
+        )
+        .unwrap();
+        assert_eq!(key_of(&store, breeze).as_deref(), Some(KEY));
+        // Changed endpoint plus a typed key: the typed key beats the default.
+        let moved = TN.replace(":8002/v1", ":9999/v1");
+        apply(
+            &dir.config(),
+            &store,
+            &moved,
+            breeze,
+            &Keys::of(&[(breeze, "typed-key-1")]),
+        )
+        .unwrap();
+        assert_eq!(key_of(&store, breeze).as_deref(), Some("typed-key-1"));
+    }
+
+    #[test]
+    fn config_write_failure_rolls_back_default_key() {
+        let dir = TempDir::new("defroll");
+        std::fs::create_dir(dir.0.join("config.toml.tmp")).unwrap();
+        let fresh = MemorySecretStore::new();
+        let got = apply(&dir.config(), &fresh, TN, "tn-breeze-asr", &Keys::default());
+        assert_eq!(got, Err("config_save_failed"));
+        assert_eq!(key_of(&fresh, "tn-breeze-asr"), None);
+        // A key replaced by the default (changed endpoint) is put back.
+        let old = MemorySecretStore::new();
+        old.set("tn-breeze-asr", &ApiKey::new("old-key-value"))
+            .unwrap();
+        std::fs::write(
+            dir.config(),
+            "[[cloud]]\nid = \"tn-breeze-asr\"\nname = \"TN Breeze-ASR\"\nkind = \"open_ai_compat\"\nbase_url = \"http://10.20.30.23:9999/v1\"\nasr_model = \"breeze-asr-25\"\n",
+        )
+        .unwrap();
+        let got = apply(&dir.config(), &old, TN, "tn-breeze-asr", &Keys::default());
+        assert_eq!(got, Err("config_save_failed"));
+        assert_eq!(
+            key_of(&old, "tn-breeze-asr").as_deref(),
+            Some("old-key-value")
+        );
+    }
+
+    #[test]
+    fn bad_default_keys_are_rejected_and_config_unchanged() {
+        let dir = TempDir::new("baddef");
+        let original = "# keep\n[route]\nasr = \"local\"\n";
+        let store = MemorySecretStore::new();
+        let line = "default_keys = { \"tn-breeze-asr\" = \"tn8227\" }";
+        assert!(TN.contains(line));
+        let long = "k".repeat(MAX_DEFAULT_KEY_CHARS + 1);
+        let cases = [
+            (
+                line.replace("tn-breeze-asr", "tn-tea-asr"),
+                "preset_bad_reference",
+            ),
+            (line.replace("tn8227", "a\\u0007b"), "invalid_key"),
+            (line.replace("tn8227", "   "), "invalid_key"),
+            (line.replace("tn8227", &long), "invalid_key"),
+        ];
+        for (new_line, code) in cases {
+            std::fs::write(dir.config(), original).unwrap();
+            let text = TN.replace(line, &new_line);
+            assert_eq!(
+                apply(&dir.config(), &store, &text, "tn-tea-asr", &Keys::default()),
+                Err(code),
+                "{new_line}"
+            );
+            assert_eq!(std::fs::read_to_string(dir.config()).unwrap(), original);
+        }
+        assert_eq!(key_of(&store, "tn-breeze-asr"), None);
+        // Whitespace around a good value is trimmed.
+        let text = TN.replace(line, &line.replace("tn8227", "  tn8227  "));
+        apply(&dir.config(), &store, &text, "tn-tea-asr", &Keys::default()).unwrap();
+        assert_eq!(key_of(&store, "tn-breeze-asr").as_deref(), Some(DEFAULT));
     }
 
     #[test]
@@ -1407,7 +1621,10 @@ polish = \"tn-qwen\"",
         assert_eq!(qwen.model_source, Some("detected"));
         assert_eq!(qwen.purposes, ["polish", "translate"]);
         let breeze = p.services.iter().find(|s| s.id == "tn-breeze-asr").unwrap();
-        assert!(breeze.needs_key && !breeze.has_key);
+        assert!(breeze.needs_key && !breeze.has_key && breeze.has_default_key);
+        assert!(!qwen.has_default_key);
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains(DEFAULT), "preview must not carry key values");
         assert_eq!(p.asr_choices[1].name, "TN Breeze-ASR");
         assert!(!dir.config().exists(), "preview must not write");
     }
@@ -1477,6 +1694,18 @@ polish = \"tn-qwen\"",
             let keys = Keys::of(&[("tn-breeze-asr", KEY)]);
             assert!(format!("{keys:?}").find("TESTSECRET").is_none());
             apply(&dir.config(), &store, TN, "tn-breeze-asr", &keys).unwrap();
+            // Default key path: no typed key, and Debug of the parsed preset hides values.
+            let rd_dir = TempDir::new("logs-default");
+            let mut r = resolved(RD);
+            assert!(!format!("{r:?}").contains(DEFAULT));
+            apply_resolved(
+                &rd_dir.config(),
+                &store,
+                &mut r,
+                "rd-breeze-asr",
+                &Keys::default(),
+            )
+            .unwrap();
             // Failure path (config write fails) logs only the code.
             std::fs::create_dir(dir.0.join("config.toml.tmp")).unwrap();
             let _ = apply(
@@ -1491,5 +1720,6 @@ polish = \"tn-qwen\"",
         let logs = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
         assert!(!logs.contains("TESTSECRET"), "{logs}");
         assert!(!logs.contains(KEY));
+        assert!(!logs.contains(DEFAULT), "{logs}");
     }
 }

@@ -64,6 +64,9 @@
   const chosenHasKey = $derived(
     preview?.services.find((s) => s.id === asrChoice)?.has_key ?? false,
   );
+  const chosenHasDefault = $derived(
+    preview?.services.find((s) => s.id === asrChoice)?.has_default_key ?? false,
+  );
   const asrOptions = $derived((preview?.asr_choices ?? []).map((c) => ({ value: c.id, label: c.name })));
   const testing = $derived(Object.values(tests).some((t) => t.state === "testing"));
 
@@ -171,7 +174,11 @@
         type="password"
         autocomplete="off"
         spellcheck="false"
-        supporting={chosenHasKey ? "已儲存；留空則沿用" : "可稍後再補"}
+        supporting={chosenHasDefault
+          ? "已內建預設金鑰，可不填；要換別的金鑰再輸入"
+          : chosenHasKey
+            ? "已儲存；留空則沿用"
+            : "可稍後再補"}
         bind:value={keys[asrChoice]}
       />
     {/if}

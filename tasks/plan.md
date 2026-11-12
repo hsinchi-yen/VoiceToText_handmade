@@ -540,7 +540,7 @@ llm_model = "Qwen3.8-27B-UD-Q6_K_L"
   - 既有服務被更新且主機改變時，照 `save_service` 的規則刪掉舊金鑰（不把金鑰送到新主機）；主機不變時保留金鑰。
   - 文字模型：`detect_llm_model = true` 時向端點查模型清單（重用 `cloud_models` 的查詢），只有一個模型就用它，否則（包含查詢失敗、逾時 3 秒）用檔內的 `llm_model`。
   - 一次原子寫入（持有 `CONFIG_LOCK`、toml_edit 保留註解），寫完發 `v2c:config-changed`。
-  - 金鑰：只能在套用對話框輸入，存進系統金鑰庫（`SecretStore`），不寫進檔案；寫設定失敗時還原金鑰（同 `save_service`）。
+  - 金鑰（T4.8）：存進系統金鑰庫（`SecretStore`）；寫設定失敗時還原金鑰（同 `save_service`）。`[preset] default_keys = { "<id>" = "<key>" }` 可為 `needs_key` 內的服務附預設金鑰（id 必須在 `needs_key`；值去頭尾空白、非空、無控制字元、≤256 字元，否則整份拒絕）。內建 TN、RD 各附 Breeze 的共用金鑰 `tn8227`（2026-11-12 使用者決定，入版控）。每個 `needs_key` 服務依序選金鑰：(a) 對話框輸入的 → (b) 已存且端點未變的舊金鑰 → (c) `default_keys` → (d) 都沒有就列入 `key_missing`；未被選為語音辨識的 `needs_key` 服務也會補上預設金鑰（之後切到 Breeze 不用再貼）。端點改變時舊金鑰被 (a) 或 (c) 取代，都沒有才刪除。預覽只回 `has_default_key`，金鑰值不進 UI 與日誌。
   - 日誌只記預設檔名稱、服務數、錯誤碼、耗時。
 - 指令：`presets_list() -> Vec<PresetSummary>`、`presets_preview(source) -> PresetPreview`、`presets_apply(source, asr_choice, keys) -> PresetApplied`；`source` = `{ builtin: "TN" }` 或 `{ file: <path> }`。
 
