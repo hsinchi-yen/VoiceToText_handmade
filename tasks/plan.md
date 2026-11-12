@@ -287,6 +287,7 @@ Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫�
 - 設定：熱鍵（錄製按鍵）、各用途使用地端或哪個雲端服務、地端模型（Breeze / SenseVoice、LM Studio 位址與模型）、潤飾開關、App 規則、麥克風、開機自動啟動。
   - （T1.14，2026-11-11 你決定）變更先暫存，按「儲存」才寫入 config.toml 並套用，可「取消變更」，未儲存就離開會先詢問。最上方「目前使用中」顯示引擎實際狀態（實際使用的辨識引擎與執行位置、潤飾／中翻英實際走的服務與模型、改用備援的原因）。語音辨識用途選單直接列出各地端引擎。地端語音模型有「測試」。設定頁不再顯示 LM Studio 區塊（「地端」潤飾仍用 config.toml 的 `[local] llm_*`，預設本機 LM Studio；要用別台或別的模型就在雲端服務新增自訂相容端點）。
 - 雲端服務：已串接的服務清單（測試連線、修改、移除）與「新增雲端服務」精靈（第 6.2 節）。
+- （Phase 4，2026-11-12 你決定）頁面重整為 4 項選單：首頁（目前狀態＋套用預設組態＋常用開關）、服務、詞庫與紀錄、設定（常用＋進階）；設計 token 與共用元件見第 13 節。
 - 詞庫：一行一詞的編輯器。
 - 紀錄：最近 200 筆（預設保留 7 天），可複製、重新輸出、刪除、清空。
 
@@ -389,6 +390,7 @@ v2c-cli ──(core + asr-local + platform)         ← Phase 0 量測工具
 apps/desktop ──(core + asr-local + platform)    ← Phase 1
 v2c-ffi ──(core) → apps/android                 ← Phase 2
 v2c-platform/linux → apps/desktop              ← Phase 3
+apps/desktop/ui 重構＋presets（不改 v2c-core） ← Phase 4（第 13 節）
 ```
 
 ---
@@ -458,6 +460,20 @@ v2c-platform/linux → apps/desktop              ← Phase 3
 
 （T3.0 於 2026-11-10 重新查證後改為）T3.1 能力偵測＋熱鍵 → T3.2 剪貼簿注入（依賴 T3.1）；T3.3 既有 LLM 串接＋端到端模擬（可與 T3.1 平行，最後接上 T3.2）→ T3.4 通知提示＋打包。卡片見 `cards/T3.*.md`。
 
+### Phase 4 — 介面精簡、預設組態檔、新圖示（0.2.0）
+
+| 任務 | 主要檔案 | 驗收 |
+|------|----------|------|
+| T4.0 設計系統＋導覽外殼 | `ui/app.css`、`ui/lib/`、`ui/App.svelte`、`ui/dev-mock.js`、`package.json` | 4 項導覽、舊網址轉址；淺色／深色；所有舊功能照常；`npm run check`／`build` 通過 |
+| T4.1 預設組態檔 | `src-tauri/presets/`、`commands/presets.rs`、`ui/presets/` | 第 13.1 節的套用規則全部有單元測試；兩組來回套用不掉金鑰、不動使用者自訂服務 |
+| T4.2 首頁 | `ui/routes/Home.svelte`、`ui/home/` | 狀態卡、預設組態卡、常用開關即時生效 |
+| T4.3 設定頁 | `ui/routes/Settings.svelte`、`ui/settings/` | 常用＋進階；草稿／儲存行為不變；原有欄位都找得到 |
+| T4.4 服務頁、詞庫與紀錄、初次設定、浮動標籤 | `ui/routes/CloudSetup.svelte`、`ui/cloud-setup/` 等 | 精靈照常；依預設組分組；樣式一致 |
+| T4.5 圖示候選 | `src-tauri/icons/src/` | 3 個 SVG 候選，16 px 可辨識；🧑 選定 |
+| T4.6 交付 | 圖示、`docs/`、README、版本 0.2.0、`releases/` | 全部檢查通過；安裝檔與 SHA-256 在 `releases/` |
+
+**檢查點 4**：🧑 安裝 0.2.0，TN、RD 各套用一次並實際說話；確認介面是否夠簡潔。卡片見 `cards/T4.*.md`。
+
 ---
 
 ## 12. 測試與驗證
@@ -466,3 +482,99 @@ v2c-platform/linux → apps/desktop              ← Phase 3
 - **回歸量測**：`cargo run -p v2c-cli -- bench --asr <provider> [--llm <provider>] tests/fixtures/audio` 輸出 CER 與延遲表；每次改模型、提示詞後都跑一次並與上次比較。
 - **單一測試**：`cargo test -p v2c-core trigger::` 這類寫法只跑某模組。
 - **手動驗收**：每個檢查點以 Chrome、LINE、VS Code、Word、記事本實際操作。
+- **前端**（Phase 4 起）：`cd apps/desktop && npm run check && npm test && npm run build`；`npm run dev` 在一般瀏覽器以 `ui/dev-mock.js` 的假資料開啟各頁，截圖淺色／深色供審查。
+
+---
+
+## 13. 介面精簡與預設組態檔（Phase 4，2026-11-12）
+
+背景：使用者回饋介面「看起來很複雜」。現況是 6 項平鋪選單、設定頁 9 個區塊攤平、沒有設計 token（顏色寫死、瀏覽器預設控制項）、加一個區網端點要走 7 步精靈，公司兩組環境各 3 個端點要走三次。**不變更 `v2c-core` 公開介面。**
+
+### 13.1 預設組態檔
+
+- 位置：`apps/desktop/src-tauri/presets/{TN,RD}_CUSTOM_LLM_ADDR.toml`，以 `include_str!` 編進程式（同 `models.json`），不改打包設定。也可從使用者選的檔案載入。
+- 格式：一份只寫部分內容的 `config.toml`，加一個 `[preset]` 區段（`Config` 解析器忽略未知區段）：
+
+```toml
+[preset]
+title = "TN 區網服務"
+id_prefix = "tn-"
+asr_choices = ["tn-tea-asr", "tn-breeze-asr"]   # 套用時讓使用者選一個當 route.asr
+needs_key = ["tn-breeze-asr"]                   # 選到時提示貼上金鑰
+detect_llm_model = true                         # 套用時查 /v1/models
+
+[route]
+polish = "tn-qwen"
+translate = "tn-qwen"
+cloud_fallback_to_local = true
+
+[[cloud]]
+id = "tn-tea-asr"
+name = "TN TEA-ASR"
+kind = "open_ai_compat"
+base_url = "http://10.20.30.23:8001/v1"
+asr_model = "tea-asr-1"
+
+[[cloud]]
+id = "tn-breeze-asr"
+name = "TN Breeze-ASR"
+kind = "open_ai_compat"
+base_url = "http://10.20.30.23:8002/v1"
+asr_model = "breeze-asr-25"
+asr_timeout_ms = 8000
+
+[[cloud]]
+id = "tn-qwen"
+name = "TN Qwen3.8 27B"
+kind = "open_ai_compat"
+base_url = "http://10.20.30.23:8000/v1"
+llm_model = "Qwen3.8-27B-UD-Q6_K_L"
+```
+
+  RD 檔相同，主機改 `10.88.95.2`（三個端點都是；2026-11-12 你更正），前綴 `rd-`，名稱前綴 `RD `。
+- 套用規則：
+  - 新增或更新檔內的服務（依 id），並設定 `[route]` 的 polish／translate／cloud_fallback_to_local；`route.asr` = 使用者在 `asr_choices` 中選的那個。
+  - 其他服務（另一組、使用者自己加的）與它們的金鑰不動，所以 TN ↔ RD 來回切換不用重貼金鑰。
+  - 白名單：只採用 `[[cloud]]`、`[route]`、`[preset]`；其他區段一律忽略且不寫入。
+  - 驗證沿用 `commands/cloud.rs` 既有規則（名稱、逾時範圍、`route::effective_base_url`）；服務 id 必須以 `id_prefix` 開頭，`route` 只能指向檔內服務或 `local`。任何一項不過就整份拒絕，`config.toml` 不變。
+  - 既有服務被更新且主機改變時，照 `save_service` 的規則刪掉舊金鑰（不把金鑰送到新主機）；主機不變時保留金鑰。
+  - 文字模型：`detect_llm_model = true` 時向端點查模型清單（重用 `cloud_models` 的查詢），只有一個模型就用它，否則（包含查詢失敗、逾時 3 秒）用檔內的 `llm_model`。
+  - 一次原子寫入（持有 `CONFIG_LOCK`、toml_edit 保留註解），寫完發 `v2c:config-changed`。
+  - 金鑰：只能在套用對話框輸入，存進系統金鑰庫（`SecretStore`），不寫進檔案；寫設定失敗時還原金鑰（同 `save_service`）。
+  - 日誌只記預設檔名稱、服務數、錯誤碼、耗時。
+- 指令：`presets_list() -> Vec<PresetSummary>`、`presets_preview(source) -> PresetPreview`、`presets_apply(source, asr_choice, keys) -> PresetApplied`；`source` = `{ builtin: "TN" }` 或 `{ file: <path> }`。
+
+### 13.2 介面
+
+- 選單 4 項（左側導覽列，圖示＋文字；視窗窄時改成底部導覽列）：
+
+| 頁面 | 網址 | 內容 |
+|------|------|------|
+| 首頁 | `#/` | 目前使用中（原 RuntimeStatus）、套用預設組態、常用開關（潤飾、語音辨識由誰處理） |
+| 服務 | `#/services` | 各用途由誰處理、服務清單（依預設組分組）、新增服務精靈 |
+| 詞庫與紀錄 | `#/library`（分頁 `vocab`／`history`） | 原詞庫頁與紀錄頁 |
+| 設定 | `#/settings` | 常用（麥克風、用途選擇、潤飾、開機自動啟動）＋「進階」（預設收合：熱鍵時間、地端語音模型、顯示卡記憶體、App 規則、輸入紀錄設定、麥克風模式、雲端失敗改用地端）；底部「重新執行初次設定」 |
+
+  舊網址 `#/cloud-setup` → `#/services`、`#/vocab` → `#/library?tab=vocab`、`#/history` → `#/library?tab=history` 轉址；`#/onboarding` 仍可直接開（首次啟動與設定頁底部的入口）。
+- 視覺：Material 3 Expressive 風格。`ui/app.css` 定義 token（色彩角色 primary／on-primary／secondary-container／surface、surface-container-{lowest…highest}／outline／error 等，淺色與深色兩組；圓角 xs 4／sm 8／md 12／lg 16／xl 28／full；字級 display／headline／title／body／label；間距 4 的倍數；動態曲線與時間，`prefers-reduced-motion` 時關閉）。只用系統字型（不下載字型，符合 CSP）；不使用 Google 商標或圖檔，圖示自繪成行內 SVG。
+- 共用元件 `ui/lib/`：Button（filled／tonal／outlined／text）、IconButton、Switch、Select、TextField、Card、ListItem、Dialog、SegmentedButton、Tabs、Banner、LinearProgress、NavRail、Icon（行內 SVG 圖庫）。各頁用元件取代重複的 `.hint`／`.bad` 樣式。
+- 開發輔助：`ui/dev-mock.js` 在沒有 Tauri 時（`window.__TAURI_INTERNALS__` 不存在）提供假的 `invoke`／`listen`，只在 `npm run dev` 使用，不進正式版。`package.json` 新增 `check`（svelte-check）、`test`（vitest，只測純 JS）。
+
+### 13.3 圖示
+
+- 概念：聲波流向游標／AI 節點（聲音 → 電腦／代理人），外形帶出「V」。先出 3 個 SVG 候選與 16／24／32 px、淺色／深色預覽，🧑 你選定後以 `npm run tauri icon` 產生全部尺寸，導覽列與安裝檔同步使用。
+
+### 13.4 依賴
+
+```
+T4.0 設計系統＋導覽外殼 ─┬─> T4.2 首頁 ───┐
+T4.1 預設組態檔 ─────────┤                  │
+                         ├─> T4.3 設定頁 ──┼─> T4.6 交付 0.2.0 ─> 檢查點 4
+                         └─> T4.4 服務等頁 ┤
+T4.5 圖示候選 ─(🧑 選定)───────────────────┘
+```
+
+### 13.5 注意
+
+- 兩個預設檔含內網位址 `10.20.30.23`、`10.88.95.2`，會進 git（`tasks/plan.md` 已有前者）。若不想公開，改成預設檔 git-ignore、只在建置安裝檔時放入（🧑 T4.1 合併前決定）。
+- RD 主機（`10.88.95.2`）沒有實測過；模型名稱與 `:8002` 需要金鑰是比照 TN 假設。
