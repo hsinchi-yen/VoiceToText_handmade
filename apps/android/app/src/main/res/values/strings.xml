@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">v2c 語音輸入</string>
+    <string name="ime_label">v2c 語音鍵盤</string>
+
+    <!-- Keyboard -->
+    <string name="key_translate">中→英</string>
+    <string name="key_backspace">退格</string>
+    <string name="key_enter">換行</string>
+    <string name="source_system">系統</string>
+    <string name="status_idle">點一下麥克風開始說話</string>
+    <string name="status_recording">錄音中，再點一下送出</string>
+    <string name="status_recognizing">辨識中…</string>
+    <string name="desc_mic">麥克風</string>
+    <string name="error_no_permission">尚未授權麥克風，請先開啟 v2c 完成設定</string>
+    <string name="error_unavailable">此裝置沒有語音辨識服務，請安裝或更新 Google 語音服務</string>
+    <string name="error_no_speech">沒有聽到聲音，請再試一次</string>
+    <string name="error_generic">辨識失敗，請再試一次</string>
+    <string name="error_network">辨識服務需要網路，請稍後再試</string>
+    <string name="action_retry">重試</string>
+    <string name="action_install_google">安裝語音服務</string>
+
+    <!-- Setup -->
+    <string name="setup_title">設定 v2c 語音鍵盤</string>
+    <string name="setup_step_permission">1. 允許使用麥克風</string>
+    <string name="setup_step_enable">2. 啟用 v2c 鍵盤</string>
+    <string name="setup_step_switch">3. 切換到 v2c 鍵盤</string>
+    <string name="setup_button_grant">授權</string>
+    <string name="setup_button_enable">開啟輸入法設定</string>
+    <string name="setup_button_switch">選擇鍵盤</string>
+    <string name="setup_done">已完成</string>
+    <string name="setup_all_done">全部完成！在任何輸入框點一下，就能用 v2c 語音輸入。</string>
+</resources>
