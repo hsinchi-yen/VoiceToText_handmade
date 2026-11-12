@@ -249,6 +249,10 @@ export const commands = {
     return { removed: true };
   },
   cloud_open_key_page: () => null,
+  presets_list: () => [
+    { name: "TN", title: "TN 區網預設組態", id_prefix: "tn-", services: [] },
+    { name: "RD", title: "RD 區網預設組態", id_prefix: "rd-", services: [] },
+  ],
 
   // presets (T4.1)
   presets_list: () => [

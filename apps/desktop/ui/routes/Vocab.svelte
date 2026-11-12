@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
   import { checkVocab } from "../vocab/check.js";
+  import { Banner, Button, TextField } from "../lib/index.js";
 
   // Defaults until `vocab_get` answers; the backend values win.
   let limits = $state({ maxEntries: 500, maxEntryChars: 40 });
@@ -68,74 +69,63 @@
 </script>
 
 <h1>詞庫</h1>
-<p class="hint">人名、產品名、專有名詞，一行一個。辨識與潤飾時會優先採用這裡的寫法。</p>
+<p class="hint lead">人名、產品名、專有名詞，一行一個。辨識與潤飾時會優先採用這裡的寫法。</p>
 
-<textarea
+<TextField
   bind:value={text}
-  rows="16"
+  rows={16}
   spellcheck="false"
   disabled={loading}
   placeholder={"例如：\n台積電\nLM Studio\n吳宗翰"}
-  aria-label="詞庫，一行一個"
-></textarea>
+  label="詞庫（一行一個）"
+/>
 
 <div class="bar">
-  <span class:over={result.overLimit > 0}>{result.count} / {limits.maxEntries} 個詞</span>
-  <button onclick={save} disabled={loading || saving || !valid || !dirty}>
+  <span class:bad={result.overLimit > 0} class="count">{result.count} / {limits.maxEntries} 個詞</span>
+  <Button icon="check" onclick={save} disabled={loading || saving || !valid || !dirty}>
     {saving ? "儲存中…" : "儲存"}
-  </button>
+  </Button>
 </div>
 
-{#if result.tooLongLines.length > 0}
-  <p class="problem">
-    第 {result.tooLongLines.join("、")} 行太長（每個詞最多 {limits.maxEntryChars} 個字）。
-  </p>
-{/if}
-{#if result.overLimit > 0}
-  <p class="problem">
-    詞太多：最多 {limits.maxEntries} 個，請刪除 {result.overLimit} 個。
-  </p>
-{/if}
-{#if error}
-  <p class="problem">{error}</p>
-{/if}
-{#if message && !dirty}
-  <p class="ok">{message}</p>
-{/if}
-<p class="note">以 # 開頭的行視為註解，重複的詞（不分大小寫）只保留第一個；儲存後會整理掉。</p>
+<div class="feedback">
+  {#if result.tooLongLines.length > 0}
+    <Banner variant="error">
+      第 {result.tooLongLines.join("、")} 行太長（每個詞最多 {limits.maxEntryChars} 個字）。
+    </Banner>
+  {/if}
+  {#if result.overLimit > 0}
+    <Banner variant="error">詞太多：最多 {limits.maxEntries} 個，請刪除 {result.overLimit} 個。</Banner>
+  {/if}
+  {#if error}
+    <Banner variant="error">{error}</Banner>
+  {/if}
+  {#if message && !dirty}
+    <Banner variant="success">{message}</Banner>
+  {/if}
+</div>
+<p class="hint">以 # 開頭的行視為註解，重複的詞（不分大小寫）只保留第一個；儲存後會整理掉。</p>
 
 <style>
-  textarea {
-    box-sizing: border-box;
-    width: 100%;
-    font: inherit;
-    padding: 0.5rem;
-    color: inherit;
-    background: color-mix(in srgb, currentColor 5%, transparent);
-    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
-    border-radius: 4px;
-    resize: vertical;
+  .lead {
+    margin: 0 0 var(--md-space-4);
   }
   .bar {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-top: 0.5rem;
+    gap: var(--md-space-3);
+    margin-top: var(--md-space-3);
   }
-  .over {
-    color: #cf222e;
+  .count {
+    color: var(--md-on-surface-variant);
+    font-size: var(--md-type-body-sm-size);
   }
-  .hint,
-  .note {
-    opacity: 0.7;
+  .count.bad {
+    color: var(--md-error);
   }
-  .note {
-    font-size: 0.85rem;
-  }
-  .problem {
-    color: #cf222e;
-  }
-  .ok {
-    color: #1a7f37;
+  .feedback {
+    display: grid;
+    gap: var(--md-space-2);
+    margin-top: var(--md-space-3);
   }
 </style>

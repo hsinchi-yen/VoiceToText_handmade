@@ -1,13 +1,13 @@
 <script>
   // 「試試看」: hold Right Ctrl with the cursor in this text box; the text is typed here.
   import { listen } from "@tauri-apps/api/event";
+  import { TextField } from "../lib/index.js";
 
   let text = $state("");
   let status = $state(null);
-  let box;
 
   $effect(() => {
-    box?.focus();
+    document.querySelector(".try-field textarea")?.focus();
     const un = listen("v2c:status", (e) => (status = e.payload));
     return () => un.then((f) => f());
   });
@@ -40,17 +40,5 @@
 </script>
 
 <p>{describe(status)}</p>
-<textarea bind:this={box} bind:value={text} rows="4" placeholder="把游標放在這裡，按住右 Ctrl 說話"></textarea>
+<div class="try-field"><TextField bind:value={text} rows={4} placeholder="把游標放在這裡，按住右 Ctrl 說話" label="試試看" /></div>
 <p class="hint">快速按兩下右 Ctrl 進入免持模式，再按一下結束；Esc 取消。</p>
-
-<style>
-  textarea {
-    width: 100%;
-    box-sizing: border-box;
-    font: inherit;
-  }
-  .hint {
-    opacity: 0.75;
-    font-size: 0.9em;
-  }
-</style>

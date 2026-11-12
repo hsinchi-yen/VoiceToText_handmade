@@ -93,7 +93,22 @@
     pointer-events: none;
     user-select: none;
   }
+  /*
+   * The pill is always dark, also in light mode (it floats over arbitrary apps), so it uses the
+   * dark-scheme values of the app's color roles as fixed local variables instead of the
+   * light/dark switching tokens.
+   */
   .pill {
+    --ov-surface: #201f25; /* dark --md-surface-container */
+    --ov-on-surface: #e5e1e9; /* dark --md-on-surface */
+    --ov-on-surface-variant: #c8c5d0; /* dark --md-on-surface-variant */
+    --ov-primary: #c6c0ff; /* dark --md-primary */
+    --ov-primary-container: #41369f; /* dark --md-primary-container */
+    --ov-on-primary-container: #e3dfff;
+    --ov-error: #ffb4ab; /* dark --md-error */
+    --ov-error-container: #93000a; /* dark --md-error-container */
+    --ov-on-error-container: #ffdad6;
+    --ov-success: #7bd89a; /* dark --md-success */
     box-sizing: border-box;
     display: flex;
     align-items: center;
@@ -101,9 +116,10 @@
     max-width: calc(100vw - 8px);
     height: 40px;
     padding: 0 16px;
-    border-radius: 20px;
-    background: rgba(28, 31, 36, 0.92);
-    color: #f0f3f6;
+    border-radius: var(--md-radius-full);
+    background: var(--ov-surface);
+    color: var(--ov-on-surface);
+    font-family: var(--md-font);
     font-size: 14px;
     white-space: nowrap;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -114,7 +130,8 @@
     opacity: 0;
   }
   .pill.error {
-    background: rgba(140, 32, 32, 0.94);
+    background: var(--ov-error-container);
+    color: var(--ov-on-error-container);
   }
   .label {
     overflow: hidden;
@@ -125,7 +142,7 @@
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background: #f85149;
+    background: var(--ov-error);
     animation: pulse 1s ease-in-out infinite;
   }
   .meter {
@@ -139,21 +156,21 @@
   .meter span {
     display: block;
     height: 100%;
-    background: #3fb950;
+    background: var(--ov-primary);
     transition: width 50ms linear;
   }
   .badge {
     flex: none;
     padding: 1px 6px;
     border-radius: 6px;
-    background: #1f6feb;
-    color: #fff;
+    background: var(--ov-primary-container);
+    color: var(--ov-on-primary-container);
     font-size: 12px;
     font-weight: 600;
   }
   .hint {
     flex: none;
-    color: rgba(240, 243, 246, 0.7);
+    color: var(--ov-on-surface-variant);
     font-size: 12px;
   }
   .spinner {
@@ -161,7 +178,7 @@
     width: 12px;
     height: 12px;
     border: 2px solid rgba(255, 255, 255, 0.3);
-    border-top-color: #f0f3f6;
+    border-top-color: var(--ov-primary);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
@@ -170,7 +187,7 @@
     font-weight: 700;
   }
   .done .icon {
-    color: #3fb950;
+    color: var(--ov-success);
   }
   @keyframes pulse {
     50% {
