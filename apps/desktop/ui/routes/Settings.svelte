@@ -6,13 +6,10 @@
   // is applied after it. Leaving the page with unsaved changes asks first.
   import { listen } from "@tauri-apps/api/event";
   import * as api from "../settings/api.js";
-  import RuntimeStatus from "../settings/RuntimeStatus.svelte";
+  import { Banner, Button, Card } from "../lib/index.js";
   import General from "../settings/General.svelte";
-  import LocalModels from "../settings/LocalModels.svelte";
   import Microphone from "../settings/Microphone.svelte";
-  import AppRules from "../settings/AppRules.svelte";
-  import HistorySettings from "../settings/HistorySettings.svelte";
-  import Gpu from "../settings/Gpu.svelte";
+  import Advanced from "../settings/Advanced.svelte";
 
   const SELF = "#/settings";
   // Not a config.toml key: applied with `settings_set_autostart` after the rest.
@@ -249,155 +246,111 @@
 
 <div class="settings-page">
   <h1>設定</h1>
-
-  <div class="bar" class:pending={count > 0}>
-    {#if leaveTo}
-      <span>有 {count} 項變更尚未儲存，要離開設定頁嗎？</span>
-      <span class="actions">
-        <button onclick={() => leave(true)} disabled={saving}>{saving ? "處理中…" : "儲存後離開"}</button>
-        <button onclick={() => leave(false)} disabled={saving}>捨棄變更並離開</button>
-        <button onclick={() => (leaveTo = null)} disabled={saving}>留在設定頁</button>
-      </span>
-    {:else if count > 0}
-      <span>
-        {hiddenWithDraft ? `上次關閉視窗時，還有 ${count} 項變更尚未儲存` : `有 ${count} 項變更尚未儲存`}
-      </span>
-      <span class="actions">
-        <button class="primary" onclick={commit} disabled={saving}>{saving ? "處理中…" : "儲存"}</button>
-        <button onclick={discard} disabled={saving}>取消變更</button>
-        {#if hiddenWithDraft}<button onclick={() => (hiddenWithDraft = false)}>繼續編輯</button>{/if}
-      </span>
-    {:else}
-      <span class="ok">所有設定已儲存</span>
-    {/if}
-    {#if message}<span class="msg" class:bad class:ok={!bad}>{message}</span>{/if}
-    {#if incoming}
-      <span class="msg">
-        設定已在別處變更（系統列或雲端服務頁）。
-        <button onclick={reloadIncoming}>重新載入（捨棄草稿）</button>
-        <button onclick={keepDraft}>保留草稿</button>
-      </span>
-    {/if}
-  </div>
+  <p class="top">
+    <a href="#/">查看目前使用中 → 首頁</a>
+    {#if count === 0 && !leaveTo}<span class="ok">所有設定已儲存</span>{/if}
+  </p>
   {#if restartNote}
-    <p class="hint">麥克風與輸入紀錄的變更會在重新啟動 v2c 後生效（系統列 → 結束，再開啟）。</p>
+    <Banner variant="info">麥克風與輸入紀錄的變更會在重新啟動 v2c 後生效（系統列 → 結束，再開啟）。</Banner>
   {/if}
-
-  <RuntimeStatus />
 
   {#if !view}
     <p>載入中…</p>
   {:else}
-    <General {view} {save} />
-    <LocalModels {view} {save} />
     <Microphone {view} {save} />
-    <AppRules {view} {save} />
-    <HistorySettings {view} {save} />
-    <Gpu {view} {save} />
+    <General {view} {save} />
+    <Advanced {view} {save} />
+    <p class="foot">
+      <Button variant="outlined" icon="refresh" href="#/onboarding">重新執行初次設定</Button>
+    </p>
+  {/if}
+
+  {#if count > 0 || leaveTo || message || incoming}
+    <div class="dock">
+      {#if incoming}
+        <Banner variant="warning">
+          設定已在別處變更（系統列或雲端服務頁）。
+          {#snippet actions()}
+            <Button variant="tonal" onclick={reloadIncoming}>重新載入（捨棄草稿）</Button>
+            <Button variant="text" onclick={keepDraft}>保留草稿</Button>
+          {/snippet}
+        </Banner>
+      {/if}
+      {#if message}
+        <Banner variant={bad ? "error" : "success"} onclose={() => show("")}>{message}</Banner>
+      {/if}
+      {#if leaveTo}
+        <Card variant="elevated" padding="0"><div class="bar">
+          <span>有 {count} 項變更尚未儲存，要離開設定頁嗎？</span>
+          <span class="actions">
+            <Button onclick={() => leave(true)} disabled={saving}>{saving ? "處理中…" : "儲存後離開"}</Button>
+            <Button variant="outlined" onclick={() => leave(false)} disabled={saving}>捨棄變更並離開</Button>
+            <Button variant="text" onclick={() => (leaveTo = null)} disabled={saving}>留在設定頁</Button>
+          </span>
+        </div></Card>
+      {:else if count > 0}
+        <Card variant="elevated" padding="0"><div class="bar">
+          <span>
+            {hiddenWithDraft ? `上次關閉視窗時，還有 ${count} 項變更尚未儲存` : `有 ${count} 項變更尚未儲存`}
+          </span>
+          <span class="actions">
+            <Button onclick={commit} disabled={saving}>{saving ? "處理中…" : "儲存"}</Button>
+            <Button variant="outlined" onclick={discard} disabled={saving}>取消變更</Button>
+            {#if hiddenWithDraft}<Button variant="text" onclick={() => (hiddenWithDraft = false)}>繼續編輯</Button>{/if}
+          </span>
+        </div></Card>
+      {/if}
+    </div>
   {/if}
 </div>
 
 <style>
-  .bar {
+  .settings-page {
+    display: grid;
+    gap: var(--md-space-4);
+    min-width: 0;
+  }
+  .settings-page > :global(*) {
+    min-width: 0;
+  }
+  h1 {
+    margin: 0;
+  }
+  .top {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--md-space-2) var(--md-space-4);
+    margin: 0;
+  }
+  .foot {
+    margin: 0;
+  }
+  /* Floating save bar: stays at the bottom of the window (above the bottom menu on phones). */
+  .dock {
     position: sticky;
-    top: 0;
-    z-index: 1;
+    bottom: var(--md-space-4);
+    z-index: 5;
+    display: grid;
+    gap: var(--md-space-2);
+  }
+  .dock :global(.bar) {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.35rem 0.75rem;
-    margin: 0 0 0.75rem;
-    padding: 0.45rem 0.7rem;
-    border-radius: 6px;
-    background: color-mix(in srgb, #2da44e 12%, #f6f8fa);
-  }
-  .bar.pending {
-    background: color-mix(in srgb, #d29922 20%, #f6f8fa);
+    justify-content: space-between;
+    gap: var(--md-space-2) var(--md-space-4);
+    padding: var(--md-space-3) var(--md-space-4);
+    border: 1px solid var(--md-warning);
+    border-radius: var(--md-radius-lg);
   }
   .actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.4rem;
+    gap: var(--md-space-2);
   }
-  .msg {
-    flex-basis: 100%;
-  }
-  .primary {
-    font-weight: 600;
-  }
-  .settings-page :global(.ok) {
-    color: #1a7f37;
-  }
-  .settings-page :global(.bad) {
-    color: #cf222e;
-  }
-  .settings-page :global(.hint) {
-    opacity: 0.7;
-    font-size: 0.88em;
-    margin: 0.2rem 0 0.4rem;
-  }
-  .settings-page :global(.link) {
-    background: none;
-    border: none;
-    padding: 0;
-    color: #2f81f7;
-    cursor: pointer;
-    text-decoration: underline;
-    font: inherit;
-  }
-  @media (prefers-color-scheme: dark) {
-    .bar {
-      background: color-mix(in srgb, #2da44e 15%, #0d1117);
+  @media (max-width: 599px) {
+    .dock {
+      bottom: calc(var(--md-nav-bar-height) + var(--md-space-2));
     }
-    .bar.pending {
-      background: color-mix(in srgb, #d29922 22%, #0d1117);
-    }
-    .settings-page :global(.ok) {
-      color: #3fb950;
-    }
-    .settings-page :global(.bad) {
-      color: #f85149;
-    }
-  }
-  :global(.settings-section) {
-    margin: 0 0 1.25rem;
-    padding: 0.75rem 1rem;
-    border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
-    border-radius: 8px;
-    overflow-wrap: anywhere;
-  }
-  :global(.settings-section h2) {
-    margin: 0 0 0.5rem;
-    font-size: 1.05rem;
-  }
-  :global(.settings-section label) {
-    display: block;
-    margin: 0.35rem 0;
-  }
-  :global(.settings-section select) {
-    max-width: 100%;
-  }
-  /* A changed but unsaved field. */
-  :global(.settings-section .dirty) {
-    border-left: 3px solid #d29922;
-    padding-left: 0.45rem;
-  }
-  :global(.settings-section .dirty::after) {
-    content: "未儲存";
-    margin-left: 0.4em;
-    padding: 0 0.3em;
-    border: 1px solid #d29922;
-    border-radius: 4px;
-    color: #9a6700;
-    font-size: 0.75em;
-    white-space: nowrap;
-  }
-  :global(.settings-section input[type="number"]) {
-    width: 6.5em;
-  }
-  :global(.settings-section textarea) {
-    width: 100%;
-    box-sizing: border-box;
-    font-family: inherit;
   }
 </style>
