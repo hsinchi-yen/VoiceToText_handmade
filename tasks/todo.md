@@ -93,7 +93,7 @@
   - [x] Rust 端完成並合併進本機 main（2026-11-12，你核准）：uniffi 0.32 proc-macro、同步 FFI＋內部 tokio；`transcribe_pcm(pcm_le: ByteArray, rate, service_id)`；`cargo test -p v2c-ffi` 21 項（含路由表每列、強制來源不靜默改用、逾時、空白翻譯）、clippy、fmt 通過；Gradle／綁定／assets／R8 接線步驟在 `crates/v2c-ffi/ANDROID.md`
   - [ ] 受阻（工具未安裝）：`cargo ndk` 建置、`assembleDebug`、`zipalign -c -P 16`、Kotlin 呼叫 `to_zh_tw`；待 T2.1 合併後接線
   - [ ] 🧑 安裝 Android Rust 工具（見 human-checklist）
-- [ ] W9 T2.2 退格與換行
+- [ ] W9 T2.2 退格與換行 — 程式完成（分支 `t2.2-android-keys`；長按加速與 imeOptions 判斷皆為純 Kotlin 並有單元測試）；🧑 待辦：實機測試（LINE、Chrome、Gmail 的退格長按、選取刪除、emoji、換行／送出）
 - [ ] W9 T2.6 手機本機模型（sherpa-onnx；候選比較）
   - [ ] 🧑 手機比較候選模型並決定預設
 - [ ] W10 T2.4 區網偵測、辨識路由、來源小圖示、中翻英鍵

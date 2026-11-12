@@ -5,6 +5,7 @@ import android.inputmethodservice.InputMethodService
 import android.net.Uri
 import android.view.View
 import androidx.compose.ui.platform.ComposeView
+import app.v2c.ime.keyboard.EditorKeys
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -31,6 +32,7 @@ class V2cImeService :
     private val savedStateController = SavedStateRegistryController.create(this)
     private val store = ViewModelStore()
     private lateinit var session: VoiceSession
+    private val editorKeys = EditorKeys({ currentInputConnection }, { currentInputEditorInfo })
 
     override val lifecycle: Lifecycle get() = lifecycleRegistry
     override val savedStateRegistry: SavedStateRegistry get() = savedStateController.savedStateRegistry
@@ -61,6 +63,8 @@ class V2cImeService :
                     session = session,
                     onOpenSetup = ::openSetup,
                     onInstallSpeechService = ::openSpeechServiceInStore,
+                    onBackspace = editorKeys::backspace,
+                    onEnter = editorKeys::enter,
                 )
             }
         }
