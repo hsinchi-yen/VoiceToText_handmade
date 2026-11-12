@@ -78,7 +78,7 @@ features = ["shared"]
 # Overlay window styles (no activation, click-through); see src/overlay.rs.
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.61"
-features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"]
+features = ["Win32_Foundation", "Win32_System_Registry", "Win32_UI_WindowsAndMessaging"]
 
 [dev-dependencies]
 wiremock.workspace = true
