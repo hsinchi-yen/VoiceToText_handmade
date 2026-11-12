@@ -6,5 +6,29 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+# `cdylib` is the Android .so (cargo-ndk); `lib` is for host tests.
+crate-type = ["lib", "cdylib"]
+
 [dependencies]
 v2c-core.workspace = true
+# uniffi 0.32 proc-macro mode (no UDL); Kotlin bindings come from library mode.
+uniffi = "0.32"
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tokio.workspace = true
+
+[features]
+# Only for generating Kotlin bindings on the host:
+# `cargo run -p v2c-ffi --features bindgen --bin uniffi-bindgen -- generate ...`
+bindgen = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[dev-dependencies]
+wiremock.workspace = true
+serde_json.workspace = true

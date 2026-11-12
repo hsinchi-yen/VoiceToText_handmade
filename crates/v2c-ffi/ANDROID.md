@@ -1,0 +1,135 @@
+# Wiring v2c-ffi into apps/android (T2.3)
+
+`apps/android` is created by T2.1 on another branch. These steps are applied when both
+branches are merged. Everything marked "blocked" needs tools the human still has to install
+(`cargo-ndk`, the Android rustup targets, the Android SDK/NDK).
+
+## Versions (verified 2026-11-12)
+
+- uniffi 0.32.2, proc-macro mode (`uniffi::setup_scaffolding!()` + `#[uniffi::export]`, no UDL),
+  Kotlin bindings generated in **library mode** from the built `.so`/`.dll`.
+- Generated package: `uniffi.v2c_ffi`, file `v2c_ffi.kt` (needs JNA at runtime, see below).
+- Verified on the host: bindings generate from `v2c_ffi.dll` and contain `AsrPlan`, `AsrHint`,
+  `AsrPick`, `AsrSource`, `Lan`, `LanService(s)` and `FfiException`.
+
+## 1. Rust toolchain (human, once)
+
+```sh
+rustup target add aarch64-linux-android x86_64-linux-android
+cargo install cargo-ndk
+```
+
+NDK 28.2 aligns `.so` files to 16 KB pages by default. Verify (below); if a build uses an older
+NDK, add `RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"`.
+
+## 2. Build the .so with cargo-ndk
+
+```sh
+cargo ndk -t arm64-v8a -t x86_64 -o apps/android/app/src/main/jniLibs build -p v2c-ffi --release
+```
+
+Gradle task for `apps/android/app/build.gradle.kts` (runs before `preBuild`):
+
+```kotlin
+val cargoNdk by tasks.registering(Exec::class) {
+    val repoRoot = rootProject.projectDir.parentFile.parentFile // apps/android -> repo root
+    workingDir = repoRoot
+    commandLine(
+        "cargo", "ndk", "-t", "arm64-v8a", "-t", "x86_64",
+        "-o", "${projectDir}/src/main/jniLibs",
+        "build", "-p", "v2c-ffi", "--release",
+    )
+    inputs.dir(repoRoot.resolve("crates/v2c-ffi/src"))
+    inputs.dir(repoRoot.resolve("crates/v2c-core/src"))
+    outputs.dir("${projectDir}/src/main/jniLibs")
+}
+tasks.named("preBuild") { dependsOn(cargoNdk, generateUniffiKotlin) }
+```
+
+`CARGO_TARGET_DIR` must stay the shared `C:\Users\lance.tn\.v2ct` (build cache only); the
+`.so` ends up in `jniLibs`, which should be git-ignored.
+
+## 3. Generate the Kotlin bindings
+
+The library-mode generator reads the built library (any target's `.so`, or the host build).
+The `bindgen` feature keeps the generator out of the Android build.
+
+```sh
+cargo build -p v2c-ffi --release
+cargo run -p v2c-ffi --features bindgen --bin uniffi-bindgen -- generate \
+  --library "$CARGO_TARGET_DIR/release/v2c_ffi.dll" \
+  --language kotlin \
+  --out-dir apps/android/app/src/main/java/ffi_generated
+```
+
+(On Linux/macOS use `libv2c_ffi.so` / `.dylib`.) The generated file declares
+`package uniffi.v2c_ffi`; the card's allowed path is `apps/android/app/src/main/java/**/ffi/**`,
+so put the output under `.../java/<app package path>/ffi/` (or add a Gradle `Exec` task that
+generates into `build/generated` and registers it as a source dir; that is the cleaner choice
+and avoids committing generated code):
+
+```kotlin
+val generateUniffiKotlin by tasks.registering(Exec::class) {
+    val repoRoot = rootProject.projectDir.parentFile.parentFile
+    workingDir = repoRoot
+    val out = layout.buildDirectory.dir("generated/uniffi")
+    commandLine(
+        "cargo", "run", "-p", "v2c-ffi", "--features", "bindgen", "--bin", "uniffi-bindgen", "--",
+        "generate", "--library", "target/release/libv2c_ffi.so" /* adjust to host/NDK output */,
+        "--language", "kotlin", "--out-dir", out.get().asFile.path,
+    )
+    outputs.dir(out)
+}
+android.sourceSets["main"].java.srcDir(layout.buildDirectory.dir("generated/uniffi"))
+```
+
+Runtime dependency of the generated code: `implementation("net.java.dev.jna:jna:5.17.0@aar")`
+(check the current version when wiring; the `@aar` form is the Android one).
+
+## 4. Preset assets
+
+Copy the two preset files byte for byte; do not edit them:
+
+```kotlin
+val copyPresets by tasks.registering(Copy::class) {
+    from(rootProject.projectDir.parentFile.parentFile.resolve("apps/desktop/src-tauri/presets")) {
+        include("TN_CUSTOM_LLM_ADDR.toml", "RD_CUSTOM_LLM_ADDR.toml")
+    }
+    into("${projectDir}/src/main/assets/presets")
+}
+tasks.named("preBuild") { dependsOn(copyPresets) }
+```
+
+Kotlin side:
+
+```kotlin
+val tn = assets.open("presets/TN_CUSTOM_LLM_ADDR.toml").bufferedReader().readText()
+val rd = assets.open("presets/RD_CUSTOM_LLM_ADDR.toml").bufferedReader().readText()
+val services = withContext(Dispatchers.IO) { loadLanServices(tn, rd) } // once, at keyboard start
+```
+
+## 5. Kotlin usage (all calls are synchronous: use `Dispatchers.IO`)
+
+| Kotlin | Notes |
+|--------|-------|
+| `toZhTw(text)` | every recognition result goes through it before `commitText` |
+| `loadLanServices(tn, rd)` | must succeed before `transcribePcm` / `translate`; throws `FfiException.Config` on a bad file |
+| `chooseAsr(lan, systemAvailable, localModelReady, pick)` | pure; `AsrPlan.hint` explains an unusable source |
+| `lanServiceId(lan, source)` | `Lan.Tn` + `AsrSource.LanTea` -> `"tn-tea-asr"` |
+| `transcribePcm(samples: List<Short>, rate: UInt, serviceId)` | 16 kHz mono PCM16 from `AudioRecord`; returns the raw transcript |
+| `translate(text, serviceId)` | Qwen service id, e.g. `"tn-qwen"` / `"rd-qwen"` |
+
+Errors arrive as `FfiException` subclasses (codes only, no text).
+
+## 6. Verification checklist
+
+Done on the host: `cargo test -p v2c-ffi`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo fmt --all --check`, Kotlin binding generation from the host library.
+
+Blocked: tools not installed (human installs, then run):
+
+- `cargo ndk -t arm64-v8a build -p v2c-ffi --release` (blocked: cargo-ndk / Android targets not installed)
+- `cd apps/android && ./gradlew assembleDebug` (blocked: needs the T2.1 branch, SDK, NDK)
+- `zipalign -c -P 16 -v 4 <apk>` and a check that the APK contains `lib/arm64-v8a/libv2c_ffi.so`
+  (blocked: Android SDK build-tools not installed)
+- Kotlin calls `toZhTw` on a device/emulator (blocked: depends on the APK)
