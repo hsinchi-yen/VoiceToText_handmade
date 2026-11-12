@@ -15,6 +15,9 @@ import app.v2c.ime.asr.local.LocalModelSpec
 import app.v2c.ime.asr.local.LocalModels
 import app.v2c.ime.asr.local.SherpaLocalAsr
 import app.v2c.ime.asr.local.WavReader
+import app.v2c.ime.asr.local.ZhTwConverter
+import app.v2c.ime.ffi.UniffiV2cFfi
+import app.v2c.ime.ffi.V2cFfiException
 import java.io.File
 import java.util.Locale
 
@@ -40,7 +43,7 @@ class CompareActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 48, 24, 24) }
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 160, 24, 24) } // clear the status bar (edge-to-edge)
         for (spec in LocalModels.ALL) {
             val d = LocalModelDownloader(spec, modelsRoot)
             downloaders[spec.id] = d
@@ -93,7 +96,18 @@ class CompareActivity : Activity() {
             show("no wav files in ${compareDir.path}")
             return
         }
-        val asr = SherpaLocalAsr(d) // Identity zh_tw until the FFI is wired; see docs/android-local-model.md
+        // Same zh_tw conversion as the keyboard, so the CER is not inflated by simplified characters.
+        val ffi = UniffiV2cFfi()
+        val asr = SherpaLocalAsr(
+            d,
+            ZhTwConverter { text ->
+                try {
+                    ffi.toZhTw(text)
+                } catch (_: V2cFfiException) {
+                    text
+                }
+            },
+        )
         val loadStart = System.nanoTime()
         asr.transcribe(ShortArray(1600), 16000) // warm-up: loads the model, excluded from per-file latency
         val loadMs = (System.nanoTime() - loadStart) / 1_000_000

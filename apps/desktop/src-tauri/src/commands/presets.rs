@@ -923,16 +923,21 @@ mod tests {
                 p.meta.asr_choices,
                 vec![format!("{prefix}tea-asr"), format!("{prefix}breeze-asr")]
             );
-            assert_eq!(p.meta.needs_key, vec![format!("{prefix}breeze-asr")]);
-            assert_eq!(p.meta.default_keys.0.len(), 1);
             assert_eq!(
-                p.meta
-                    .default_keys
-                    .0
-                    .get(&format!("{prefix}breeze-asr"))
-                    .map(String::as_str),
-                Some(DEFAULT)
+                p.meta.needs_key,
+                vec![format!("{prefix}tea-asr"), format!("{prefix}breeze-asr")]
             );
+            assert_eq!(p.meta.default_keys.0.len(), 2);
+            for asr in ["tea-asr", "breeze-asr"] {
+                assert_eq!(
+                    p.meta
+                        .default_keys
+                        .0
+                        .get(&format!("{prefix}{asr}"))
+                        .map(String::as_str),
+                    Some(DEFAULT)
+                );
+            }
             assert_eq!(p.route.polish, format!("{prefix}qwen"));
             assert_eq!(p.route.translate, format!("{prefix}qwen"));
             assert!(p.route.cloud_fallback_to_local);
@@ -1125,7 +1130,10 @@ mod tests {
                 None,
             ),
             (
-                TN.replace("needs_key = [\"tn-breeze-asr\"]", "needs_key = [\"nope\"]"),
+                TN.replace(
+                    "needs_key = [\"tn-tea-asr\", \"tn-breeze-asr\"]",
+                    "needs_key = [\"nope\"]",
+                ),
                 "preset_bad_reference",
                 None,
             ),
@@ -1305,7 +1313,8 @@ mod tests {
             &Keys::default(),
         )
         .unwrap();
-        assert_eq!(out.key_missing, vec!["tn-breeze-asr"]);
+        // TEA needs a key too and has none without the default line.
+        assert_eq!(out.key_missing, vec!["tn-tea-asr", "tn-breeze-asr"]);
         assert_eq!(key_of(&store, "tn-breeze-asr"), None);
     }
 
@@ -1392,12 +1401,12 @@ mod tests {
         let dir = TempDir::new("baddef");
         let original = "# keep\n[route]\nasr = \"local\"\n";
         let store = MemorySecretStore::new();
-        let line = "default_keys = { \"tn-breeze-asr\" = \"tn8227\" }";
+        let line = "default_keys = { \"tn-tea-asr\" = \"tn8227\", \"tn-breeze-asr\" = \"tn8227\" }";
         assert!(TN.contains(line));
         let long = "k".repeat(MAX_DEFAULT_KEY_CHARS + 1);
         let cases = [
             (
-                line.replace("tn-breeze-asr", "tn-tea-asr"),
+                line.replace("tn-tea-asr", "tn-qwen"),
                 "preset_bad_reference",
             ),
             (line.replace("tn8227", "a\\u0007b"), "invalid_key"),
@@ -1624,10 +1633,9 @@ llm_model = "t"
     #[test]
     fn keyring_failure_mid_loop_rolls_back_earlier_keys() {
         let dir = TempDir::new("flaky");
-        let text = TN.replace(
-            "needs_key = [\"tn-breeze-asr\"]",
-            "needs_key = [\"tn-tea-asr\", \"tn-breeze-asr\"]",
-        );
+        // The built-in TN preset lists both ASR services in needs_key.
+        assert!(TN.contains("needs_key = [\"tn-tea-asr\", \"tn-breeze-asr\"]"));
+        let text = TN.to_owned();
         let store = FlakyStore {
             inner: MemorySecretStore::new(),
             fail_set: "tn-breeze-asr",

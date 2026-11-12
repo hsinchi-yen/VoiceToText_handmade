@@ -264,13 +264,13 @@ export const commands = {
       title: `${up} 區網服務`,
       id_prefix: `${p}-`,
       services: [
-        { id: `${p}-tea-asr`, name: `${up} TEA-ASR`, base_url: `http://${host}:8001/v1`, asr_model: "tea-asr-1", llm_model: null, model_source: null, asr_timeout_ms: null, purposes: ["asr"], needs_key: false, has_key: false, has_default_key: false },
+        { id: `${p}-tea-asr`, name: `${up} TEA-ASR`, base_url: `http://${host}:8001/v1`, asr_model: "tea-asr-1", llm_model: null, model_source: null, asr_timeout_ms: null, purposes: ["asr"], needs_key: true, has_key: false, has_default_key: true },
         { id: `${p}-breeze-asr`, name: `${up} Breeze-ASR`, base_url: `http://${host}:8002/v1`, asr_model: "breeze-asr-25", llm_model: null, model_source: null, asr_timeout_ms: 8000, purposes: ["asr"], needs_key: true, has_key: false, has_default_key: true },
         { id: `${p}-qwen`, name: `${up} Qwen3.8 27B`, base_url: `http://${host}:8000/v1`, asr_model: null, llm_model: "Qwen3.8-27B-UD-Q6_K_L", model_source: "detected", asr_timeout_ms: null, purposes: ["polish", "translate"], needs_key: false, has_key: false, has_default_key: false },
       ],
       route: { polish: `${p}-qwen`, translate: `${p}-qwen`, cloud_fallback_to_local: true },
       asr_choices: [{ id: `${p}-tea-asr`, name: `${up} TEA-ASR` }, { id: `${p}-breeze-asr`, name: `${up} Breeze-ASR` }],
-      needs_key: [`${p}-breeze-asr`],
+      needs_key: [`${p}-tea-asr`, `${p}-breeze-asr`],
       ignored: [],
     };
   },

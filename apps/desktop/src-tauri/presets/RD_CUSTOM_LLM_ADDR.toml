@@ -8,10 +8,11 @@ id_prefix = "rd-"
 # Speech recognition endpoints the user can choose between.
 asr_choices = ["rd-tea-asr", "rd-breeze-asr"]
 # Endpoints that need an API key (asked in the dialog, stored in the OS keyring).
-needs_key = ["rd-breeze-asr"]
-# Default keys, stored when the user does not type one. This is the LAN server's shared key,
+needs_key = ["rd-tea-asr", "rd-breeze-asr"]
+# Default keys, stored when the user does not type one. This is the LAN server's shared key
+# (TEA and Breeze both require it; found by the Android emulator test 2026-11-13),
 # deliberately committed to git per the project owner's decision (2026-11-12).
-default_keys = { "rd-breeze-asr" = "tn8227" }
+default_keys = { "rd-tea-asr" = "tn8227", "rd-breeze-asr" = "tn8227" }
 # Ask the endpoint for its model list; use it when it names exactly one model.
 detect_llm_model = true
 

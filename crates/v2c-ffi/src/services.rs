@@ -313,7 +313,7 @@ mod tests {
         );
         for p in ["tn", "rd"] {
             assert!(r.has_key(&format!("{p}-breeze-asr")), "{p} breeze key");
-            assert!(!r.has_key(&format!("{p}-tea-asr")));
+            assert!(r.has_key(&format!("{p}-tea-asr")), "{p} tea key");
         }
         let breeze = s.services.iter().find(|x| x.id == "tn-breeze-asr").unwrap();
         assert_eq!(breeze.asr_timeout_ms, 8000);
