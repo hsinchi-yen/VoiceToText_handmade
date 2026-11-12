@@ -53,8 +53,8 @@
     };
   });
 
-  // Recording, transcribing, polishing and done show no text at all (flow over words); only
-  // errors and notices carry a message the user needs to read.
+  // Recording, transcribing, polishing and done show no status text (flow over words); only
+  // the hands-free hint, errors and notices carry words the user needs to read.
   const isProgress = $derived(["transcribing", "polishing", "done"].includes(view.kind));
   const isNotice = $derived(view.kind === "error" || view.kind === "info");
 </script>
@@ -64,18 +64,22 @@
     <div
       class={`pill ${view.kind}`}
       class:fading
-      class:compact={!isNotice}
+      class:compact={!isNotice && !(view.kind === "recording" && view.hands_free)}
+      class:handsfree={view.kind === "recording" && view.hands_free}
       style:--fade={`${fadeMs}ms`}
       role="status"
       aria-live="polite"
     >
       {#if view.kind === "recording"}
-        <!-- Hands-free: a solid green dot instead of a text badge. It is the one element that
-             differs from push-to-talk, and it stays put while the trace moves. -->
+        <!-- Hands-free: the key is already released, so say how to stop; the trace keeps
+             scrolling between the dot and the hint. Push-to-talk shows the trace only. -->
         {#if view.hands_free}
-          <span class="hf-dot" title="免持"></span>
+          <span class="hf-dot"></span>
         {/if}
         <Wave {view} />
+        {#if view.hands_free}
+          <span class="hf-hint">按右 Ctrl 結束</span>
+        {/if}
       {:else if isProgress}
         <Progress kind={view.kind} />
       {:else}
@@ -118,6 +122,14 @@
   }
   .pill.compact {
     width: 200px;
+  }
+  .pill.handsfree {
+    width: 320px;
+  }
+  .hf-hint {
+    flex: none;
+    font-size: 13px;
+    color: #9fe8b4;
   }
   .pill.fading {
     opacity: 0;
