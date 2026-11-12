@@ -500,7 +500,8 @@ apps/desktop/ui 重構＋presets（不改 v2c-core） ← Phase 4（第 13 節�
 title = "TN 區網服務"
 id_prefix = "tn-"
 asr_choices = ["tn-tea-asr", "tn-breeze-asr"]   # 套用時讓使用者選一個當 route.asr
-needs_key = ["tn-breeze-asr"]                   # 選到時提示貼上金鑰
+needs_key = ["tn-breeze-asr"]                   # 需要金鑰的服務（金鑰存進系統金鑰庫）
+default_keys = { "tn-breeze-asr" = "tn8227" }  # 沒輸入時存這把共用金鑰（T4.8）
 detect_llm_model = true                         # 套用時查 /v1/models
 
 [route]

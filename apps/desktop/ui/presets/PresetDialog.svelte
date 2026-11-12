@@ -174,10 +174,10 @@
         type="password"
         autocomplete="off"
         spellcheck="false"
-        supporting={chosenHasDefault
-          ? "已內建預設金鑰，可不填；要換別的金鑰再輸入"
-          : chosenHasKey
-            ? "已儲存；留空則沿用"
+        supporting={chosenHasKey
+          ? "已儲存金鑰；留空則沿用"
+          : chosenHasDefault
+            ? "已內建預設金鑰，可不填；要換別的金鑰再輸入"
             : "可稍後再補"}
         bind:value={keys[asrChoice]}
       />

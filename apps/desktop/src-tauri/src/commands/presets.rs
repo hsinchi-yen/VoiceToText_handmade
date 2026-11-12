@@ -35,7 +35,7 @@
 //! Logs: preset name (`TN`, `RD`, or `file`), service count, error code, elapsed ms. Never
 //! keys, never the file path.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -106,7 +106,7 @@ impl std::fmt::Debug for Keys {
 /// Default keys shipped inside a preset, by service id. `Debug` shows ids only.
 #[derive(Deserialize, Default)]
 #[serde(transparent)]
-struct DefaultKeys(HashMap<String, String>);
+struct DefaultKeys(BTreeMap<String, String>);
 
 impl std::fmt::Debug for DefaultKeys {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -650,9 +650,19 @@ fn apply_resolved(
         if typed.is_none() && !endpoint_changed && default.is_none() {
             continue;
         }
-        let Ok(old) = stored.get(&svc.id) else {
-            restore_keys(stored, &changes);
-            return Err("keyring_failed");
+        // Storing only the preset default (nothing typed, endpoint unchanged) is best effort:
+        // a broken or locked keyring must not block applying the preset.
+        let best_effort = typed.is_none() && !endpoint_changed;
+        let old = match stored.get(&svc.id) {
+            Ok(old) => old,
+            Err(_) if best_effort => {
+                warn!(service = %svc.id, "preset: keyring unavailable, default key skipped");
+                continue;
+            }
+            Err(_) => {
+                restore_keys(stored, &changes);
+                return Err("keyring_failed");
+            }
         };
         let has_old = old.as_ref().is_some_and(|k| !k.is_empty());
         let done = match (typed, &default) {
@@ -664,6 +674,9 @@ fn apply_resolved(
         };
         if done.is_err() {
             warn!(service = %svc.id, "preset: could not update key");
+            if best_effort {
+                continue;
+            }
             restore_keys(stored, &changes);
             return Err("keyring_failed");
         }
@@ -1514,6 +1527,98 @@ polish = \"tn-qwen\"",
         fn delete(&self, id: &str) -> v2c_core::Result<()> {
             self.inner.delete(id)
         }
+    }
+
+    /// Keyring where reads and writes of one id fail.
+    struct BrokenStore {
+        inner: MemorySecretStore,
+        broken: &'static str,
+    }
+    impl SecretStore for BrokenStore {
+        fn get(&self, id: &str) -> v2c_core::Result<Option<ApiKey>> {
+            if id == self.broken {
+                return Err(v2c_core::V2cError::Storage("locked".into()));
+            }
+            self.inner.get(id)
+        }
+        fn set(&self, id: &str, key: &ApiKey) -> v2c_core::Result<()> {
+            if id == self.broken {
+                return Err(v2c_core::V2cError::Storage("locked".into()));
+            }
+            self.inner.set(id, key)
+        }
+        fn delete(&self, id: &str) -> v2c_core::Result<()> {
+            self.inner.delete(id)
+        }
+    }
+
+    #[test]
+    fn default_key_failure_is_best_effort_but_typed_key_is_strict() {
+        let dir = TempDir::new("besteffort");
+        let store = BrokenStore {
+            inner: MemorySecretStore::new(),
+            broken: "tn-breeze-asr",
+        };
+        let out = apply(&dir.config(), &store, TN, "tn-tea-asr", &Keys::default()).unwrap();
+        assert_eq!(out.key_missing, vec!["tn-breeze-asr"]);
+        assert_eq!(load_config(&dir.config()).unwrap().route.asr, "tn-tea-asr");
+
+        // get works but set fails: same outcome.
+        let dir2 = TempDir::new("besteffort2");
+        let flaky = FlakyStore {
+            inner: MemorySecretStore::new(),
+            fail_set: "tn-breeze-asr",
+        };
+        let out = apply(&dir2.config(), &flaky, TN, "tn-tea-asr", &Keys::default()).unwrap();
+        assert_eq!(out.key_missing, vec!["tn-breeze-asr"]);
+        assert!(dir2.config().exists());
+
+        // A typed key still fails the whole apply.
+        let dir3 = TempDir::new("strict");
+        let got = apply(
+            &dir3.config(),
+            &store,
+            TN,
+            "tn-breeze-asr",
+            &Keys::of(&[("tn-breeze-asr", KEY)]),
+        );
+        assert_eq!(got, Err("keyring_failed"));
+        assert!(!dir3.config().exists());
+    }
+
+    #[test]
+    fn custom_file_preset_may_carry_default_keys() {
+        let dir = TempDir::new("customdef");
+        let text = r#"
+[preset]
+title = "Office"
+id_prefix = "office-"
+asr_choices = ["office-asr"]
+needs_key = ["office-asr"]
+default_keys = { "office-asr" = " lan-key-1 " }
+
+[route]
+polish = "office-llm"
+translate = "office-llm"
+
+[[cloud]]
+id = "office-asr"
+name = "Office ASR"
+kind = "open_ai_compat"
+base_url = "http://192.168.1.50:8002/v1"
+asr_model = "m"
+
+[[cloud]]
+id = "office-llm"
+name = "Office LLM"
+kind = "open_ai_compat"
+base_url = "http://192.168.1.50:8000/v1"
+llm_model = "t"
+"#;
+        let store = MemorySecretStore::new();
+        let out = apply(&dir.config(), &store, text, "office-asr", &Keys::default()).unwrap();
+        assert!(out.key_missing.is_empty());
+        assert_eq!(key_of(&store, "office-asr").as_deref(), Some("lan-key-1"));
     }
 
     #[test]
