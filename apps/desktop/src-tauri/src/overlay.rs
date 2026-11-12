@@ -37,8 +37,8 @@ const WIDTH: f64 = 420.0;
 const HEIGHT: f64 = 56.0;
 const BOTTOM_MARGIN: f64 = 48.0;
 
-/// "Done" stays 0.5 s, then fades for 0.3 s (the webview runs the fade).
-const DONE_MS: u64 = 800;
+/// "Done" is only the bar snapping to 100% and a quick fade (the webview runs the fade).
+const DONE_MS: u64 = 250;
 /// Informational messages (nothing recognised, microphone back) stay a little longer.
 const INFO_MS: u64 = 1_500;
 /// Errors stay 3 s.
@@ -674,8 +674,8 @@ mod tests {
     }
 
     #[test]
-    fn done_hides_after_half_second_plus_fade_and_error_after_three_seconds() {
-        assert!((500..=1_000).contains(&DONE_MS));
+    fn done_hides_quickly_and_error_after_three_seconds() {
+        assert!((150..=400).contains(&DONE_MS));
         assert_eq!(ERROR_MS, 3_000);
     }
 
