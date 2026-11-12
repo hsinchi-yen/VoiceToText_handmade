@@ -66,7 +66,7 @@ fun KeyboardView(
     session: VoiceSession,
     onOpenSetup: () -> Unit,
     onInstallSpeechService: () -> Unit,
-    onBackspace: () -> Unit = {},
+    onBackspace: (repeating: Boolean) -> Boolean = { false },
     onEnter: () -> Unit = {},
 ) {
     MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
@@ -120,7 +120,7 @@ private fun TopRow() {
 }
 
 @Composable
-private fun BackspaceKey(onBackspace: () -> Unit, modifier: Modifier = Modifier) {
+private fun BackspaceKey(onBackspace: (repeating: Boolean) -> Boolean, modifier: Modifier = Modifier) {
     val view = LocalView.current
     val repeat = remember { BackspaceRepeat() }
     Box(
@@ -130,13 +130,14 @@ private fun BackspaceKey(onBackspace: () -> Unit, modifier: Modifier = Modifier)
             .pointerInput(onBackspace) {
                 detectTapGestures(onPress = {
                     view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    onBackspace()
+                    onBackspace(false)
                     coroutineScope {
                         val job = launch {
                             var i = 0
                             while (true) {
                                 delay(repeat.delayBeforeRepeat(i++))
-                                onBackspace()
+                                // Stops when the input connection changed or went away.
+                                if (!onBackspace(true)) break
                             }
                         }
                         try {
@@ -161,10 +162,11 @@ private fun EnterKey(onEnter: () -> Unit, modifier: Modifier = Modifier) {
             .height(KeyHeight)
             .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp))
             .pointerInput(onEnter) {
-                detectTapGestures(onPress = {
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    onEnter()
-                })
+                detectTapGestures(
+                    onPress = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP) },
+                    // Fire on release so sliding off the key cancels it (enter may send a message).
+                    onTap = { onEnter() },
+                )
             },
         contentAlignment = Alignment.Center,
     ) {
