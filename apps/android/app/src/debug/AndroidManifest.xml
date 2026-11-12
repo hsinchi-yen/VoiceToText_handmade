@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Debug builds only: the comparison tool downloads candidate models. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application>
+        <activity
+            android:name=".asr.local.debug.CompareActivity"
+            android:exported="true"
+            android:label="v2c model compare" />
+    </application>
+</manifest>

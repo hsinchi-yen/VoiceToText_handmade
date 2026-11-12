@@ -94,7 +94,7 @@
   - [ ] 受阻（工具未安裝）：`cargo ndk` 建置、`assembleDebug`、`zipalign -c -P 16`、Kotlin 呼叫 `to_zh_tw`；待 T2.1 合併後接線
   - [ ] 🧑 安裝 Android Rust 工具（見 human-checklist）
 - [ ] W9 T2.2 退格與換行
-- [ ] W9 T2.6 手機本機模型（sherpa-onnx；候選比較）
+- [ ] W9 T2.6 手機本機模型（sherpa-onnx；候選比較）：程式、下載狀態機、測試、比較工具已完成並建置通過；待人工：實機跑比較工具、定案預設模型（見 docs/android-local-model.md）
   - [ ] 🧑 手機比較候選模型並決定預設
 - [ ] W10 T2.4 區網偵測、辨識路由、來源小圖示、中翻英鍵
 - [ ] W10b T2.5 release APK 與安裝說明
