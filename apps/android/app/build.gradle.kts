@@ -201,18 +201,20 @@ androidComponents {
 
 // ---------------------------------------------------------------------------------------------
 // v2c-ffi wiring (T2.3, crates/v2c-ffi/ANDROID.md): cargo-ndk builds libv2c_ffi.so into
-// src/main/jniLibs, uniffi generates the Kotlin bindings into build/generated/uniffi, and the
-// TN/RD presets are copied byte for byte into src/main/assets/presets. All run before preBuild.
+// build/v2c-ffi/jniLibs, uniffi generates the Kotlin bindings into build/generated/uniffi, and
+// the TN/RD presets are copied byte for byte into build/v2c-ffi/assets/presets. Each task is
+// typed with declared outputs and registered as a generated source directory per variant (same
+// pattern as fetchSherpaOnnx), so Gradle wires the task dependencies itself.
 // Needs rustup targets + cargo-ndk + NDK (tools/build-android.* --check lists what is missing).
-// `-Pv2c.skipRust=true` skips the two cargo tasks (reuses whatever is already generated; only
-// useful for lint-style runs, the FFI Kotlin does not compile without the generated bindings).
+// `-Pv2c.skipRust=true` makes the two cargo tasks do nothing (lint-style runs only: the FFI
+// Kotlin does not compile without the generated bindings).
 // ---------------------------------------------------------------------------------------------
 val repoRoot: File = rootProject.projectDir.parentFile.parentFile // apps/android -> repo root
-val skipRust = providers.gradleProperty("v2c.skipRust").orNull == "true"
+val skipRust: Boolean = providers.gradleProperty("v2c.skipRust").orNull == "true"
 
 // Same directory cargo / cargo-ndk use: CARGO_TARGET_DIR (relative = against the repo root).
 val cargoTargetDir: File = System.getenv("CARGO_TARGET_DIR")?.takeIf { it.isNotBlank() }
-    ?.let { File(it).let { f -> if (f.isAbsolute) f else File(repoRoot, it) } }
+    ?.let { dir -> File(dir).let { f -> if (f.isAbsolute) f else File(repoRoot, dir) } }
     ?: File(repoRoot, "target")
 
 // The Gradle daemon often lacks ~/.cargo/bin on PATH; look there first (cargo.exe on Windows).
@@ -223,29 +225,38 @@ val cargoExe: String = run {
 }
 
 // Release ships arm64 only; debug builds also get x86_64 for the emulator.
-val releaseOnly = gradle.startParameter.taskNames.let { names ->
+val releaseOnly: Boolean = gradle.startParameter.taskNames.let { names ->
     names.isNotEmpty() && names.all { it.contains("Release", ignoreCase = true) }
 }
-val ndkAbis = if (releaseOnly) listOf("arm64-v8a") else listOf("arm64-v8a", "x86_64")
-val jniLibsOut = layout.projectDirectory.dir("src/main/jniLibs")
+val ndkAbis: List<String> = if (releaseOnly) listOf("arm64-v8a") else listOf("arm64-v8a", "x86_64")
 
-val cargoNdk = tasks.register<Exec>("cargoNdk") {
-    group = "v2c"
-    description = "Builds libv2c_ffi.so with cargo-ndk into src/main/jniLibs"
-    onlyIf { !skipRust }
-    workingDir = repoRoot
-    commandLine(
-        buildList {
-            addAll(listOf(cargoExe, "ndk"))
-            ndkAbis.forEach { addAll(listOf("-t", it)) }
-            addAll(listOf("-o", jniLibsOut.asFile.path, "build", "-p", "v2c-ffi", "--release"))
-        },
-    )
-    inputs.dir(File(repoRoot, "crates/v2c-ffi/src"))
-    inputs.dir(File(repoRoot, "crates/v2c-core/src"))
-    inputs.files(File(repoRoot, "Cargo.toml"), File(repoRoot, "Cargo.lock"), File(repoRoot, "crates/v2c-ffi/Cargo.toml"))
-    inputs.property("abis", ndkAbis)
-    outputs.dir(jniLibsOut)
+abstract class CargoNdk @Inject constructor(
+    private val execOps: ExecOperations,
+) : DefaultTask() {
+    @get:Input abstract val cargo: Property<String>
+    @get:Input abstract val abis: ListProperty<String>
+    @get:Input abstract val skip: Property<Boolean>
+    // From the Android plugin (honours ndkVersion, also in Android Studio builds).
+    @get:Input @get:Optional abstract val ndkDir: Property<String>
+    @get:Internal abstract val repoDir: DirectoryProperty
+    @get:OutputDirectory abstract val outDir: DirectoryProperty
+
+    @TaskAction
+    fun run() {
+        val out = outDir.get().asFile.apply { deleteRecursively(); mkdirs() }
+        if (skip.get()) return
+        execOps.exec {
+            workingDir = repoDir.get().asFile
+            ndkDir.orNull?.let { environment("ANDROID_NDK_HOME", it) }
+            commandLine(
+                buildList {
+                    addAll(listOf(cargo.get(), "ndk"))
+                    abis.get().forEach { addAll(listOf("-t", it)) }
+                    addAll(listOf("-o", out.path, "build", "-p", "v2c-ffi", "--release"))
+                },
+            )
+        }
+    }
 }
 
 abstract class GenerateUniffiKotlin @Inject constructor(
@@ -253,14 +264,14 @@ abstract class GenerateUniffiKotlin @Inject constructor(
 ) : DefaultTask() {
     @get:Input abstract val cargo: Property<String>
     @get:Internal abstract val repoDir: DirectoryProperty
-    @get:InputFile abstract val library: RegularFileProperty
+    // Absent when -Pv2c.skipRust=true.
+    @get:InputFile @get:Optional abstract val library: RegularFileProperty
     @get:OutputDirectory abstract val outDir: DirectoryProperty
 
     @TaskAction
     fun run() {
-        val lib = library.get().asFile
-        if (!lib.isFile) throw GradleException("Missing $lib: run the cargoNdk task first (needs cargo-ndk, see tools/build-android --check)")
         val out = outDir.get().asFile.apply { deleteRecursively(); mkdirs() }
+        val lib = library.orNull?.asFile ?: return
         execOps.exec {
             workingDir = repoDir.get().asFile
             commandLine(
@@ -271,30 +282,56 @@ abstract class GenerateUniffiKotlin @Inject constructor(
     }
 }
 
+abstract class CopyPresets @Inject constructor(
+    private val fs: FileSystemOperations,
+) : DefaultTask() {
+    @get:InputDirectory @get:PathSensitive(PathSensitivity.RELATIVE) abstract val presetsDir: DirectoryProperty
+    @get:OutputDirectory abstract val assetsDir: DirectoryProperty
+
+    @TaskAction
+    fun run() {
+        val out = assetsDir.get().asFile.apply { deleteRecursively(); mkdirs() }
+        fs.copy {
+            from(presetsDir) { include("TN_CUSTOM_LLM_ADDR.toml", "RD_CUSTOM_LLM_ADDR.toml") }
+            into(File(out, "presets"))
+        }
+    }
+}
+
+val cargoNdk = tasks.register<CargoNdk>("cargoNdk") {
+    group = "v2c"
+    description = "Builds libv2c_ffi.so with cargo-ndk into build/v2c-ffi/jniLibs"
+    cargo.set(cargoExe)
+    abis.set(ndkAbis)
+    skip.set(skipRust)
+    ndkDir.set(androidComponents.sdkComponents.ndkDirectory.map { it.asFile.path })
+    repoDir.set(repoRoot)
+    outDir.set(layout.buildDirectory.dir("v2c-ffi/jniLibs"))
+    // cargo does its own incremental builds; always run it.
+    outputs.upToDateWhen { false }
+}
+
 val generateUniffiKotlin = tasks.register<GenerateUniffiKotlin>("generateUniffiKotlin") {
     group = "v2c"
     description = "Generates the uniffi Kotlin bindings (package uniffi.v2c_ffi) from libv2c_ffi.so"
-    onlyIf { !skipRust }
     dependsOn(cargoNdk)
     cargo.set(cargoExe)
     repoDir.set(repoRoot)
-    library.set(File(cargoTargetDir, "aarch64-linux-android/release/libv2c_ffi.so"))
+    if (!skipRust) library.set(File(cargoTargetDir, "aarch64-linux-android/release/libv2c_ffi.so"))
     outDir.set(layout.buildDirectory.dir("generated/uniffi"))
 }
 
-val copyPresets = tasks.register<Copy>("copyPresets") {
+val copyPresets = tasks.register<CopyPresets>("copyPresets") {
     group = "v2c"
-    description = "Copies the TN/RD preset TOML files into assets/presets (byte for byte)"
-    from(File(repoRoot, "apps/desktop/src-tauri/presets")) {
-        include("TN_CUSTOM_LLM_ADDR.toml", "RD_CUSTOM_LLM_ADDR.toml")
-    }
-    into(layout.projectDirectory.dir("src/main/assets/presets"))
+    description = "Copies the TN/RD preset TOML files into generated assets/presets (byte for byte)"
+    presetsDir.set(File(repoRoot, "apps/desktop/src-tauri/presets"))
+    assetsDir.set(layout.buildDirectory.dir("v2c-ffi/assets"))
 }
 
 androidComponents {
     onVariants { variant ->
         variant.sources.kotlin?.addGeneratedSourceDirectory(generateUniffiKotlin, GenerateUniffiKotlin::outDir)
+        variant.sources.jniLibs?.addGeneratedSourceDirectory(cargoNdk, CargoNdk::outDir)
+        variant.sources.assets?.addGeneratedSourceDirectory(copyPresets, CopyPresets::assetsDir)
     }
 }
-
-tasks.named("preBuild") { dependsOn(cargoNdk, generateUniffiKotlin, copyPresets) }

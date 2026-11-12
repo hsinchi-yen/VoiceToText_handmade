@@ -9,9 +9,7 @@ captures/
 .cxx/
 *.log
 
-# T2.3 build products and T2.5 signing secrets
-app/src/main/jniLibs/
-app/src/main/assets/presets/
+# T2.5 signing secrets
 keystore.properties
 *.jks
 *.keystore

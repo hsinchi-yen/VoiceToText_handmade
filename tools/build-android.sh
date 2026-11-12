@@ -63,7 +63,7 @@ if ! command -v "$java_bin" >/dev/null 2>&1; then
     Ubuntu: sudo apt install openjdk-17-jdk
     then:   export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64"
 else
-    java_major="$("$java_bin" -version 2>&1 | sed -n '1s/.*version "\([0-9]*\).*/\1/p')"
+    java_major="$("$java_bin" -version 2>&1 | grep -m1 'version "' | sed 's/.*version "\([0-9]*\).*/\1/')"
     if [[ -z "$java_major" || "$java_major" -lt 17 ]]; then
         add_missing "JDK 17 or newer required, found: ${java_major:-unknown}.
     Ubuntu: sudo apt install openjdk-17-jdk ; export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64"
@@ -215,7 +215,7 @@ sums="$releases/SHA256SUMS.txt"
 tmp="$(mktemp "$releases/.SHA256SUMS.XXXXXX")"
 if [[ -f "$sums" ]]; then
     # Keep every line except the one for this file name.
-    awk -v n="$name" '$2 != n' "$sums" >"$tmp"
+    awk -v n="$name" '{ sub(/\r$/, "") } $2 != n' "$sums" >"$tmp"
 fi
 printf '%s  %s\n' "$hash" "$name" >>"$tmp"
 chmod 644 "$tmp"

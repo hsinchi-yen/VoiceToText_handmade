@@ -50,7 +50,7 @@ keyAlias=v2c
 keyPassword=你輸入的金鑰密碼
 ```
 
-`storeFile` 用相對路徑時以 `apps/android` 為基準；寫絕對路徑請用正斜線（例如 `C:/keys/v2c-release.jks`）。
+值裡**不可以有反斜線**（`.properties` 檔會把 `\` 當跳脫字元；密碼含 `\` 時請換一個密碼）。`storeFile` 用相對路徑時以 `apps/android` 為基準；寫絕對路徑請用正斜線（例如 `C:/keys/v2c-release.jks`）。
 
 ### 1.3 建置結果
 
