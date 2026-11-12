@@ -5,6 +5,7 @@ pub mod gpu; // T1.10b / T1.11 (settings VRAM bar)
 pub mod history; // T1.9
 pub mod models; // T1.11
 pub mod onboarding; // T1.11
+pub mod presets; // T4.1
 pub mod settings; // T1.11
 pub mod status; // T1.1
 pub mod vocab; // T1.8

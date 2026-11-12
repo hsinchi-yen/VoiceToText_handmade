@@ -303,7 +303,10 @@ fn shown_name(svc: &CloudService) -> Option<&str> {
 }
 
 /// Trims a display name; empty means "no name". Only compatible endpoints keep one.
-fn normalize_name(kind: CloudKind, name: &Option<String>) -> Result<Option<String>, &'static str> {
+pub(crate) fn normalize_name(
+    kind: CloudKind,
+    name: &Option<String>,
+) -> Result<Option<String>, &'static str> {
     if kind != CloudKind::OpenAiCompat {
         return Ok(None);
     }
@@ -323,7 +326,11 @@ fn normalize_name(kind: CloudKind, name: &Option<String>) -> Result<Option<Strin
 }
 
 /// `name` must differ (case-insensitively) from every other service's name and id.
-fn check_name_unique(name: &str, id: &str, services: &[CloudService]) -> Result<(), &'static str> {
+pub(crate) fn check_name_unique(
+    name: &str,
+    id: &str,
+    services: &[CloudService],
+) -> Result<(), &'static str> {
     let clash = |other: &str| other.trim().to_lowercase() == name.to_lowercase();
     let taken = services
         .iter()
@@ -455,7 +462,7 @@ fn normalized_endpoint(svc: &CloudService) -> Option<String> {
 }
 
 /// Same kind and same (normalised) effective endpoint.
-fn same_endpoint(a: &CloudService, b: &CloudService) -> bool {
+pub(crate) fn same_endpoint(a: &CloudService, b: &CloudService) -> bool {
     a.kind == b.kind
         && normalized_endpoint(a).is_some()
         && normalized_endpoint(a) == normalized_endpoint(b)
@@ -696,7 +703,7 @@ pub fn load_config(path: &Path) -> Result<Config, &'static str> {
 /// Reads `config.toml` (defaults if missing), lets `edit` change the document, checks the
 /// result still parses, and writes it atomically. An invalid file is left untouched.
 /// Callers hold [`CONFIG_LOCK`] for the whole read-modify-write.
-fn update_config(
+pub(crate) fn update_config(
     path: &Path,
     edit: impl FnOnce(&mut DocumentMut, &Config) -> Result<(), &'static str>,
 ) -> Result<Config, &'static str> {
@@ -713,12 +720,12 @@ fn update_config(
     Ok(updated)
 }
 
-fn config_lock() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn config_lock() -> std::sync::MutexGuard<'static, ()> {
     CONFIG_LOCK.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 /// Sets `key = v` keeping the old value's comments/whitespace.
-fn set_value(table: &mut dyn TableLike, key: &str, mut v: Value) {
+pub(crate) fn set_value(table: &mut dyn TableLike, key: &str, mut v: Value) {
     match table.get_mut(key) {
         Some(Item::Value(old)) => {
             *v.decor_mut() = old.decor().clone();
@@ -730,7 +737,7 @@ fn set_value(table: &mut dyn TableLike, key: &str, mut v: Value) {
     }
 }
 
-fn set_str(table: &mut dyn TableLike, key: &str, val: &str) {
+pub(crate) fn set_str(table: &mut dyn TableLike, key: &str, val: &str) {
     set_value(table, key, Value::from(val));
 }
 
@@ -776,7 +783,10 @@ fn table_id(t: &Table) -> Option<&str> {
     t.get("id").and_then(Item::as_str)
 }
 
-fn upsert_service(doc: &mut DocumentMut, svc: &CloudService) -> Result<(), &'static str> {
+pub(crate) fn upsert_service(
+    doc: &mut DocumentMut,
+    svc: &CloudService,
+) -> Result<(), &'static str> {
     let aot = cloud_tables(doc)?;
     let idx = aot
         .iter()
@@ -971,7 +981,7 @@ pub fn remove_service(
 }
 
 /// Only the main window may use the cloud commands.
-fn check_caller(label: &str) -> Result<(), &'static str> {
+pub(crate) fn check_caller(label: &str) -> Result<(), &'static str> {
     if label == MAIN_WINDOW {
         Ok(())
     } else {
@@ -987,7 +997,7 @@ fn check_caller(label: &str) -> Result<(), &'static str> {
 /// The OS keyring. Installs the Windows Credential Manager store on first use if the app
 /// has not installed a default store yet. main.rs installs it at startup, so this is only a
 /// fallback (e.g. if that failed transiently).
-fn secret_store() -> Result<v2c_core::secrets::KeyringSecretStore, &'static str> {
+pub(crate) fn secret_store() -> Result<v2c_core::secrets::KeyringSecretStore, &'static str> {
     if keyring_core::get_default_store().is_none() {
         install_default_store()?;
     }
@@ -1030,11 +1040,11 @@ fn open_in_browser(url: &'static str) -> Result<(), &'static str> {
     cmd.map(|_| ()).map_err(|_| "open_failed")
 }
 
-fn config_path(app: &tauri::AppHandle) -> std::path::PathBuf {
+pub(crate) fn config_path(app: &tauri::AppHandle) -> std::path::PathBuf {
     app.state::<AppState>().paths.config_file()
 }
 
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, &'static str> + Send + 'static,
 ) -> Result<T, &'static str> {
     tauri::async_runtime::spawn_blocking(f)
