@@ -30,7 +30,8 @@ class UniffiV2cFfi : V2cFfi {
         localModelReady: Boolean,
         pick: AsrPick,
     ): AsrPlan = guard {
-        val p = uniffi.v2c_ffi.chooseAsr(lan.toFfi(), systemAvailable, localModelReady, pick.toFfi())
+        // T2.8 wires the real cloud readiness; until then the cloud source is never offered.
+        val p = uniffi.v2c_ffi.chooseAsr(lan.toFfi(), false, systemAvailable, localModelReady, pick.toFfi())
         AsrPlan(p.primary.toApp(), p.fallback.toApp(), p.retrySpeak, p.hint.toApp())
     }
 
@@ -104,6 +105,8 @@ class UniffiV2cFfi : V2cFfi {
         FAsrSource.LAN_BREEZE -> AsrSource.LAN_BREEZE
         FAsrSource.SYSTEM -> AsrSource.SYSTEM
         FAsrSource.LOCAL -> AsrSource.LOCAL
+        // Cloud is never produced while cloudReady is false (T2.8 adds the app-side value).
+        FAsrSource.CLOUD -> AsrSource.NONE
     }
 
     private fun FAsrHint.toApp(): AsrHint = when (this) {
@@ -112,5 +115,6 @@ class UniffiV2cFfi : V2cFfi {
         FAsrHint.LAN_UNREACHABLE -> AsrHint.LAN_UNREACHABLE
         FAsrHint.SYSTEM_UNAVAILABLE -> AsrHint.SYSTEM_UNAVAILABLE
         FAsrHint.LOCAL_MODEL_NOT_READY -> AsrHint.LOCAL_MODEL_NOT_READY
+        FAsrHint.CLOUD_NOT_READY -> AsrHint.NO_SOURCE_AVAILABLE
     }
 }

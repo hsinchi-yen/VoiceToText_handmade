@@ -6,12 +6,12 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use v2c_core::asr::{AsrContext, AsrProvider};
 use v2c_core::audio::AudioClip;
-use v2c_core::config::{CloudService, TimeoutConfig};
+use v2c_core::config::{CloudKind, CloudService, TimeoutConfig};
 use v2c_core::error::{ProviderErrorKind, Stage};
 use v2c_core::llm::LlmProvider;
 use v2c_core::postprocess::zh_tw::to_zh_tw;
@@ -96,6 +96,99 @@ pub struct LanServices {
     pub services: Vec<LanService>,
 }
 
+/// Cloud provider kinds the Android settings offer. `Claude` has no speech recognition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CloudProvider {
+    Gemini,
+    Openai,
+    Claude,
+    /// Any OpenAI-compatible endpoint; needs `base_url`.
+    Custom,
+}
+
+impl CloudProvider {
+    fn kind(self) -> CloudKind {
+        match self {
+            CloudProvider::Gemini => CloudKind::Gemini,
+            CloudProvider::Openai => CloudKind::OpenAi,
+            CloudProvider::Claude => CloudKind::Claude,
+            CloudProvider::Custom => CloudKind::OpenAiCompat,
+        }
+    }
+}
+
+/// What a cloud service is used for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CloudUse {
+    Asr,
+    Translate,
+}
+
+/// One user-configured cloud service. The API key travels separately in
+/// `set_cloud_services` and is never part of this record.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CloudServiceConfig {
+    /// Stable id Kotlin passes as `service_id`; must not clash with a LAN service id.
+    pub id: String,
+    pub provider: CloudProvider,
+    /// Text model (translation).
+    pub model: String,
+    /// Speech recognition model; empty / `None` uses the provider's suggested one.
+    pub asr_model: Option<String>,
+    /// Required for `Custom`; optional override otherwise. HTTPS, or HTTP on loopback only.
+    pub base_url: Option<String>,
+    pub uses: Vec<CloudUse>,
+}
+
+/// Result of [`crate::test_connection`]: `error` is `None` on success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct TestResult {
+    pub latency_ms: u64,
+    pub error: Option<FfiError>,
+}
+
+const TEST_TONE_RATE: u32 = 16_000;
+const TEST_SENTENCE: &str = "你好，這是連線測試。";
+
+/// One second of a quiet 440 Hz tone as 16-bit little-endian mono PCM.
+fn test_tone_pcm() -> Vec<u8> {
+    (0..TEST_TONE_RATE)
+        .flat_map(|i| {
+            let t = i as f32 / TEST_TONE_RATE as f32;
+            let v = (0.1 * (2.0 * std::f32::consts::PI * 440.0 * t).sin() * 32767.0) as i16;
+            v.to_le_bytes()
+        })
+        .collect()
+}
+
+fn non_empty(s: Option<String>) -> Option<String> {
+    s.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+}
+
+/// Cloud endpoints must be HTTPS; plain HTTP only for loopback (tests, local proxies).
+fn url_allowed(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("https://") {
+        return true;
+    }
+    let Some(rest) = lower.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
+        return false;
+    }
+    let host = if let Some(v6) = authority.strip_prefix('[') {
+        v6.split(']').next().unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
 /// `[preset]` as far as this crate cares: only the default keys.
 #[derive(Default, Deserialize)]
 #[serde(default)]
@@ -124,6 +217,9 @@ pub(crate) struct Registry {
     order: Vec<String>,
     keys: MemorySecretStore,
     http: CloudHttp,
+    /// Per-service purpose limits (`CloudServiceConfig::uses`). Services without an entry
+    /// (the LAN ones) are unrestricted.
+    uses: HashMap<String, Vec<CloudUse>>,
 }
 
 impl std::fmt::Debug for Registry {
@@ -164,7 +260,60 @@ impl Registry {
             order,
             keys,
             http: cloud_http_client().map_err(FfiError::from)?,
+            uses: HashMap::new(),
         })
+    }
+
+    /// Builds the cloud registry from the user's settings. Keys stay in memory only; a key
+    /// for an unknown id is ignored. Any bad entry fails the whole call.
+    pub(crate) fn from_cloud(
+        configs: Vec<CloudServiceConfig>,
+        keys: HashMap<String, String>,
+    ) -> Result<Self, FfiError> {
+        let store = MemorySecretStore::new();
+        let mut services = HashMap::new();
+        let mut order = Vec::new();
+        let mut uses = HashMap::new();
+        for c in configs {
+            let id = c.id.trim().to_owned();
+            if id.is_empty() || services.contains_key(&id) {
+                return Err(FfiError::Config);
+            }
+            let base_url = non_empty(c.base_url);
+            match &base_url {
+                None if c.provider == CloudProvider::Custom => return Err(FfiError::Config),
+                Some(u) if !url_allowed(u) => return Err(FfiError::Config),
+                _ => {}
+            }
+            let svc = CloudService {
+                id: id.clone(),
+                name: None,
+                kind: c.provider.kind(),
+                base_url,
+                asr_model: non_empty(c.asr_model),
+                llm_model: non_empty(Some(c.model)),
+                asr_timeout_ms: None,
+            };
+            if let Some(key) = keys.get(&id).filter(|k| !k.is_empty()) {
+                store
+                    .set(&id, &ApiKey::new(key.clone()))
+                    .map_err(FfiError::from)?;
+            }
+            uses.insert(id.clone(), c.uses);
+            order.push(id.clone());
+            services.insert(id, svc);
+        }
+        Ok(Registry {
+            services,
+            order,
+            keys: store,
+            http: cloud_http_client().map_err(FfiError::from)?,
+            uses,
+        })
+    }
+
+    fn has_service(&self, id: &str) -> bool {
+        self.services.contains_key(id)
     }
 
     pub(crate) fn summary(&self) -> LanServices {
@@ -192,6 +341,40 @@ impl Registry {
         self.services.get(id).ok_or(FfiError::UnknownService)
     }
 
+    /// `Unsupported` when the service is not set up for this purpose or its kind cannot do
+    /// it (Claude has no speech recognition); `Unauthorized` when an official API has no key.
+    fn check_use(&self, svc: &CloudService, purpose: CloudUse) -> Result<(), FfiError> {
+        if let Some(allowed) = self.uses.get(&svc.id) {
+            if !allowed.contains(&purpose) {
+                return Err(FfiError::Unsupported);
+            }
+        }
+        if purpose == CloudUse::Asr && !svc.kind.supports_asr() {
+            return Err(FfiError::Unsupported);
+        }
+        let has_key = matches!(self.keys.get(&svc.id), Ok(Some(k)) if !k.is_empty());
+        if !has_key && svc.kind != CloudKind::OpenAiCompat {
+            return Err(FfiError::Unauthorized);
+        }
+        Ok(())
+    }
+
+    /// Connection test: a short generated tone for recognition, a fixed sentence for
+    /// translation. Returns the wall time in ms.
+    pub(crate) async fn test(&self, service_id: &str, purpose: CloudUse) -> Result<u64, FfiError> {
+        let started = Instant::now();
+        match purpose {
+            CloudUse::Asr => {
+                self.transcribe(test_tone_pcm(), TEST_TONE_RATE, service_id)
+                    .await?;
+            }
+            CloudUse::Translate => {
+                self.translate(TEST_SENTENCE, service_id).await?;
+            }
+        }
+        Ok(started.elapsed().as_millis() as u64)
+    }
+
     #[cfg(test)]
     pub(crate) fn has_key(&self, id: &str) -> bool {
         matches!(self.keys.get(id), Ok(Some(_)))
@@ -208,6 +391,7 @@ impl Registry {
             return Err(FfiError::InvalidAudio);
         }
         let svc = self.service(service_id)?;
+        self.check_use(svc, CloudUse::Asr)?;
         let timeout = svc.asr_timeout(&TimeoutConfig::default());
         let asr: Box<dyn AsrProvider> = build_cloud_asr(svc, &self.keys, &self.http, timeout)
             .map_err(FfiError::from)?
@@ -233,6 +417,7 @@ impl Registry {
             return Err(FfiError::EmptyText);
         }
         let svc = self.service(service_id)?;
+        self.check_use(svc, CloudUse::Translate)?;
         let llm: Box<dyn LlmProvider> = build_cloud_llm(
             svc,
             &self.keys,
@@ -262,12 +447,37 @@ pub(crate) fn set_registry(r: Registry) {
     *g = Some(Arc::new(r));
 }
 
-pub(crate) fn registry() -> Result<Arc<Registry>, FfiError> {
+/// The user's cloud services; replaced as a whole by `set_cloud_services`, independent of the
+/// LAN registry above.
+static CLOUD: RwLock<Option<Arc<Registry>>> = RwLock::new(None);
+
+pub(crate) fn set_cloud(r: Registry) {
+    let mut g = CLOUD.write().unwrap_or_else(|e| e.into_inner());
+    *g = Some(Arc::new(r));
+}
+
+/// Whether a LAN service already uses `id`.
+pub(crate) fn lan_has(id: &str) -> bool {
     REGISTRY
         .read()
         .unwrap_or_else(|e| e.into_inner())
-        .clone()
-        .ok_or(FfiError::NotLoaded)
+        .as_ref()
+        .is_some_and(|r| r.has_service(id))
+}
+
+/// The registry that owns `id` (LAN first, then cloud). `NotLoaded` while the LAN presets
+/// are not loaded and the id is not a cloud one; `UnknownService` otherwise.
+pub(crate) fn registry_for(id: &str) -> Result<Arc<Registry>, FfiError> {
+    let lan = REGISTRY.read().unwrap_or_else(|e| e.into_inner()).clone();
+    let cloud = CLOUD.read().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(r) = lan.iter().chain(cloud.iter()).find(|r| r.has_service(id)) {
+        return Ok(r.clone());
+    }
+    if lan.is_none() {
+        Err(FfiError::NotLoaded)
+    } else {
+        Err(FfiError::UnknownService)
+    }
 }
 
 /// The runtime behind the synchronous FFI calls (Kotlin calls from `Dispatchers.IO`).
@@ -527,6 +737,401 @@ mod tests {
                 .block_on(r.transcribe(vec![1; 320], 16000, "t-asr"))
                 .unwrap_err();
             assert_eq!(e, FfiError::Timeout);
+        });
+    }
+}
+
+#[cfg(test)]
+mod cloud_tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn cfg(id: &str, provider: CloudProvider, base: Option<&str>) -> CloudServiceConfig {
+        CloudServiceConfig {
+            id: id.into(),
+            provider,
+            model: "m".into(),
+            asr_model: Some("am".into()),
+            base_url: base.map(str::to_owned),
+            uses: vec![CloudUse::Asr, CloudUse::Translate],
+        }
+    }
+
+    fn keys(id: &str, key: &str) -> HashMap<String, String> {
+        HashMap::from([(id.to_owned(), key.to_owned())])
+    }
+
+    fn with_server<T>(f: impl FnOnce(&MockServer, &tokio::runtime::Runtime) -> T) -> T {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let server = rt.block_on(MockServer::start());
+        f(&server, &rt)
+    }
+
+    fn run<T>(f: impl std::future::Future<Output = T>) -> T {
+        runtime().unwrap().block_on(f)
+    }
+
+    const PCM: usize = 3200;
+
+    #[test]
+    fn config_validation() {
+        let ok = |c: CloudServiceConfig| Registry::from_cloud(vec![c], HashMap::new());
+        // Custom needs a base_url.
+        assert_eq!(
+            ok(cfg("c", CloudProvider::Custom, None)).unwrap_err(),
+            FfiError::Config
+        );
+        assert_eq!(
+            ok(cfg("c", CloudProvider::Custom, Some("  "))).unwrap_err(),
+            FfiError::Config
+        );
+        // Plain http is refused for every provider unless the host is loopback.
+        for p in [
+            CloudProvider::Gemini,
+            CloudProvider::Openai,
+            CloudProvider::Claude,
+            CloudProvider::Custom,
+        ] {
+            for bad in [
+                "http://example.com/v1",
+                "http://192.168.1.5:1234/v1",
+                "http://127.0.0.1.evil.com/v1",
+                "http://localhost@evil.com/v1",
+                "ftp://example.com",
+                "example.com/v1",
+            ] {
+                assert_eq!(
+                    ok(cfg("c", p, Some(bad))).unwrap_err(),
+                    FfiError::Config,
+                    "{p:?} {bad}"
+                );
+            }
+            for good in [
+                "https://example.com/v1",
+                "HTTPS://example.com",
+                "http://127.0.0.1:8080/v1",
+                "http://localhost:9/v1",
+                "http://[::1]:9/v1",
+            ] {
+                assert!(ok(cfg("c", p, Some(good))).is_ok(), "{p:?} {good}");
+            }
+        }
+        // Official providers need no base_url.
+        assert!(ok(cfg("c", CloudProvider::Gemini, None)).is_ok());
+        // Empty and duplicate ids.
+        assert_eq!(
+            ok(cfg(" ", CloudProvider::Gemini, None)).unwrap_err(),
+            FfiError::Config
+        );
+        assert_eq!(
+            Registry::from_cloud(
+                vec![
+                    cfg("c", CloudProvider::Gemini, None),
+                    cfg("c", CloudProvider::Openai, None)
+                ],
+                HashMap::new()
+            )
+            .unwrap_err(),
+            FfiError::Config
+        );
+        // An empty list is valid (clears the cloud services).
+        assert!(Registry::from_cloud(vec![], HashMap::new()).is_ok());
+    }
+
+    #[test]
+    fn keys_stay_out_of_debug_output() {
+        let r = Registry::from_cloud(
+            vec![cfg("c", CloudProvider::Openai, None)],
+            keys("c", "sk-SECRET-123"),
+        )
+        .unwrap();
+        assert!(r.has_key("c"));
+        assert!(!format!("{r:?}").contains("sk-SECRET"));
+    }
+
+    #[test]
+    fn openai_asr_and_translate() {
+        with_server(|server, rt| {
+            rt.block_on(async {
+                Mock::given(method("POST"))
+                    .and(path("/v1/audio/transcriptions"))
+                    .and(header("authorization", "Bearer sk-1"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": "hi"})))
+                    .expect(1)
+                    .mount(server)
+                    .await;
+                Mock::given(method("POST"))
+                    .and(path("/v1/chat/completions"))
+                    .and(header("authorization", "Bearer sk-1"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "choices": [{"message": {"role": "assistant", "content": "Hello."}}]
+                    })))
+                    .expect(1)
+                    .mount(server)
+                    .await;
+            });
+            let base = format!("{}/v1", server.uri());
+            let r = Registry::from_cloud(
+                vec![cfg("o", CloudProvider::Openai, Some(&base))],
+                keys("o", "sk-1"),
+            )
+            .unwrap();
+            assert_eq!(run(r.transcribe(vec![9; PCM], 16000, "o")).unwrap(), "hi");
+            assert_eq!(run(r.translate("你好", "o")).unwrap(), "Hello.");
+        });
+    }
+
+    #[test]
+    fn gemini_asr_and_translate() {
+        with_server(|server, rt| {
+            rt.block_on(
+                Mock::given(method("POST"))
+                    .and(path("/v1beta/models/am:generateContent"))
+                    .and(header("x-goog-api-key", "AIza-1"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "candidates": [{"content": {"parts": [{"text": "from gemini"}]},
+                                        "finishReason": "STOP"}]
+                    })))
+                    .expect(1)
+                    .mount(server),
+            );
+            rt.block_on(
+                Mock::given(method("POST"))
+                    .and(path("/v1beta/models/m:generateContent"))
+                    .and(header("x-goog-api-key", "AIza-1"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "candidates": [{"content": {"parts": [{"text": "Good."}]},
+                                        "finishReason": "STOP"}]
+                    })))
+                    .expect(1)
+                    .mount(server),
+            );
+            let base = format!("{}/v1beta", server.uri());
+            let r = Registry::from_cloud(
+                vec![cfg("g", CloudProvider::Gemini, Some(&base))],
+                keys("g", "AIza-1"),
+            )
+            .unwrap();
+            assert_eq!(
+                run(r.transcribe(vec![9; PCM], 16000, "g")).unwrap(),
+                "from gemini"
+            );
+            assert_eq!(run(r.translate("好", "g")).unwrap(), "Good.");
+        });
+    }
+
+    #[test]
+    fn claude_translates_but_cannot_transcribe() {
+        with_server(|server, rt| {
+            rt.block_on(
+                Mock::given(method("POST"))
+                    .and(path("/v1/messages"))
+                    .and(header("x-api-key", "sk-ant-1"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "content": [{"type": "text", "text": "Hi there."}],
+                        "stop_reason": "end_turn"
+                    })))
+                    .expect(1)
+                    .mount(server),
+            );
+            let base = format!("{}/v1", server.uri());
+            let r = Registry::from_cloud(
+                vec![cfg("a", CloudProvider::Claude, Some(&base))],
+                keys("a", "sk-ant-1"),
+            )
+            .unwrap();
+            assert_eq!(run(r.translate("嗨", "a")).unwrap(), "Hi there.");
+            assert_eq!(
+                run(r.transcribe(vec![9; PCM], 16000, "a")).unwrap_err(),
+                FfiError::Unsupported
+            );
+            assert_eq!(
+                run(r.test("a", CloudUse::Asr)).unwrap_err(),
+                FfiError::Unsupported
+            );
+            // Only the translate call reached the server.
+            assert_eq!(rt.block_on(server.received_requests()).unwrap().len(), 1);
+        });
+    }
+
+    #[test]
+    fn custom_endpoint_works_without_a_key() {
+        with_server(|server, rt| {
+            rt.block_on(
+                Mock::given(method("POST"))
+                    .and(path("/x/audio/transcriptions"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": "ok"})))
+                    .mount(server),
+            );
+            let base = format!("{}/x", server.uri());
+            let r = Registry::from_cloud(
+                vec![cfg("u", CloudProvider::Custom, Some(&base))],
+                HashMap::new(),
+            )
+            .unwrap();
+            assert_eq!(run(r.transcribe(vec![9; PCM], 16000, "u")).unwrap(), "ok");
+        });
+    }
+
+    #[test]
+    fn missing_key_and_purpose_limits() {
+        let mut only_translate = cfg("t", CloudProvider::Openai, None);
+        only_translate.uses = vec![CloudUse::Translate];
+        let r = Registry::from_cloud(
+            vec![only_translate, cfg("nokey", CloudProvider::Gemini, None)],
+            keys("t", "sk-1"),
+        )
+        .unwrap();
+        // Not set up for recognition.
+        assert_eq!(
+            run(r.transcribe(vec![9; PCM], 16000, "t")).unwrap_err(),
+            FfiError::Unsupported
+        );
+        // Official API without a key: no request is made.
+        assert_eq!(
+            run(r.translate("你好", "nokey")).unwrap_err(),
+            FfiError::Unauthorized
+        );
+        assert_eq!(
+            run(r.transcribe(vec![9; PCM], 16000, "nokey")).unwrap_err(),
+            FfiError::Unauthorized
+        );
+        assert_eq!(
+            run(r.translate("你好", "other")).unwrap_err(),
+            FfiError::UnknownService
+        );
+    }
+
+    #[test]
+    fn test_connection_reports_latency_and_error_codes() {
+        with_server(|server, rt| {
+            let base = format!("{}/v1", server.uri());
+            let r = Registry::from_cloud(
+                vec![cfg("o", CloudProvider::Openai, Some(&base))],
+                keys("o", "sk-1"),
+            )
+            .unwrap();
+            // Success on both purposes; the recognition test uploads generated audio.
+            rt.block_on(async {
+                Mock::given(method("POST"))
+                    .and(path("/v1/audio/transcriptions"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": ""})))
+                    .mount(server)
+                    .await;
+                Mock::given(method("POST"))
+                    .and(path("/v1/chat/completions"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "choices": [{"message": {"role": "assistant", "content": "Hello."}}]
+                    })))
+                    .mount(server)
+                    .await;
+            });
+            assert!(run(r.test("o", CloudUse::Asr)).is_ok());
+            assert!(run(r.test("o", CloudUse::Translate)).is_ok());
+            let reqs = rt.block_on(server.received_requests()).unwrap();
+            assert!(reqs[0].body.len() > 32_000, "about 1 s of 16 kHz audio");
+            assert_eq!(
+                run(r.test("nope", CloudUse::Asr)).unwrap_err(),
+                FfiError::UnknownService
+            );
+
+            // Error codes, per HTTP status.
+            for (status, code) in [
+                (401, FfiError::Unauthorized),
+                (403, FfiError::Unauthorized),
+                (429, FfiError::RateLimited),
+                (404, FfiError::Unsupported),
+                (500, FfiError::Server),
+                (302, FfiError::BadResponse),
+            ] {
+                rt.block_on(server.reset());
+                rt.block_on(
+                    Mock::given(method("POST"))
+                        .respond_with(ResponseTemplate::new(status))
+                        .mount(server),
+                );
+                for purpose in [CloudUse::Asr, CloudUse::Translate] {
+                    assert_eq!(
+                        run(r.test("o", purpose)).unwrap_err(),
+                        code,
+                        "{status} {purpose:?}"
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn unreachable_endpoint_and_no_redirect() {
+        // A port that was just released: nothing listens there.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let dead = format!("http://127.0.0.1:{port}");
+        let r = Registry::from_cloud(
+            vec![cfg("d", CloudProvider::Custom, Some(&format!("{dead}/v1")))],
+            HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            run(r.test("d", CloudUse::Translate)).unwrap_err(),
+            FfiError::Unreachable
+        );
+        assert_eq!(
+            run(r.test("d", CloudUse::Asr)).unwrap_err(),
+            FfiError::Unreachable
+        );
+
+        // A redirect is never followed (the key header would go to the other host).
+        with_server(|attacker, rt| {
+            with_server(|server, rt2| {
+                rt2.block_on(
+                    Mock::given(method("POST"))
+                        .respond_with(ResponseTemplate::new(307).insert_header(
+                            "location",
+                            format!("{}/steal", attacker.uri()).as_str(),
+                        ))
+                        .mount(server),
+                );
+                let base = format!("{}/v1", server.uri());
+                let r = Registry::from_cloud(
+                    vec![cfg("o", CloudProvider::Openai, Some(&base))],
+                    keys("o", "sk-1"),
+                )
+                .unwrap();
+                assert_eq!(
+                    run(r.translate("你好", "o")).unwrap_err(),
+                    FfiError::BadResponse
+                );
+            });
+            assert!(rt
+                .block_on(attacker.received_requests())
+                .unwrap()
+                .is_empty());
+        });
+    }
+
+    #[test]
+    fn errors_carry_no_text_or_keys() {
+        with_server(|server, rt| {
+            rt.block_on(
+                Mock::given(method("POST"))
+                    .respond_with(ResponseTemplate::new(401).set_body_string("sk-LEAK 你好"))
+                    .mount(server),
+            );
+            let base = format!("{}/v1", server.uri());
+            let r = Registry::from_cloud(
+                vec![cfg("o", CloudProvider::Openai, Some(&base))],
+                keys("o", "sk-SECRET"),
+            )
+            .unwrap();
+            let e = run(r.translate("機密句子", "o")).unwrap_err();
+            let shown = format!("{e} {e:?}");
+            assert!(!shown.contains("sk-") && !shown.contains("機密"), "{shown}");
         });
     }
 }
