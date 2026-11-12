@@ -88,9 +88,9 @@
 
 ## Phase 2 — Android
 - [x] T2.0 依 2026-11-12 的決定改寫 Phase 2 文件（`v2cplan.md` Android 各列與模型分工、`tasks/plan.md` 第 8 節、卡片 T2.1～T2.6、分派流程）：只有語音輸入＋中翻英、沒有設定頁；系統辨識＋本機模型＋區網 TEA／Breeze 融合；Typeless 式操作；Android 16／17；原 T2.7（預設組態搬進 core）取消
-- [ ] W8 T2.1 語音鍵盤 IME 最小路徑（Typeless 式大麥克風＋系統辨識）— 程式碼完成（assembleDebug／lint／testDebugUnitTest 通過）；🧑 待辦：側載手機實測（LINE、Chrome；回報機型與 Android 版本）
+- [ ] W8 T2.1 語音鍵盤 IME 最小路徑（Typeless 式大麥克風＋系統辨識）— 2026-11-12 合併進本機 main（審查 3 輪通過；26 項單元測試）；裝置端辨識不支援 zh-TW 時改用一般系統辨識並請使用者重說；🧑 待辦：側載手機實測（LINE、Chrome；回報機型與 Android 版本；若手機的裝置端辨識沒有中文，確認第一句提示「請再說一次」、第二句起正常）
 - [ ] W8 T2.3 v2c-ffi（uniffi＋cargo-ndk；`choose_asr`、`load_lan_services`、`transcribe_pcm`、`translate`）
-  - [x] Rust 端完成（2026-11-12，分支 `t2.3-ffi`）：uniffi 0.32 proc-macro、同步 FFI＋內部 tokio；`cargo test -p v2c-ffi`（19 項，含路由表每列與強制來源不靜默改用）、clippy、fmt 通過；Kotlin 綁定可由主機函式庫產生；Gradle／綁定／assets 接線步驟在 `crates/v2c-ffi/ANDROID.md`
+  - [x] Rust 端完成並合併進本機 main（2026-11-12，你核准）：uniffi 0.32 proc-macro、同步 FFI＋內部 tokio；`transcribe_pcm(pcm_le: ByteArray, rate, service_id)`；`cargo test -p v2c-ffi` 21 項（含路由表每列、強制來源不靜默改用、逾時、空白翻譯）、clippy、fmt 通過；Gradle／綁定／assets／R8 接線步驟在 `crates/v2c-ffi/ANDROID.md`
   - [ ] 受阻（工具未安裝）：`cargo ndk` 建置、`assembleDebug`、`zipalign -c -P 16`、Kotlin 呼叫 `to_zh_tw`；待 T2.1 合併後接線
   - [ ] 🧑 安裝 Android Rust 工具（見 human-checklist）
 - [ ] W9 T2.2 退格與換行
