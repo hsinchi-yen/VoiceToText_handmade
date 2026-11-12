@@ -44,6 +44,8 @@ pub enum NotifyStatus {
     Recording,
     Recognizing,
     Polishing,
+    /// Hands-free recording started (double tap): tells the user how to stop.
+    HandsFree,
     /// Text was typed at the cursor.
     Done,
     /// Text could not be pasted automatically; it is on the clipboard for the user.
@@ -128,6 +130,7 @@ pub fn notification_for(status: NotifyStatus) -> Notification {
         }
         NotifyStatus::Recognizing => progress("辨識中", "正在把語音轉成文字", "content-loading"),
         NotifyStatus::Polishing => progress("潤飾中", "正在整理文字", "content-loading"),
+        NotifyStatus::HandsFree => progress("免持模式", "按右 Ctrl 結束", "audio-input-microphone"),
         NotifyStatus::Done => Notification {
             expire_timeout_ms: 1500,
             ..progress("完成", "文字已輸入到游標處", "emblem-ok")
@@ -338,10 +341,11 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    const ALL: [NotifyStatus; 16] = [
+    const ALL: [NotifyStatus; 17] = [
         NotifyStatus::Recording,
         NotifyStatus::Recognizing,
         NotifyStatus::Polishing,
+        NotifyStatus::HandsFree,
         NotifyStatus::Done,
         NotifyStatus::CopiedToClipboard,
         NotifyStatus::TextKept,
@@ -359,8 +363,9 @@ mod tests {
 
     #[test]
     fn mapping_table() {
-        let cases: [(NotifyStatus, &str, bool); 7] = [
+        let cases: [(NotifyStatus, &str, bool); 8] = [
             (NotifyStatus::Recording, "錄音中", true),
+            (NotifyStatus::HandsFree, "免持模式", true),
             (NotifyStatus::Recognizing, "辨識中", true),
             (NotifyStatus::Polishing, "潤飾中", true),
             (NotifyStatus::Done, "完成", true),
