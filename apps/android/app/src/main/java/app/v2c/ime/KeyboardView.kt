@@ -44,6 +44,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.isSystemInDarkTheme
 import android.os.SystemClock
+import android.view.HapticFeedbackConstants
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.platform.LocalView
+import app.v2c.ime.keyboard.BackspaceRepeat
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
 private val KeyHeight = 56.dp
@@ -60,6 +66,8 @@ fun KeyboardView(
     session: VoiceSession,
     onOpenSetup: () -> Unit,
     onInstallSpeechService: () -> Unit,
+    onBackspace: (repeating: Boolean) -> Boolean = { false },
+    onEnter: () -> Unit = {},
 ) {
     MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
         Surface(
@@ -83,9 +91,8 @@ fun KeyboardView(
                     PlaceholderKey(stringResource(R.string.key_translate), Modifier.width(88.dp))
                     MicKey(session)
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // Reserved: backspace and enter (behaviour: later card).
-                        PlaceholderKey(stringResource(R.string.key_backspace), Modifier.width(88.dp))
-                        PlaceholderKey(stringResource(R.string.key_enter), Modifier.width(88.dp))
+                        BackspaceKey(onBackspace, Modifier.width(88.dp))
+                        EnterKey(onEnter, Modifier.width(88.dp))
                     }
                 }
                 StatusArea(session, onOpenSetup, onInstallSpeechService)
@@ -109,6 +116,61 @@ private fun TopRow() {
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
             )
         }
+    }
+}
+
+@Composable
+private fun BackspaceKey(onBackspace: (repeating: Boolean) -> Boolean, modifier: Modifier = Modifier) {
+    val view = LocalView.current
+    val repeat = remember { BackspaceRepeat() }
+    Box(
+        modifier = modifier
+            .height(KeyHeight)
+            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp))
+            .pointerInput(onBackspace) {
+                detectTapGestures(onPress = {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    onBackspace(false)
+                    coroutineScope {
+                        val job = launch {
+                            var i = 0
+                            while (true) {
+                                delay(repeat.delayBeforeRepeat(i++))
+                                // Stops when the input connection changed or went away.
+                                if (!onBackspace(true)) break
+                            }
+                        }
+                        try {
+                            awaitRelease()
+                        } finally {
+                            job.cancel()
+                        }
+                    }
+                })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(stringResource(R.string.key_backspace), color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun EnterKey(onEnter: () -> Unit, modifier: Modifier = Modifier) {
+    val view = LocalView.current
+    Box(
+        modifier = modifier
+            .height(KeyHeight)
+            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp))
+            .pointerInput(onEnter) {
+                detectTapGestures(
+                    onPress = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP) },
+                    // Fire on release so sliding off the key cancels it (enter may send a message).
+                    onTap = { onEnter() },
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(stringResource(R.string.key_enter), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

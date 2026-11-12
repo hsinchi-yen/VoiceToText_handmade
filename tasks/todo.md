@@ -93,8 +93,9 @@
   - [x] Rust 端完成並合併進本機 main（2026-11-12，你核准）：uniffi 0.32 proc-macro、同步 FFI＋內部 tokio；`transcribe_pcm(pcm_le: ByteArray, rate, service_id)`；`cargo test -p v2c-ffi` 21 項（含路由表每列、強制來源不靜默改用、逾時、空白翻譯）、clippy、fmt 通過；Gradle／綁定／assets／R8 接線步驟在 `crates/v2c-ffi/ANDROID.md`
   - [ ] 受阻（工具未安裝）：`cargo ndk` 建置、`assembleDebug`、`zipalign -c -P 16`、Kotlin 呼叫 `to_zh_tw`；待 T2.1 合併後接線
   - [ ] 🧑 安裝 Android Rust 工具（見 human-checklist）
-- [ ] W9 T2.2 退格與換行 — 審查與測試通過，在分支 `t2.2-android-keys`（`e10b995`），等與 T2.6 一起合併（2026-11-12 交接到 Linux，見 `android_handover.md`）
-- [ ] W9 T2.6 手機本機模型（sherpa-onnx；候選比較）— 第 2 輪審查通過（`85a57f5`）；5 個小建議修到一半，WIP `49abeb5` 未建置未測試，在分支 `t2.6-android-local-model`（見 `android_handover.md`）
+- [x] W9 T2.2 退格與換行 — 已合併（2026-11-12，你核准與 T2.6 一起合併）；長按加速與 imeOptions 判斷為純 Kotlin 並有單元測試
+  - [ ] 🧑 實機測試（見 human-checklist Phase 2：LINE、Chrome、Gmail）
+- [ ] W9 T2.6 手機本機模型（sherpa-onnx；候選比較）— 第 2 輪審查通過（`85a57f5`）；5 個小建議修完（`d0e4d0b`）
   - [ ] 🧑 手機比較候選模型並決定預設
 - [ ] W10 T2.4 區網偵測、辨識路由、來源小圖示、中翻英鍵
 - [ ] W10b T2.5 release APK 與安裝說明
