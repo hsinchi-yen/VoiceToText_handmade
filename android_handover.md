@@ -3,50 +3,41 @@
 > 在 Windows 上做到一半，使用者要求停下，改到 Linux 主機（Ubuntu 22.04）`git pull` 後繼續。
 > 需求與決策：`v2cplan.md` 第 3 節（Android 各列）與第 5 節（模型分工）。設計：`tasks/plan.md` 第 8 節。分派流程：`tasks/cards/README.md`〈分派流程〉。
 
-## 1. 現況總表
+## 1. 現況總表（2026-11-12 晚上在 Linux 更新）
 
-| 卡 | 內容 | 狀態 | 在哪裡 |
-|----|------|------|--------|
-| T2.0 | Phase 2 文件改寫（只有語音輸入＋中翻英、三種辨識來源融合、Typeless 式操作、Android 16／17） | ✅ 已合併 | `main` |
-| T2.1 | 語音鍵盤最小路徑：Typeless 式大麥克風＋系統辨識、`SetupActivity` | ✅ 已合併（審查 3 輪，26 項單元測試） | `main` |
-| T2.3 | `v2c-ffi`：uniffi 0.32、`choose_asr`、`load_lan_services`、`transcribe_pcm(ByteArray)`、`translate`、`to_zh_tw` | ✅ Rust 端已合併（21 項測試）；**還沒接進 Gradle**（缺 cargo-ndk） | `main`；接線步驟在 `crates/v2c-ffi/ANDROID.md` |
-| T2.2 | 退格（送 `KEYCODE_DEL`、長按加速、換輸入框就停）與換行（依 `imeOptions`，放開才觸發） | 🟡 審查通過、測試通過（37 項）；**等使用者核准合併** | 分支 `t2.2-android-keys`（`e10b995`） |
-| T2.6 | 手機本機模型：sherpa-onnx v2.0.1、SenseVoice-Small int8（預設候選）、下載器、比較工具 | 🟡 第 2 輪審查**通過**（`85a57f5`）；之後在修 5 個小建議，修到一半停下 | 分支 `t2.6-android-local-model`，最新 `49abeb5`（**WIP，未建置、未測試**） |
-| T2.4 | 區網偵測、辨識路由接線、來源小圖示（長按切換）、中翻英鍵 | ⏳ 未開始；要等 T2.3 接線（需 cargo-ndk）與 T2.6 合併 | — |
-| T2.5 | release APK、簽署、`tools/build-android.ps1`、`docs/android-install.md` | ⏳ 未開始 | — |
+| 卡 | 內容 | 狀態 |
+|----|------|------|
+| T2.0 | Phase 2 文件改寫 | ✅ 已合併 |
+| T2.1 | 語音鍵盤最小路徑（Typeless 式大麥克風＋系統辨識） | ✅ 已合併；🧑 手機實測 |
+| T2.2 | 退格（長按加速）與換行 | ✅ 已合併；🧑 LINE／Chrome／Gmail 實測 |
+| T2.3 | `v2c-ffi`（Rust）＋ Gradle 接線（`cargoNdk`、`generateUniffiKotlin`、`copyPresets`、JNA 5.19.1 `@aar`、`proguard-rules.pro`） | ✅ 已合併；接線**未經建置驗證** |
+| T2.6 | 本機模型（sherpa-onnx、SenseVoice、下載器、比較工具） | ✅ 已合併（第 3 輪審查通過，含 A–E 與審查後的 2 項修正）；🧑 手機比較、定案預設模型 |
+| T2.4 | 區網偵測、辨識路由、來源小圖示（長按切換）、中翻英鍵、`network_security_config` | ✅ 已合併（審查 2 輪通過）；**未編譯**；🧑 網路情境實測 |
+| T2.5 | `tools/build-android.sh`＋`tools/build-android.ps1`、release 簽署、`docs/android-install.md` | ✅ 已合併（審查 2 輪通過）；腳本只跑過 `bash -n` 與 `--check`；🧑 產生簽署金鑰、建 APK、側載 |
 
-本機 `main` 與兩個分支都已 push 到 `origin`。
+這台 Linux 沒有 JDK 與 Android SDK，所以 T2.4、T2.5、T2.3 接線，以及 T2.6 在 Linux 上的最後修正（`d0e4d0b`、`4d13518`）**都沒有編譯、也沒有跑過單元測試**，只經過獨立審查（逐行閱讀）。曾下載可攜式 JDK 17＋kotlinc 到 `tests/tmp/jvm`（SHA-256 已驗證），但 agent 的權限設定不允許執行外部下載的程式，所以沒有用上；要用的話由你決定是否放行，或直接在 Windows 那台跑 Gradle。
 
 ## 2. 下一步（依序）
 
-1. **在 Linux 準備環境**（第 3 節）。
-2. **T2.6 收尾**：
-   - `git checkout t2.6-android-local-model`。
-   - 最新 commit `49abeb5` 是 WIP，內容是第 2 輪審查的 5 個建議 A–E：
-     - A：下載收尾時才到的 `delete()` 不會漏掉。
-     - B：sherpa-onnx 快取改用 `Files.move(REPLACE_EXISTING)`，避免 Windows 上快取損壞後建置一直失敗。
-     - C：`start()` 後立刻 `cancel()` 不會先連線。
-     - D：`response.close()` 拋的 IOException 不算「儲存空間」錯誤，另補寫入錯誤的測試。
-     - E：`cancel()` 後立刻 `start()` 會被記住，舊的一輪結束後接著續傳。
-   - 先跑 `cd apps/android && ./gradlew assembleDebug assembleRelease lint testDebugUnitTest --rerun-tasks`。失敗就修。
-   - 通過後依流程交給 Haiku 測試、Opus 審查（只審 `85a57f5..HEAD`）。
-3. **合併 T2.2 與 T2.6**：使用者已同意「T2.6 修完 5 個小建議後，T2.2、T2.6 一起合併進 main」。
-   - 合併後在 `tasks/human-checklist.md` Phase 2 補上 T2.2 實機項目：在 LINE、Chrome、Gmail 測退格長按、選取刪除、emoji、換行與送出，LINE 的「Enter 送出」開、關兩種都要測。
-   - 更新 `tasks/todo.md`。
-   - 是否 push 先問使用者。
-4. **T2.3 接線**（要先有 cargo-ndk）：照 `crates/v2c-ffi/ANDROID.md` 做下列幾件事：
-   - 把 cargo-ndk 任務、Kotlin 綁定產生（`app/build/generated/uniffi`）、TN／RD preset 複製到 assets 接進 `apps/android/app/build.gradle.kts`。
-   - 加入 JNA `@aar`，版本要查證。
-   - release 加 R8 keep 規則。
-   - 驗證：`.so` 在 APK 內並 16 KB 對齊，Kotlin 呼叫 `toZhTw` 成功。
-   - 屬於 T2.3 卡片的「受阻」項目，做完更新 todo。
-5. **W10 T2.4**：卡片 `tasks/cards/T2.4-android-translate.md`。要接的東西：
-   - `choose_asr`。
-   - T2.6 的 `LocalAsr`、`LocalModelPrompt`：把 `ZhTwConverter` 換成 FFI 的 `toZhTw`。
-   - `AudioRecord` 錄音；Whisper 一次最多 30 秒，超過要切段。
-   - 主 manifest 的 `INTERNET` 與 `network_security_config`。T2.6 只在 debug manifest 加了 `INTERNET`，release 目前不能下載模型。
-6. **W10b T2.5**：release APK。Linux 上的建置腳本請用 `tools/build-android.sh`，或兩個平台各一份；卡片寫的是 `.ps1`，要改卡片時先跟使用者確認。
-7. 全部完成後：**檢查點 2**（手機日常使用一週）。
+1. 在有 Android 工具的機器（Windows 那台已有 SDK／NDK／JDK 17）：
+   ```
+   git pull
+   rustup target add aarch64-linux-android x86_64-linux-android
+   cargo install cargo-ndk
+   cd apps/android && ./gradlew assembleDebug lint testDebugUnitTest --rerun-tasks
+   ```
+   第一次建置是接線的第一次實跑，失敗就修 `apps/android/app/build.gradle.kts`。
+2. 產生簽署金鑰後建 release：Windows `powershell -ExecutionPolicy Bypass -File tools\build-android.ps1`，Linux `bash tools/build-android.sh`（先用 `-Check`／`--check` 看缺什麼）。APK 會在 `releases/v2c_<版本>_android.apk`，SHA-256 寫進 `releases/SHA256SUMS.txt`。詳見 `docs/android-install.md`。
+3. 側載實測（`tasks/human-checklist.md` Phase 2）。
+4. **檢查點 2**（手機日常使用一週）。
+
+### 審查時決定、實作者沒寫進文件的行為
+
+- 區網偵測：網路真的換了（不同 `Network`，或目前的網路斷了）才清快取；鍵盤每次開啟只重測、不先清快取。
+- 探測 `GET <base>/models`，任何 < 500 的 HTTP 狀態都算「伺服器在」。
+- 多段（>30 秒）辨識結果直接相接，不加空白。
+- `network_security_config` 只管 Java 的 HTTP；Rust 的 `transcribe_pcm`／`translate` 用自己的連線，不受它限制。
+- 原生函式庫載入失敗（`LinkageError`）時鍵盤不會當掉，改成區網／本機不可用。
 
 ## 3. Linux 環境準備（agent 不安裝系統軟體，以下由使用者執行）
 
