@@ -21,7 +21,7 @@ Windows 電腦（v2c）                          Ubuntu 伺服器（區網，例
 └──────────────────────┘
 ```
 
-v2c 端不用改程式：兩個服務都提供 **OpenAI 相容 API**，在 v2c 的「服務 → 新增服務」精靈選「自訂相容端點」，填伺服器的 IP 即可（第 6.2 節）；如果是公司的 TN／RD 伺服器，直接用「首頁 → 套用預設組態」（第 6 節開頭）。
+v2c 端不用改程式：兩個服務都提供 **OpenAI 相容 API**，在 v2c 的「服務 → 新增服務」精靈選「自訂相容端點」，填伺服器的 IP 即可（第 6.1 節）；如果是公司的 TN／RD 伺服器，直接用「首頁 → 套用預設組態」（第 6 節開頭）。
 
 - 語音辨識：`POST /v1/audio/transcriptions`（multipart：`file`＝16 kHz WAV、`model`、`response_format=json`、選填 `prompt`），回應 `{"text": "..."}`。
 - 文字模型：`POST /v1/chat/completions`，模型清單 `GET /v1/models`。
