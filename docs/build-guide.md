@@ -85,7 +85,7 @@ powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1 -CpuOnly  # �
 
 ## 4. 改版本號
 
-版本號要同時改這三個地方，安裝檔檔名與 App 顯示的版本才會一致：
+版本號要同時改這三個地方，安裝檔檔名與 App 顯示的版本才會一致（0.2.0 的安裝檔是 `releases\v2c_0.2.0_x64-setup.exe`）：
 
 | 檔案 | 欄位 |
 |------|------|
@@ -122,6 +122,7 @@ cargo fmt --all --check
 cargo build --release -p v2c-cli --features cuda          # 量測工具（GPU 版）
 cargo build --release -p v2c-cli --features tea,cuda      # 量測工具（含 TEA-ASR）
 cd apps\desktop; npm ci; npm run tauri dev                # 開發模式（熱重載介面）
+cd apps\desktop; npm run check; npm test                  # 介面型別檢查（svelte-check）與單元測試（vitest）
 cd apps\desktop; npm run tauri:build:cuda                 # 安裝檔（GPU 版）
 ```
 

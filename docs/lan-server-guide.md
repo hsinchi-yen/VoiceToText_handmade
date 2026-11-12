@@ -21,7 +21,7 @@ Windows 電腦（v2c）                          Ubuntu 伺服器（區網，例
 └──────────────────────┘
 ```
 
-v2c 端不用改程式：兩個服務都提供 **OpenAI 相容 API**，在 v2c 的「新增雲端服務」精靈選「自訂相容端點」，填伺服器的 IP 即可（第 6 節）。
+v2c 端不用改程式：兩個服務都提供 **OpenAI 相容 API**，在 v2c 的「服務 → 新增服務」精靈選「自訂相容端點」，填伺服器的 IP 即可（第 6.2 節）；如果是公司的 TN／RD 伺服器，直接用「首頁 → 套用預設組態」（第 6 節開頭）。
 
 - 語音辨識：`POST /v1/audio/transcriptions`（multipart：`file`＝16 kHz WAV、`model`、`response_format=json`、選填 `prompt`），回應 `{"text": "..."}`。
 - 文字模型：`POST /v1/chat/completions`，模型清單 `GET /v1/models`。
@@ -261,11 +261,17 @@ sudo -u v2c /opt/v2c/vllm/bin/vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
 
 ## 6. 在 v2c 加入區網模型（Windows 端）
 
-每台要用的 Windows 電腦都做一次。
+每台要用的電腦都做一次。
 
-### 6.1 用精靈加入（建議）
+> **公司的 TN／RD 伺服器（`10.20.30.23`／`10.88.95.2`）不用看下面的步驟**：開啟 v2c →「首頁 → 套用預設組態 → TN（或 RD）→ 選 TEA-ASR 或 Breeze-ASR → 套用」，一次設好語音辨識（`:8001`／`:8002`）與潤飾、中翻英（`:8000`）。細節見 [cloud-setup.md 的〈預設組態〉](cloud-setup.md#預設組態一鍵設好區網服務)。
+>
+> **你自己架的伺服器**也可以做成預設組態檔（`.toml`），用「套用預設組態 → 從檔案載入」一次設好，多台電腦共用同一個檔案；檔案格式與範例（位址 `192.168.1.50`）見同一節的〈從檔案載入自訂預設組態〉。檔案裡不放金鑰。
+>
+> 以下是不用預設組態檔時的兩種做法：精靈（6.1）與手動改設定檔（6.2）。
 
-1. 打開 v2c 的「設定 → 雲端服務 → 新增雲端服務」。
+### 6.1 用精靈加入
+
+1. 打開 v2c 的「服務 → 新增服務」。
 2. **語音辨識服務**：
    - 服務：「自訂相容端點」
    - 端點網址：`http://192.168.1.50:8080/v1`（要包含 `/v1`）
@@ -285,7 +291,7 @@ sudo -u v2c /opt/v2c/vllm/bin/vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
 
 ### 6.2 手動改設定檔（等效做法）
 
-`%APPDATA%\v2c\config.toml`（改完存檔後，從系統列結束 v2c 再重新開啟才會生效；v2c 不會自動偵測手動修改。在設定頁或精靈裡改的則立刻生效）：
+`%APPDATA%\v2c\config.toml`（改完存檔後，從系統列結束 v2c 再重新開啟才會生效；v2c 不會自動偵測手動修改。在設定頁、精靈或預設組態裡改的則立刻生效）：
 
 ```toml
 [route]
@@ -357,9 +363,9 @@ curl.exe http://192.168.1.50:11434/v1/chat/completions -H "Content-Type: applica
 
 在 v2c 裡驗證：
 
-1. 「試試看」頁面按住右 Ctrl 說一句話，看是否正常出字。
+1. 在任何輸入框（例如記事本）按住右 Ctrl 說一句話，看是否正常出字。
 2. 看延遲：v2c 的日誌 `%APPDATA%\v2c\logs\` 裡每句會記一行 `Timings`，包含 `asr_ms`、`llm_ms`、`latency_ms`（只記時間與字數，不記內容）。
-3. 測退回：在伺服器暫停服務（`sudo systemctl stop v2c-asr`），再說一句話，浮動標籤應顯示「雲端服務失敗，已改用地端」，文字仍然會出現。測完記得 `sudo systemctl start v2c-asr`。
+3. 測退回：在伺服器暫停服務（`sudo systemctl stop v2c-asr`），再說一句話，浮動指示條應顯示提示「雲端服務失敗，已改用地端」，首頁也會顯示，文字仍然會出現。測完記得 `sudo systemctl start v2c-asr`。
 
 ## 8. 安全與隱私
 
@@ -393,7 +399,7 @@ curl.exe http://192.168.1.50:11434/v1/chat/completions -H "Content-Type: applica
 
 | 狀況 | 原因與處理 |
 |------|------------|
-| 精靈顯示「網路不通」 | 伺服器沒開、IP 錯、防火牆擋住。在 Windows 用 `Test-NetConnection 192.168.1.50 -Port 8080` 檢查；在伺服器用 `ss -ltnp` 確認服務聽在 `0.0.0.0` 而不是 `127.0.0.1` |
+| 精靈或「套用預設組態」的測試顯示「網路不通」 | 伺服器沒開、IP 錯、防火牆擋住。在 Windows 用 `Test-NetConnection 192.168.1.50 -Port 8080` 檢查；在伺服器用 `ss -ltnp` 確認服務聽在 `0.0.0.0` 而不是 `127.0.0.1` |
 | 「這個端點不支援語音辨識」 | whisper-server 少了 `--inference-path /v1/audio/transcriptions`，或網址少了 `/v1` |
 | 「逾時：服務回應太慢」 | CPU 方案常見。語音辨識：在精靈修改該服務的「語音辨識逾時」（`asr_timeout_ms`）；文字模型：調高 `[timeouts] llm_cloud_ms`；或改用 GPU 方案、較小的模型 |
 | 每句都顯示「潤飾逾時，已改用基本整理」 | 文字模型太慢：換小一號的模型、確認 `ollama ps` 是 GPU、設 `OLLAMA_KEEP_ALIVE` 讓模型保持載入，或改用不會思考的模型 |

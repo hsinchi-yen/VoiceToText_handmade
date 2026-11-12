@@ -5,9 +5,27 @@
 
 - **地端優先**：語音辨識在你的電腦上執行，安裝後不需要帳號、不需要任何 API 金鑰、不用付費。
 - 有 NVIDIA 顯示卡時使用 **Breeze-ASR-25**（台灣中文最準）；沒有時使用 **SenseVoice-Small**（CPU）。
-- 潤飾（去贅字、全形標點、確保繁體）與中翻英使用你自己的 **LM Studio**（選用）；也可以選擇串接雲端服務（選用）。
+- 潤飾（去贅字、全形標點、確保繁體）與中翻英使用你自己的 **LM Studio**（選用）；也可以交給服務（公司區網的預設組態、或 Gemini 等雲端，選用）。
 
-目前版本：0.1（Windows 第一版，未簽章）。
+目前版本：0.2.0（Windows，未簽章；Linux 測試中）。
+
+## 最短路徑
+
+1. 執行安裝檔 `v2c_0.2.0_x64-setup.exe`（見下方〈安裝〉）。
+2. 第一次開啟會進入「初次設定」：下載語音模型、測試麥克風，約幾分鐘。
+   公司區網有現成伺服器的話，也可以改在「首頁 → 套用預設組態」一鍵設好（見 [docs/cloud-setup.md](docs/cloud-setup.md)）。
+3. 在任何輸入框按住 **右 Ctrl** 說話，放開就會出字。
+
+## 0.2.0 有什麼新的
+
+- **介面重新設計**：選單從 6 項精簡成 4 項：**首頁**、**服務**、**詞庫與紀錄**、**設定**。
+  「初次設定」不再放在選單，要重跑請到「設定」頁最下面的「重新執行初次設定」。
+- **首頁**：一眼看到目前狀態與「目前使用中」，並有「**套用預設組態**」按鈕與兩個常用開關（潤飾、語音辨識由誰處理），改了立刻生效。
+- **預設組態**：內建 TN、RD 兩組公司區網服務，選一組、選語音辨識（TEA-ASR 或 Breeze-ASR）就設好語音辨識、潤飾、中翻英；也可以從 `.toml` 檔載入自己的預設組態。
+- **設定**精簡：常用項目放前面，其餘收進折疊的「**進階**」。
+- 「雲端服務」頁改名為「**服務**」，服務依 TN／RD／其他分組顯示。
+- 浮動指示條重新設計：錄音時是黑色藥丸形、綠色心電圖波形（沒有文字）；辨識與潤飾時是進度條；錯誤與提示才顯示文字。
+- 新的應用程式圖示；系統列圖示會跟著工作列的淺色／深色主題切換。
 
 ---
 
@@ -22,18 +40,18 @@
 
 ## 安裝
 
-1. 取得安裝檔 `v2c_<版本>_x64-setup.exe`。安裝檔約 460 MB，**不放在 GitHub 上**，請在自己的 Windows 電腦用一鍵腳本產生（見下方「[從原始碼建置](#從原始碼建置)」）：
+1. 取得安裝檔 `v2c_0.2.0_x64-setup.exe`。安裝檔約 460 MB，**不放在 GitHub 上**，請在自己的 Windows 電腦用一鍵腳本產生（見下方「[從原始碼建置](#從原始碼建置)」）：
    ```powershell
    powershell -ExecutionPolicy Bypass -File tools\build-windows.ps1
    ```
    完成後安裝檔在 repo 的 `releases\` 資料夾。
-2. 執行安裝檔。因為第一版**沒有數位簽章**，Windows 會跳出藍色的「**Windows 已保護您的電腦**」（SmartScreen）：
+2. 執行安裝檔。因為目前**沒有數位簽章**，Windows 會跳出藍色的「**Windows 已保護您的電腦**」（SmartScreen）：
    按「**其他資訊**」→「**仍要執行**」。
 3. 安裝只裝在你自己的帳號底下（`%LOCALAPPDATA%\v2c`），**不需要系統管理員權限**，也會在「開始」功能表建立捷徑。
 
 ### 防毒軟體（Windows Defender）
 
-開發者在建置機上以 Windows Defender（病毒碼 1.463.203.0）掃描 0.1.0 安裝檔與 `v2c.exe`，未發現威脅；你的電腦掃描結果可能不同。
+開發者在建置機上以 Windows Defender（病毒碼 1.463.203.0）掃描過第一版（0.1.0）的安裝檔與 `v2c.exe`，未發現威脅；0.2.0 請以你自己的掃描結果為準。
 v2c 會攔截鍵盤（只為了偵測右 Ctrl，按鍵不會被記錄或擋下）並模擬打字，這類行為偶爾會被防毒軟體誤判。如果被攔下：
 
 1. 開啟「Windows 安全性」→「病毒與威脅防護」→「保護歷程記錄」，確認被攔下的是 v2c 的檔案。
@@ -42,7 +60,7 @@ v2c 會攔截鍵盤（只為了偵測右 Ctrl，按鍵不會被記錄或擋下�
 
 ## 第一次啟動
 
-第一次開啟時會自動進入「初次設定」：
+第一次開啟時，如果還沒有語音模型，會自動進入「初次設定」（之後想重跑：「設定」頁最下面的「重新執行初次設定」）：
 
 1. **偵測顯示卡**：有 NVIDIA 顯示卡就建議 Breeze-ASR-25 q5_0，否則使用 SenseVoice。
 2. **下載語音模型**：顯示進度、下載中斷可以接著續傳，完成後會用 SHA-256 驗證檔案。
@@ -53,7 +71,8 @@ v2c 會攔截鍵盤（只為了偵測右 Ctrl，按鍵不會被記錄或擋下�
 4. **試試看**：在頁面上的文字框按住右 Ctrl 說話。
 5. 完成。v2c 之後會在背景執行（系統列圖示）；關掉視窗不會結束程式。
 
-下載失敗不影響 v2c 的其他功能，隨時可以從「設定 → 地端語音模型」或「初次設定」頁重新下載。
+下載失敗不影響 v2c 的其他功能，隨時可以從「設定 → 進階 → 地端語音模型」或重新執行初次設定來下載。
+不想下載、或公司區網已有語音辨識伺服器：在模型步驟按「略過，改用雲端服務」（會帶你到「服務」頁），或之後到「首頁 → 套用預設組態」。
 
 ## 熱鍵
 
@@ -61,14 +80,16 @@ v2c 會攔截鍵盤（只為了偵測右 Ctrl，按鍵不會被記錄或擋下�
 |------|------|
 | 按住 **右 Ctrl** 說話、放開 | 輸入文字到游標處 |
 | 快速按兩下 **右 Ctrl** | 免持模式（不用一直按著），再按一下結束 |
-| 按住 **右 Ctrl + Shift** 說中文 | 輸出英文（需要 LM Studio 或雲端服務） |
+| 按住 **右 Ctrl + Shift** 說中文 | 輸出英文（需要 LM Studio 或服務） |
 | **Esc** | 取消這段錄音 |
 
-按住的判定時間、雙擊間隔可以在「設定 → 熱鍵」調整；第一版的按鍵固定為右 Ctrl。
+按住的判定時間、雙擊間隔可以在「設定 → 進階 → 熱鍵時間」調整；按鍵固定為右 Ctrl。
+
+說話時螢幕下方會出現浮動指示條：錄音中是黑色藥丸形、綠色心電圖波形（沒有文字）；辨識與潤飾時是進度條；有錯誤或提示時才會顯示文字。
 
 ## 開機自動啟動
 
-在「設定 → 啟動」勾選後，登入 Windows 時 v2c 會在背景啟動（只顯示系統列圖示）。v2c 同一時間只會執行一份：再從「開始」功能表開啟時，會叫出已在執行的那一份視窗。
+在「設定 → 開機自動啟動」打開並按「儲存」後，登入 Windows 時 v2c 會在背景啟動（只顯示系統列圖示）。v2c 同一時間只會執行一份：再從「開始」功能表開啟時，會叫出已在執行的那一份視窗。
 
 - 已知限制：若 Windows 使用者名稱含有空白，開機啟動登錄項目（`HKCU\...\Run`）中的程式路徑不會加上引號（上游 auto-launch 套件的限制）；受影響的只會是你自己帳號底下的資料夾。
 
@@ -79,19 +100,34 @@ v2c 會攔截鍵盤（只為了偵測右 Ctrl，按鍵不會被記錄或擋下�
 v2c 就會自動使用。建議設定與顯示卡記憶體的分配請看 [docs/local-setup.md](docs/local-setup.md)
 （安裝後也在 `安裝資料夾\docs\local-setup.md`）。
 
-## 雲端服務（選用）
+## 服務與預設組態（選用）
 
-可以在「雲端服務」頁用精靈串接 Gemini、OpenAI、Claude 或自訂的 OpenAI 相容端點，並指定把語音辨識／潤飾／中翻英哪些交給雲端。
-雲端服務會依用量向你收費。步驟與各家取得金鑰的方法請看 [docs/cloud-setup.md](docs/cloud-setup.md)，各家推薦的模型與設定請看 [docs/cloud-models.md](docs/cloud-models.md)。
+**公司區網（TN／RD）**：「首頁 → 套用預設組態」→ 選 TN 或 RD → 選語音辨識（TEA-ASR 或 Breeze-ASR）→「套用」，一次設好語音辨識、潤飾、中翻英。
+Breeze-ASR 需要 API 金鑰（可以稍後到「服務」頁補）。也可以按「從檔案載入」使用自己寫的預設組態檔。詳見 [docs/cloud-setup.md](docs/cloud-setup.md)。
+
+**其他服務**：到「服務」頁按「新增服務」，用精靈串接 Gemini、OpenAI、Claude 或自訂的 OpenAI 相容端點，並指定把語音辨識／潤飾／中翻英哪些交給它。
+雲端服務會依用量向你收費。各家取得金鑰的方法請看 [docs/cloud-setup.md](docs/cloud-setup.md)，推薦的模型與設定請看 [docs/cloud-models.md](docs/cloud-models.md)。
 系統列選單的「全部改用地端」可以隨時一鍵切回。
 
-想把模型放在區網裡另一台 Ubuntu 電腦（Breeze 語音辨識＋Qwen／GLM 文字模型，CPU 或 NVIDIA GPU），讓多台電腦共用，請看 [docs/lan-server-guide.md](docs/lan-server-guide.md)。
+想自己在區網裡另一台 Ubuntu 電腦架設模型（Breeze 語音辨識＋Qwen／GLM 文字模型，CPU 或 NVIDIA GPU），讓多台電腦共用，請看 [docs/lan-server-guide.md](docs/lan-server-guide.md)。
+
+## 文件
+
+| 文件 | 內容 |
+|------|------|
+| [docs/cloud-setup.md](docs/cloud-setup.md) | 預設組態、新增服務精靈、各家取得金鑰、疑難排解 |
+| [docs/cloud-models.md](docs/cloud-models.md) | 雲端服務推薦的模型與費用 |
+| [docs/lan-server-guide.md](docs/lan-server-guide.md) | 在區網的 Ubuntu 電腦架設語音辨識與文字模型 |
+| [docs/local-setup.md](docs/local-setup.md) | 地端模型：顯示卡記憶體、LM Studio 設定 |
+| [docs/linux-setup.md](docs/linux-setup.md) | Linux 版安裝與設定（測試中） |
+| [docs/build-guide.md](docs/build-guide.md) | 從原始碼建置 |
+| [docs/download-guide.md](docs/download-guide.md) | 模型與工具的下載位置 |
 
 ## 隱私
 
-- **預設全部在你的電腦上處理**，錄音不會上傳。麥克風「常開」模式只在記憶體中保留最近 0.5 秒，從不存檔；可在設定改成「按下才開」。
+- **預設全部在你的電腦上處理**，錄音不會上傳。麥克風「常開」模式只在記憶體中保留最近 0.5 秒，從不存檔；可在「設定 → 進階 → 麥克風模式」改成「按下才開」。
 - **輸入紀錄**（預設保留 7 天、最多 200 筆）以 Windows DPAPI 加密後存放，只有你的 Windows 帳號能解開；不存錄音。
-  密碼管理器（1Password、Bitwarden、KeePass…）在前景時不記錄；名單可在設定修改，也可以整個關閉。
+  密碼管理器（1Password、Bitwarden、KeePass…）在前景時不記錄；名單可在「設定 → 進階 → 輸入紀錄」修改，也可以整個關閉。紀錄在「詞庫與紀錄 → 輸入紀錄」查看。
 - **日誌**（`%APPDATA%\v2c\logs\`）只記錄長度、耗時、使用的服務名稱與錯誤代碼，**永遠不記錄辨識或潤飾後的文字、詞庫內容**。
 - **API 金鑰**存在 Windows 認證管理員，不寫進設定檔。
 - **啟用雲端服務後**：交給該服務的用途會把資料送過去——語音辨識送出這段錄音（WAV）與你的詞庫；潤飾／中翻英送出辨識後的文字與詞庫。未指定給雲端的用途維持地端。
@@ -115,19 +151,20 @@ v2c 就會自動使用。建議設定與顯示卡記憶體的分配請看 [docs/
 - `%LOCALAPPDATA%\v2c\models`（模型檔，可能超過 1 GB）
 - `%LOCALAPPDATA%\tw.v2c.desktop`（介面的暫存資料）
 
-開機自動啟動若有開啟，請先在「設定 → 啟動」關閉。
+開機自動啟動若有開啟，請先在「設定 → 開機自動啟動」關閉並儲存。
 
 ## 疑難排解
 
 | 狀況 | 處理方式 |
 |------|----------|
-| 看不到螢幕下方的浮動標籤 | 少數顯示卡驅動程式不支援透明視窗。結束 v2c，設定環境變數 `V2C_OVERLAY_LAYERED_ALPHA=1` 後重新開啟（PowerShell：`[Environment]::SetEnvironmentVariable('V2C_OVERLAY_LAYERED_ALPHA','1','User')`） |
+| 看不到螢幕下方的浮動指示條 | 少數顯示卡驅動程式不支援透明視窗。結束 v2c，設定環境變數 `V2C_OVERLAY_LAYERED_ALPHA=1` 後重新開啟（PowerShell：`[Environment]::SetEnvironmentVariable('V2C_OVERLAY_LAYERED_ALPHA','1','User')`） |
 | 在某個程式裡按右 Ctrl 沒有反應，顯示「目前視窗以系統管理員身分執行」 | Windows 不允許一般程式輸入到以系統管理員身分執行的視窗。請改用一般權限開那個程式，或不要在那個視窗使用 |
-| LINE、Teams、Slack 等聊天程式，換行時訊息被送出 | 在「設定 → App 規則」把該程式的換行鍵設為 Shift+Enter（常見聊天程式已內建） |
+| LINE、Teams、Slack 等聊天程式，換行時訊息被送出 | 在「設定 → 進階 → App 規則」把該程式的換行鍵設為 Shift+Enter（常見聊天程式已內建） |
 | 虛擬機（VMware、VirtualBox）裡打不出字 | 這些視窗收不到模擬打字；「App 規則」已預設改用貼上，並請在虛擬機開啟剪貼簿共用 |
-| 「還沒有語音模型」 | 到「初次設定」下載 SenseVoice，或匯入 Breeze |
-| 顯示「已改用 CPU」 | 顯示記憶體不足、或遊戲／剪片程式在前景，v2c 讓出顯示卡；離開後約 20 秒自動恢復。見「設定 → 顯示卡記憶體」 |
-| 「請啟動 LM Studio」 | 中翻英需要 LM Studio（或雲端服務）；確認 LM Studio 的 Local Server 已啟動 |
+| 「還沒有語音模型」 | 首頁會有「前往初次設定」連結：下載 SenseVoice，或匯入 Breeze；也可以改用服務（首頁 → 套用預設組態） |
+| 顯示「已改用 CPU」 | 顯示記憶體不足、或遊戲／剪片程式在前景，v2c 讓出顯示卡；離開後約 20 秒自動恢復。見「設定 → 進階 → 顯示卡記憶體」 |
+| 「請啟動 LM Studio」 | 中翻英需要 LM Studio（或服務）；確認 LM Studio 的 Local Server 已啟動，或在「設定 → 各用途由誰處理」把中翻英交給服務 |
+| 套用預設組態時顯示紅色錯誤，或套用後測試連線失敗 | 見 [docs/cloud-setup.md](docs/cloud-setup.md) 的〈預設組態〉：錯誤訊息對照與連線失敗處理 |
 | 麥克風沒聲音 | 「設定 → 麥克風」選擇正確的裝置並測試；確認 Windows「設定 → 隱私權 → 麥克風」允許桌面應用程式使用麥克風 |
 
 ## 從原始碼建置
@@ -171,6 +208,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 cargo run -p v2c-cli -- bench --asr breeze tests/fixtures/audio
 cd apps/desktop && npm install && npm run tauri dev     # 開發模式
+cd apps/desktop && npm run check && npm test            # 介面型別檢查（svelte-check）與單元測試（vitest）
 cd apps/desktop && npm run tauri:build:cuda             # 發行用 NSIS 安裝檔（含 CUDA）
 cd apps/desktop && npm run tauri build                  # 不含 CUDA 的安裝檔（只用 SenseVoice／CPU）
 ```
@@ -182,8 +220,8 @@ Breeze 模型的轉檔方式見 [tools/convert-breeze/README.md](tools/convert-b
 
 Linux 版（Ubuntu 22.04／GNOME，透過 IBus 輸入）還沒有在實機上按住說話驗證過。這一版只有 CPU 版：語音辨識用區網的遠端服務或 SenseVoice，不支援 Breeze／CUDA。
 
-- 安裝：`sudo apt install ./v2c_0.1.6_amd64.deb`，再登出並重新登入（或執行 `ibus restart`，會讓所有 App 的輸入法短暫中斷），然後在「設定 → 鍵盤 → 輸入來源」加入「v2c 語音輸入」（「設定」裡加不進去時，用 [docs/linux-setup.md](docs/linux-setup.md) 第 7.2.1 節的 `gsettings` 指令）。.deb 會一併安裝 IBus 輸入法元件。
-- 也會產生免安裝的 `v2c_0.1.6_amd64.AppImage`，但它不含 IBus 元件，建議用 .deb。
+- 安裝：`sudo apt install ./v2c_0.2.0_amd64.deb`，再登出並重新登入（或執行 `ibus restart`，會讓所有 App 的輸入法短暫中斷），然後在「設定 → 鍵盤 → 輸入來源」加入「v2c 語音輸入」（「設定」裡加不進去時，用 [docs/linux-setup.md](docs/linux-setup.md) 第 7.2.1 節的 `gsettings` 指令）。.deb 會一併安裝 IBus 輸入法元件。
+- 也會產生免安裝的 `v2c_0.2.0_amd64.AppImage`，但它不含 IBus 元件，建議用 .deb。
 - 設定檔在 `~/.config/v2c/config.toml`，模型在 `~/.local/share/v2c/models/`。
 - 安裝檔不放進 git，請自己建置：`bash releases/linux/build.sh --check` 會列出缺少的套件；`bash releases/linux/build.sh` 會產生 .deb 與 AppImage，放在 `releases/linux/`，雜湊寫在 `releases/linux/SHA256SUMS.txt`（見 [releases/linux/README.md](releases/linux/README.md)）。
 
