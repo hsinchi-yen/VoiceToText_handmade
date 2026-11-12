@@ -162,10 +162,13 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] T2.2 退格與換行（合併後）：在 LINE、Chrome、Gmail 測退格長按、選取刪除、emoji 刪除、換行與送出；LINE 的「Enter 送出」開、關兩種都要測
 - [ ] T2.4 網路情境：公司 Wi-Fi 或 VPN 下自動走 TEA；長按小圖示切 Breeze／系統／本機；關 Wi-Fi 後自動改系統辨識；區網伺服器關閉時不卡頓；中翻英輸出英文
 - [ ] T2.6 本機模型：用 `tests/fixtures/audio` 的錄音在手機跑比較工具，依比較表決定預設模型；飛航模式下能輸入
-- [ ] T2.5 產生 APK 簽署金鑰（`keytool`，指令見 `docs/android-install.md` 第 1.2 節，也會由腳本印出）並建立 `apps/android/keystore.properties`；備份金鑰（弄丟就不能更新已安裝的 App）
-- [ ] T2.5 先跑 `bash tools/build-android.sh --check`（Windows：`tools\build-android.ps1 -Check`），裝好缺的工具後建置；第一次建置是 T2.3 Gradle 接線的首次驗證（`cargoNdk`、綁定產生、16 KB 對齊）；再照說明側載安裝一遍
+- [x] T2.5 產生 APK 簽署金鑰——2026-11-13 你決定自用、由 agent 代為產生：`apps/android/v2c-release.jks`（PKCS12、RSA 4096、alias `v2c`），隨機密碼只寫在 `apps/android/keystore.properties`（兩者 git 已忽略）
+- [ ] T2.5 備份 `apps/android/v2c-release.jks` 與 `apps/android/keystore.properties`（兩個一起；弄丟就不能覆蓋升級已安裝的 App，只能移除重裝）
+- [x] T2.5 Windows 建置——2026-11-13 agent 執行：`-Check` 全部找到；debug 建置＋146 項單元測試＋lint 通過；`tools\build-android.ps1` 產出 `releases\v2c_0.1.0_android.apk`（16 KB 對齊、v2 簽章驗證通過），SHA-256 已寫入 `releases\SHA256SUMS.txt`
+- [ ] T2.5 照 `docs/android-install.md` 側載安裝一遍
 - [ ] 桌面（Windows／Linux）：重新套用一次 TN 或 RD 預設組態，讓 TEA-ASR 也存到內建金鑰（2026-11-13 前的預設組態沒附 TEA 金鑰，TEA 會回 401）
-- [ ] Windows：跑 `tools\build-android.ps1`（第一次實跑；Linux 的 `.sh` 已驗證），有錯把輸出貼回來
+- [x] Windows：跑 `tools\build-android.ps1`（第一次實跑）——2026-11-13 一次通過，不用修改
+- [ ] T2.8 雲端（合併後）：準備 Gemini 或 OpenAI 的 API 金鑰；在手機設定頁串接並測試連線（故意填錯一次，應顯示「金鑰錯誤」）；行動網路下說話走雲端；公司 Wi-Fi 下仍走區網 TEA；飛航模式改系統辨識／本機模型；連不到區網時中翻英走雲端
 - [ ] 檢查點 2：手機日常使用一週
 - [ ] 決定 Linux 用哪台電腦（同一台雙系統或另一台），並提供規格
 

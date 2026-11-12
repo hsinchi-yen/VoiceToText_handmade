@@ -226,7 +226,7 @@ breeze_quant = "q5_0"         # q5_0 | q8_0（q8 較準、多約 0.6 GB）
 
 - 模型名稱全部放設定檔，不寫死。
 - 逾時：ASR 5 秒、LLM 3 秒；失敗時浮動標籤顯示錯誤，紀錄中保留 ASR 原文以便重送。
-- 金鑰：`v2c-core` 定義 `SecretStore` trait，`keyring` feature 只依賴與 OS 無關的 `keyring-core`；桌面 App 啟動時以 `windows-native-keyring-store` 安裝 Windows 認證管理員作為預設 store（T1.7 查證：`keyring` 4.x 建議應用程式改用 `keyring-core`）；Android 不存金鑰（只用打包的區網預設金鑰，見第 8.2 節）。設定檔只存 provider 名稱。
+- 金鑰：`v2c-core` 定義 `SecretStore` trait，`keyring` feature 只依賴與 OS 無關的 `keyring-core`；桌面 App 啟動時以 `windows-native-keyring-store` 安裝 Windows 認證管理員作為預設 store（T1.7 查證：`keyring` 4.x 建議應用程式改用 `keyring-core`）；Android 的雲端金鑰以 Android Keystore 加密存放（第 8.3 節；區網用打包的預設金鑰，見第 8.2 節）。設定檔只存 provider 名稱。
 - 雲端 HTTP client 一律不跟隨轉址（避免 `x-api-key` 等自訂金鑰標頭被帶到其他主機）；官方服務的 base_url 必須是 https（loopback 除外）。
 
 ### 6.1 預設模型（地端優先）
@@ -246,7 +246,7 @@ enabled = true
 
 - **ASR 一定有地端可用**：首次啟動引導下載地端模型（第 5 節）；這一步完成前不主動提示雲端選項，避免使用者以為必須付費。例外（2026-11-11 你決定）：主視窗選單一律顯示「狀態、設定、詞庫、紀錄、雲端服務、初次設定」六個頁面（初次設定畫面也顯示選單）；模型步驟提供「略過，改用雲端服務」。沒有地端模型就離開初次設定（略過、稍後再設定或點選單）後，啟動時不再自動開啟初次設定。
 - **LM Studio 未啟動**：潤飾改用規則式去贅字；中翻英顯示「請啟動 LM Studio，或串接雲端服務」，並附「串接雲端服務」按鈕。
-- **Android**：辨識預設 Android 內建（不需金鑰）；手機沒有地端 LLM，中翻英鍵要等串接雲端服務，或在相容端點填入同一個網路中電腦的 LM Studio 位址後才出現。
+- **Android**：辨識不需金鑰即可用（區網 → 系統辨識／本機模型）；雲端是選用（第 8.1、8.3 節）。中翻英用區網 Qwen，連不到區網時改用設定的雲端翻譯服務。
 
 ### 6.2 串接雲端服務的操作方式
 
@@ -306,7 +306,7 @@ Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫�
 ## 8. Android（apps/android）
 
 - `V2cImeService : InputMethodService`；`onCreateInputView` 回傳 `ComposeView`（必須手動設定 `ViewTreeLifecycleOwner` 與 `SavedStateRegistryOwner`，否則 Compose 會當掉）。
-- 範圍（2026-11-12 你決定）：Android 版**只有語音輸入與中翻英**，沒有設定頁、沒有輸入紀錄、沒有串接雲端精靈、沒有詞庫、沒有潤飾。唯一的 Activity 是首次啟動引導（授權麥克風、啟用並切換到 v2c 鍵盤）。
+- 範圍（2026-11-12 你決定；2026-11-13 擴充）：Android 版是語音輸入與中翻英，**加上串接雲端服務**（第 8.3 節）；沒有輸入紀錄、詞庫、潤飾。唯一的 Activity 是設定頁：首次啟動引導（授權麥克風、啟用並切換到 v2c 鍵盤）＋「雲端服務」區塊。
 - 鍵盤按鍵：大麥克風鍵（語音輸入）、中翻英鍵、退格（長按連續刪除）、換行（依 `imeOptions` 決定送出或換行）、辨識來源小圖示（第 8.1 節）。不放「切回原輸入法」鍵，改用 Android 16／17 導覽列的切換鍵盤按鈕。
 - 操作風格（2026-11-12 你決定，比照 Typeless 的 Android 語音鍵盤）：
   - 沒有字母鍵；畫面中央是一顆大麥克風，主要操作是**點一下開始、再點一下結束並送出**；按住超過約 300 ms 視為按住說話、放開送出（門檻是程式內常數）。
@@ -331,24 +331,40 @@ Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫�
 
 每句話開始時的選擇（純函式 `choose_asr(lan, system_available, local_model_ready, pick) -> AsrPlan`，在 `crates/v2c-ffi`，比照 `trigger.rs` 單元測試；不放進 `v2c-core`）。`lan` 是偵測結果（TN、RD 或連不到）；`pick` 是鍵盤上的手動選擇，預設「自動」：
 
+2026-11-13 你決定加入第四種來源 **雲端 ASR**（第 8.3 節），「自動」的順序是 **區網 → 雲端 → 手機本地（系統辨識為主、本機模型為輔）**。`choose_asr` 增加 `cloud_ready`（設定了雲端辨識服務、金鑰可讀、目前有網路），`pick` 增加「雲端」（T2.7）：
+
 | 情況（自動） | 主要 | 失敗時 |
 |------|------|--------|
-| 區網連得到（TN 或 RD） | 該區網的 TEA-ASR | 本機模型（已下載時，用同一段 PCM）；沒有則提示重說 |
-| 區網連不到 | 系統辨識 | 本機模型（已下載時；系統辨識自己錄音，所以要使用者重說） |
-| 系統辨識不可用、本機模型未下載、區網連不到 | 鍵盤提示「請安裝或更新 Google 語音服務」（附 Play 商店按鈕）或「下載本機模型」 | — |
+| 區網連得到（TN 或 RD） | 該區網的 TEA-ASR | 雲端（`cloud_ready` 時，用同一段 PCM）→ 本機模型（已下載時，同一段 PCM）；都沒有則提示重說 |
+| 區網連不到、`cloud_ready` | 雲端 ASR | 本機模型（已下載時，同一段 PCM）；沒有則提示重說 |
+| 區網連不到、沒有雲端 | 系統辨識 | 本機模型（已下載時；系統辨識自己錄音，所以要使用者重說） |
+| 系統辨識不可用、本機模型未下載、區網與雲端都不可用 | 鍵盤提示「請安裝或更新 Google 語音服務」（附 Play 商店按鈕）或「下載本機模型」 | — |
 
-- **手動切換（沒有設定頁）**：長按麥克風旁的辨識來源小圖示，跳出 自動／區網 TEA／區網 Breeze／系統／本機模型。選了自動以外的項目就強制使用該來源，不可用時顯示原因，不靜默改用別的。選擇記在 App 私有的偏好檔，下次開鍵盤沿用。小圖示平常顯示目前來源（例如「TEA」「系統」「本機」）。
+- **手動切換**：長按麥克風旁的辨識來源小圖示，跳出 自動／區網 TEA／區網 Breeze／雲端（設定了才出現）／系統／本機模型。選了自動以外的項目就強制使用該來源，不可用時顯示原因，不靜默改用別的。選擇記在 App 私有的偏好檔，下次開鍵盤沿用。小圖示平常顯示目前來源（例如「TEA」「系統」「本機」）。
 - **區網偵測**：對 TN、RD 兩個區網的 TEA 端點各做 `GET /v1/models`，逾時 800 ms（程式內常數），先回應的那個就是目前的區網；結果快取，在 `ConnectivityManager.NetworkCallback` 的網路變更與鍵盤開啟時重測，不在每句話都測。
 - 日誌只記來源、長度、延遲、錯誤碼。
 
 ### 8.2 遠端與網路
 
-- 中翻英：FFI `translate()`（`v2c-core` 的 LLM provider），用目前區網的 Qwen `:8000`；連不到區網時中翻英鍵變灰，點了顯示「需要連上公司網路」。潤飾不做。
+- 中翻英：FFI `translate()`（`v2c-core` 的 LLM provider），先用目前區網的 Qwen `:8000`，連不到區網時改用設定的雲端翻譯服務（第 8.3 節）；兩者都沒有時中翻英鍵變灰，點了顯示「需要連上公司網路或設定雲端服務」。潤飾不做。
 - 設定來源：TN／RD 兩個預設組態 `.toml` 原樣打包進 APK assets，由 FFI 讀出：`[[cloud]]` 用 `v2c-core` 現有的 `CloudService` 型別，`[preset] default_keys` 用 `v2c-ffi` 內的小型結構。Android 不套用、不合併、不寫回設定檔，所以不需要把桌面的 `presets.rs` 搬進 `v2c-core`，也不改 `v2c-core` 公開介面。
-- 金鑰：只有預設組態內建的 TEA／Breeze 預設金鑰，直接從打包的組態檔讀進記憶體，不存 Keystore（使用者不輸入任何金鑰）。
+- 金鑰：區網用預設組態內建的 TEA／Breeze 預設金鑰，直接從打包的組態檔讀進記憶體。使用者的雲端金鑰見第 8.3 節。
 - 明文 HTTP：`network_security_config` 只對 `10.20.30.23`、`10.88.95.2` 允許 cleartext。
 - Rust 核心：`cargo-ndk` 編 `arm64-v8a`（必要時加 `x86_64` 給模擬器）；uniffi 產生 Kotlin 綁定；FFI 提供**同步**函式（內部自帶 tokio runtime），Kotlin 在 `Dispatchers.IO` 呼叫，避開 uniffi async 的複雜度。
 - 最低版本：Android 9（API 28）；目標與實測裝置是 Android 16／17。
+
+### 8.3 雲端服務（2026-11-13 你決定：手機也要能用外部模型做語音辨識）
+
+- **服務**：沿用 `v2c-core` 現有 provider（第 6 節）：語音辨識可用 Gemini、OpenAI、自訂 OpenAI 相容端點；中翻英可用 Claude、Gemini、OpenAI、自訂。Claude 不收音訊，所以不出現在辨識選項。模型名稱預填建議值（與桌面 `apps/desktop/ui/cloud-setup/guides.js` 相同），可改。
+- **設定頁**（`SetupActivity` 新增「雲端服務」區塊，Compose；精簡版的第 6.2 節流程）：選服務 → 取得金鑰說明與官方連結 → 貼金鑰（只顯示末 4 碼）→ 模型 → 測試連線（辨識送內建短音檔，翻譯送一句測試文字；顯示結果與延遲，失敗顯示原因：金鑰錯誤、額度不足、網路不通、端點不支援音訊）→ 指定用途（語音辨識／中翻英）。可移除服務。畫面明示「錄音會上傳到該服務，依用量收費」。辨識、翻譯各最多指定一個雲端服務。
+- **金鑰保存**：Android Keystore 產生 AES-GCM 金鑰，加密後的雲端金鑰存在 App 私有目錄；不進 Auto Backup（`dataExtractionRules`／`fullBackupContent` 排除）；日誌與錯誤訊息不含金鑰。服務設定（provider、模型、base_url、用途）存在 App 私有偏好檔，不含金鑰。
+- **FFI**（T2.7，在 `crates/v2c-ffi`，不改 `v2c-core` 公開介面；若非改不可就停下請你核准）：
+  - `set_cloud_services(services, keys)`：把使用者設定轉成 `v2c-core` 的 `CloudService` 並放進同一個服務註冊表（和 `load_lan_services` 並存），金鑰只留在記憶體。
+  - `transcribe_pcm`／`translate` 的 `service_id` 也接受雲端服務代號。
+  - `test_connection(service_id, purpose)`：回延遲或錯誤碼。
+  - `choose_asr` 增加 `cloud_ready` 與 `pick = Cloud`，涵蓋第 8.1 節新路由表每一列。
+- **網路**：雲端一律 HTTPS、不跟隨轉址（沿用第 6 節）；`network_security_config` 不變。`cloud_ready` 的「有網路」用 `ConnectivityManager` 的 `NET_CAPABILITY_VALIDATED`，不另外探測雲端。
+- **日誌**：只記來源（`cloud:gemini` 等）、長度、延遲、錯誤碼。
 
 ---
 
@@ -491,8 +507,10 @@ apps/desktop/ui 重構＋presets（不改 v2c-core） ← Phase 4（第 13 節�
 | T2.6 本機模型 | sherpa-onnx Android、`asr/local/**` | 候選比較（🧑 手機實測）；第一次切到時詢問下載；飛航模式下能輸入；下載檢查 SHA-256 |
 | T2.4 區網偵測＋路由＋中翻英鍵 | `asr/route/**`、`recorder/**`、`translate/**`、來源小圖示 | 公司網路自動走 TEA；長按小圖示切 Breeze／系統／本機生效；關 Wi-Fi 自動改系統辨識；區網伺服器關閉時不卡頓；中翻英輸出英文 |
 | T2.5 release APK | Gradle 簽署、`docs/android-install.md` | 安裝後只需授權麥克風與啟用鍵盤；release APK 進 `releases/` 並附 SHA-256 |
+| T2.7 FFI 雲端服務（2026-11-13 新增） | `crates/v2c-ffi` | `set_cloud_services`、`test_connection`；`transcribe_pcm`／`translate` 接受雲端代號；`choose_asr` 測試涵蓋第 8.1 節新路由表每一列 |
+| T2.8 Android 雲端設定＋路由接線 | 設定頁「雲端服務」、Keystore 金鑰、`asr/**`、`translate/**`、來源小圖示 | 不設雲端時行為與現在相同；設了雲端：連不到區網時自動走雲端；區網優先；長按切「雲端」生效；中翻英連不到區網時走雲端；金鑰只顯示末 4 碼、不進日誌 |
 
-順序：T2.0（文件）→ W8：T2.1 ∥ T2.3 → W9：T2.2 ∥ T2.6 → W10：T2.4 → W10b：T2.5（W11 起已被 Phase 3 使用）。
+順序：T2.0（文件）→ W8：T2.1 ∥ T2.3 → W9：T2.2 ∥ T2.6 → W10：T2.4 → W10b：T2.5 → W10c：T2.7 → W10d：T2.8（W11 起已被 Phase 3 使用）。原本取消的 T2.7（預設組態搬進 core）編號改給 FFI 雲端服務。
 
 **檢查點**：T2.6 實測後由你決定預設本機模型；**檢查點 2**：手機日常使用一週。
 
