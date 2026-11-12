@@ -3,6 +3,8 @@
 > 2026-11-12 在 Windows 完成 Phase 4，已 push 到 `origin/main`。這份文件讓你切到 Linux（Ubuntu 22.04／GNOME 42 Wayland，IBus 引擎路線）後，能把同一套新介面與功能完整跑起來並驗收。
 > 需求與決策：`v2cplan.md` 第 2 節「預設組態檔」「介面」兩列；設計細節：`tasks/plan.md` 第 13 節。
 
+> **狀態（2026-11-12）**：使用者回報 Linux 0.2.0 已建置成功。要包含 T4.8 預設金鑰，建置用的 commit 必須在 `0072941`（Merge T4.8）之後；若是更早 pull 的，請 `git pull` 後重跑 `bash tools/build-linux.sh`。實機驗收（第 4.5 節）仍待進行。
+
 ## 1. 結論先講
 
 **這次的介面與功能幾乎全是跨平台的共用程式**（Svelte 前端＋`apps/desktop/src-tauri` 的共用指令），Linux **不需要另外實作**，`git pull` 後重新建置就有。需要在 Linux 上處理的只有第 4 節列的幾項：
@@ -30,6 +32,7 @@
 | T4.6b | `docs/`、README 改寫（預設組態、新選單、新浮動標籤） | `docs/*.md`、`README.md` |
 | T4.7 | 浮動標籤：綠色心電圖波形（`<canvas>`）、估算進度條、完成不顯示文字（`DONE_MS` 800→250） | `ui/routes/Overlay.svelte`、`ui/overlay/**`、`src-tauri/src/overlay.rs` |
 | 收尾 | 免持時波形右側顯示「按右 Ctrl 結束」；介面殘留的「雲端服務」「狀態頁」改名 | `ui/routes/Overlay.svelte` 等 |
+| T4.8 | 內建 TN／RD 預設組態附 Breeze-ASR 區網共用預設金鑰（`[preset] default_keys`），套用時不用貼金鑰；預設金鑰的儲存為 best effort（第 4.4 節） | `src-tauri/presets/*.toml`、`src-tauri/src/commands/presets.rs`、`ui/presets/PresetDialog.svelte`、`docs/cloud-setup.md` |
 
 每張卡都經過獨立審查（Opus）才合併。Windows 上 `cargo test --workspace`（桌面 206 項）、clippy、fmt、`npm run check`（0／0）、`npm test`（40 項）、`npm run build` 全部通過。
 
@@ -89,6 +92,16 @@ Linux 的 webview 是 WebKitGTK（Windows 是 WebView2／Chromium），開 App �
 - **注意**：預設組態不改 `[local]`。Linux 定案是遠端 `tea-asr-1`＋本機 SenseVoice 備援，所以仍要確認 `~/.local/share/v2c/models/` 有 SenseVoice 模型，且 `[local] asr = "sense_voice"`（初次設定或設定 → 進階 → 地端語音模型）。若希望套用預設組態時在 Linux 自動設 `local.asr = sense_voice`，需另開卡（會動到 `presets.rs` 的白名單規則）。
 - 套用時選 Breeze-ASR 不用貼金鑰：內建預設金鑰會自動存進 GNOME 登入鑰匙圈（要換別的金鑰才在欄位輸入）；TEA-ASR `:8001` 不需要金鑰。
 
+#### 預設金鑰（T4.8）
+- **金鑰值**：TN、RD 兩組的 Breeze-ASR（`tn-breeze-asr`、`rd-breeze-asr`）都是 `tn8227`。這是區網伺服器的共用金鑰，依專案負責人 2026-11-12 的決定刻意寫在 `presets/TN_CUSTOM_LLM_ADDR.toml`、`RD_CUSTOM_LLM_ADDR.toml` 的 `[preset] default_keys` 並進 git。
+- **存放位置**：只在套用時存進系統金鑰庫（Linux＝Secret Service／GNOME 登入鑰匙圈，service＝`v2c`、username＝服務代號，見 `v2c-core::secrets::KEYRING_SERVICE`），**不寫進 `config.toml`**，也不寫進日誌。預覽只回傳 `has_default_key`（畫面顯示「已內建預設金鑰，可不填」），金鑰本身不會送到前端；`DefaultKeys` 的 `Debug` 只印代號。
+- **選用順序**（每個 `needs_key` 服務）：使用者輸入的金鑰 → 網址沒變的已存舊金鑰 → 預設金鑰 → 網址改了的舊金鑰刪除。不論這次語音辨識選 TEA 或 Breeze，預設金鑰都會存，之後改選 Breeze 不用再貼。
+- **Best effort**：沒輸入金鑰、網址也沒變時，存預設金鑰失敗（鑰匙圈鎖住、沒有 Secret Service）只會記 `warn`（`preset: keyring unavailable, default key skipped`）並跳過，**預設組態仍會套用**；但這時 Breeze 會因為沒有金鑰而測試失敗。使用者輸入的金鑰或端點改變時存失敗，則整個套用回滾（`keyring_failed`）。
+- **Linux 上要確認**：
+  1. 有執行 `gnome-keyring-daemon` 且登入鑰匙圈已解鎖（自動登入或 SSH 進來的工作階段常是鎖住的）；`secret-tool search service v2c username tn-breeze-asr` 應找得到項目。
+  2. 若套用後 Breeze 測試失敗、日誌有上面那行 `warn`：先解鎖鑰匙圈再套用一次，或在套用畫面直接輸入 `tn8227`（輸入的金鑰走嚴格路徑，失敗會明確報錯）。
+  3. 從 0.1.x 升上來、已存過別的 Breeze 金鑰且網址沒變：會保留舊金鑰，不會被預設金鑰蓋掉。
+
 ### 4.5 實機驗收清單（Linux）
 1. `git pull` 後第 3 節的指令全部通過；`bash tools/build-linux.sh` 產出 0.2.0 的 .deb／AppImage。
 2. `sudo apt install ./releases/linux/v2c_0.2.0_amd64.deb`、`ibus restart`、切到 v2c 輸入來源。
@@ -96,6 +109,7 @@ Linux 的 webview 是 WebKitGTK（Windows 是 WebView2／Chromium），開 App �
 4. 按住右 Ctrl 說一句：文字輸出；（X11）浮動標籤是綠色波形 → 進度條 → 淡出，沒有狀態文字；（Wayland）依第 4.1 節的決定。
 5. 雙擊右 Ctrl 進免持：（X11）波形右側有「按右 Ctrl 結束」。
 6. 切到 RD 再切回 TN：服務頁 TN、RD 兩組都在；Breeze 金鑰沒被要求重貼（本來就不用貼，內建預設金鑰會自動存入）。
+6a. 重新套用 TN、這次選「TN Breeze-ASR」、金鑰欄留空 → 套用 → Breeze 測試連線通過；`secret-tool search service v2c username tn-breeze-asr` 有項目；`~/.config/v2c/config.toml` 與日誌裡沒有 `tn8227`。
 7. 設定頁預設只看到常用 4 項，「進階」收合；改一項不儲存就切頁會詢問。
 8. 詞庫與紀錄：從系統列「輸入紀錄」直接開到紀錄分頁。
 9. 結果記到 `tasks/human-checklist.md` Phase 4 與 Phase 3 的對應項目。
@@ -103,5 +117,5 @@ Linux 的 webview 是 WebKitGTK（Windows 是 WebView2／Chromium），開 App �
 ## 5. 給在 Linux 上接手的 agent
 - 先讀 `AGENTS.md`、本文件、`tasks/plan.md` 第 13 節、`apps/desktop/ui/lib/README.md`。
 - 不要重做前端；只處理第 4 節列出的 Linux 差異，且每項先停下請使用者決定（4.1、4.3、4.4 都牽涉設計選擇）。
-- `tasks/cards/` 沒有 T4.* 卡片（這次規格直接寫在 agent 指示裡，計畫在 `tasks/plan.md` 第 13 節與 `tasks/todo.md` Phase 4）；Linux 的後續工作請開新卡（例如 T4.8 Wayland 通知精簡）並更新 `tasks/cards/README.md` 波次表。
+- `tasks/cards/` 沒有 T4.* 卡片（這次規格直接寫在 agent 指示裡，計畫在 `tasks/plan.md` 第 13 節與 `tasks/todo.md` Phase 4）；Linux 的後續工作請開新卡（例如 T4.9 Wayland 通知精簡；T4.8 已用於預設金鑰）並更新 `tasks/cards/README.md` 波次表。
 - Windows 安裝檔：`releases/v2c_0.2.0_x64-setup.exe`（不進 git）。
