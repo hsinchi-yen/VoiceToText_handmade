@@ -19,6 +19,14 @@
     <string name="error_language_unsupported">此辨識服務不支援中文（台灣）</string>
     <string name="error_say_again">已切換辨識方式，請再說一次</string>
     <string name="error_network">辨識服務需要網路，請稍後再試</string>
+    <string name="error_no_source">目前沒有可用的辨識來源，請安裝或更新 Google 語音服務，或下載本機模型</string>
+    <string name="error_lan_unreachable">連不到公司區網，請改選其他辨識來源</string>
+    <string name="error_local_not_ready">本機模型尚未下載</string>
+    <string name="error_lan_failed">區網辨識失敗，請再說一次</string>
+    <string name="error_needs_lan">需要連上公司網路</string>
+    <string name="error_translate_failed">翻譯失敗，請再試一次</string>
+    <string name="action_download_local">下載本機模型</string>
+    <string name="desc_source_chip">辨識來源，長按切換</string>
     <string name="action_retry">重試</string>
     <string name="action_install_google">安裝語音服務</string>
 
