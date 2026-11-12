@@ -41,6 +41,7 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.androidx.lifecycle.viewmodel)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.savedstate)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.foundation)

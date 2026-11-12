@@ -4,7 +4,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -138,8 +137,11 @@ private fun MicKey(session: VoiceSession) {
                 awaitEachGesture {
                     awaitFirstDown()
                     session.onMicPress()
-                    // Cancellation (e.g. system takes the gesture) counts as a release.
-                    waitForUpOrCancellation()
+                    // Wait until every pointer is up, even if the finger slides off the circle.
+                    // A real system cancel ends the event stream, which also counts as a release.
+                    do {
+                        val event = awaitPointerEvent()
+                    } while (event.changes.any { it.pressed })
                     session.onMicRelease()
                 }
             },

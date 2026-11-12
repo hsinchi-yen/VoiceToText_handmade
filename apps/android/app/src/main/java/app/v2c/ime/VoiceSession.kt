@@ -20,6 +20,7 @@ enum class ErrorKind(@StringRes val message: Int) {
     UNAVAILABLE(R.string.error_unavailable),
     NO_SPEECH(R.string.error_no_speech),
     NETWORK(R.string.error_network),
+    SAY_AGAIN(R.string.error_say_again),
     GENERIC(R.string.error_generic),
 }
 
@@ -49,6 +50,10 @@ class VoiceSession(
 
     private val detector = TapHoldDetector()
     private var recognizer: SpeechRecognizer? = null
+    private var currentKind = RecognizerKind.NONE
+
+    /** Set once the on-device recognizer reports zh-TW unsupported; lasts for the service lifetime. */
+    private var onDeviceUnsupported = false
 
     fun onMicPress() = apply(detector.onPress(SystemClock.uptimeMillis()))
 
@@ -59,8 +64,7 @@ class VoiceSession(
     }
 
     fun destroy() {
-        recognizer?.destroy()
-        recognizer = null
+        releaseRecognizer()
         detector.reset()
         state = VoiceUiState.Idle
     }
@@ -90,7 +94,7 @@ class VoiceSession(
             fail(ErrorKind.UNAVAILABLE)
             return
         }
-        recognizer?.destroy()
+        releaseRecognizer()
         recognizer = rec
         rec.setRecognitionListener(listener)
         levels = FloatArray(WAVE_BARS)
@@ -105,17 +109,32 @@ class VoiceSession(
         }
     }
 
+    private fun systemAvailable() = SpeechRecognizer.isRecognitionAvailable(context)
+
     private fun createRecognizer(): SpeechRecognizer? {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+        val onDevice = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
-        ) {
-            return SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+        currentKind = RecognizerChoice.choose(onDevice, systemAvailable(), onDeviceUnsupported)
+        return when (currentKind) {
+            RecognizerKind.ON_DEVICE ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+                } else {
+                    null
+                }
+            RecognizerKind.SYSTEM -> SpeechRecognizer.createSpeechRecognizer(context)
+            RecognizerKind.NONE -> null
         }
-        if (SpeechRecognizer.isRecognitionAvailable(context)) {
-            return SpeechRecognizer.createSpeechRecognizer(context)
-        }
-        return null
     }
+
+    private fun releaseRecognizer() {
+        recognizer?.destroy()
+        recognizer = null
+        currentKind = RecognizerKind.NONE
+    }
+
+    private val isActive: Boolean
+        get() = state is VoiceUiState.Recording || state is VoiceUiState.Recognizing
 
     private fun buildIntent(): Intent =
         Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -125,6 +144,9 @@ class VoiceSession(
             // No partial results: the keyboard never shows in-progress text.
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            // Tap mode: a short pause must not end the recording. Not every service honours these.
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, SILENCE_MS)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, SILENCE_MS)
         }
 
     private fun fail(kind: ErrorKind) {
@@ -157,10 +179,12 @@ class VoiceSession(
         }
 
         override fun onResults(results: Bundle?) {
+            if (!isActive) return
             val text = results
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()
             detector.reset()
+            releaseRecognizer()
             if (text.isNullOrEmpty()) {
                 state = VoiceUiState.Failed(ErrorKind.NO_SPEECH)
             } else {
@@ -170,6 +194,17 @@ class VoiceSession(
         }
 
         override fun onError(error: Int) {
+            // Some services send ERROR_CLIENT / BUSY after results or after destroy; ignore those.
+            if (!isActive) return
+            val languageError = error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
+                error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
+            if (RecognizerChoice.shouldFallBackToSystem(currentKind, languageError, systemAvailable())) {
+                onDeviceUnsupported = true
+                releaseRecognizer()
+                fail(ErrorKind.SAY_AGAIN)
+                return
+            }
+            releaseRecognizer()
             val kind = when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH,
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> ErrorKind.NO_SPEECH
@@ -187,6 +222,7 @@ class VoiceSession(
 
     companion object {
         const val WAVE_BARS = 32
+        const val SILENCE_MS = 3_000L
         const val LANGUAGE_TAG = "zh-TW"
     }
 }

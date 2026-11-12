@@ -74,7 +74,7 @@ class V2cImeService :
     override fun onWindowHidden() {
         super.onWindowHidden()
         session.destroy()
-        lifecycleRegistry.currentState = Lifecycle.State.STARTED
+        lifecycleRegistry.currentState = Lifecycle.State.CREATED
     }
 
     override fun onDestroy() {

@@ -9,13 +9,14 @@
     <string name="key_enter">換行</string>
     <string name="source_system">系統</string>
     <string name="status_idle">點一下麥克風開始說話</string>
-    <string name="status_recording">錄音中，再點一下送出</string>
+    <string name="status_recording">錄音中，再點一下或放開送出</string>
     <string name="status_recognizing">辨識中…</string>
     <string name="desc_mic">麥克風</string>
     <string name="error_no_permission">尚未授權麥克風，請先開啟 v2c 完成設定</string>
     <string name="error_unavailable">此裝置沒有語音辨識服務，請安裝或更新 Google 語音服務</string>
     <string name="error_no_speech">沒有聽到聲音，請再試一次</string>
     <string name="error_generic">辨識失敗，請再試一次</string>
+    <string name="error_say_again">已切換辨識方式，請再說一次</string>
     <string name="error_network">辨識服務需要網路，請稍後再試</string>
     <string name="action_retry">重試</string>
     <string name="action_install_google">安裝語音服務</string>
