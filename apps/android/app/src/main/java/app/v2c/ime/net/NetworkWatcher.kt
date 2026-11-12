@@ -11,11 +11,17 @@ import android.net.Network
  */
 class NetworkWatcher(context: Context, private val onChanged: () -> Unit) {
     private val manager = context.getSystemService(ConnectivityManager::class.java)
+    private val tracker = NetworkChangeTracker()
     private var callback: ConnectivityManager.NetworkCallback? = null
 
     private val cb = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) = onChanged()
-        override fun onLost(network: Network) = onChanged()
+        override fun onAvailable(network: Network) {
+            if (tracker.onAvailable(network.networkHandle)) onChanged()
+        }
+
+        override fun onLost(network: Network) {
+            if (tracker.onLost(network.networkHandle)) onChanged()
+        }
     }
 
     fun start() {

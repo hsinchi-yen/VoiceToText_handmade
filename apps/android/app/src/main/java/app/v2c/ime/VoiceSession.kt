@@ -65,6 +65,7 @@ class VoiceSession(
     private val router: RecognitionRouter,
     private val recorder: PcmRecorder,
     private val translator: Translator,
+    private val onPlanChanged: () -> Unit = {},
     private val onText: (String) -> Unit,
 ) {
     var state: VoiceUiState by mutableStateOf(VoiceUiState.Idle)
@@ -333,6 +334,7 @@ class VoiceSession(
             val toLocal = !outcome.markOnDeviceUnsupported &&
                 prepared?.let { router.systemFailed(it, errorClass) } == true
             fail(if (toLocal) ErrorKind.SAY_AGAIN else outcome.kind)
+            if (toLocal) onPlanChanged() // chip shows 本機 for the retry
         }
 
         // ERROR_LANGUAGE_* are API 31 constants; they are inlined ints and older systems never

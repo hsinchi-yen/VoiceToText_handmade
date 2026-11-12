@@ -72,20 +72,23 @@ class LanDetector(
 ) {
     @Volatile private var cached: LanSite = LanSite.UNREACHABLE
     private val generation = AtomicLong(0)
+    private val lock = Any()
 
     fun current(): LanSite = cached
 
     fun invalidate() {
-        generation.incrementAndGet()
-        cached = LanSite.UNREACHABLE
+        synchronized(lock) {
+            generation.incrementAndGet()
+            cached = LanSite.UNREACHABLE
+        }
     }
 
     /** Blocking, at most about [timeoutMs]. Returns (and caches) the detected site. */
     fun refresh(): LanSite {
-        val gen = generation.incrementAndGet()
+        val gen = synchronized(lock) { generation.incrementAndGet() }
         val started = clock.nowMs()
         val site = probe()
-        if (generation.get() == gen) cached = site
+        synchronized(lock) { if (generation.get() == gen) cached = site }
         onResult(site, clock.nowMs() - started)
         return site
     }

@@ -209,6 +209,22 @@ class RecognitionRouterTest {
     }
 
     @Test
+    fun blankLocalTranscriptIsNoSpeech() {
+        local.result = { "  " }
+        prefs.pick = AsrPick.LOCAL
+        val r = router(LanSite.UNREACHABLE)
+        assertEquals(RecognizeResult.Failure(RouteFailure.NO_SPEECH), r.recognizePcm(r.prepare(false), pcm))
+    }
+
+    @Test
+    fun blankLanTranscriptIsNoSpeechAndDoesNotFallBack() {
+        ffi.transcribe = { _, _ -> " " }
+        val r = router(LanSite.TN)
+        assertEquals(RecognizeResult.Failure(RouteFailure.NO_SPEECH), r.recognizePcm(r.prepare(true), pcm))
+        assertTrue(local.calls.isEmpty())
+    }
+
+    @Test
     fun longRecordingsAreSentInPiecesOfAtMost30Seconds() {
         var n = 0
         ffi.transcribe = { _, _ -> "p${n++}" }

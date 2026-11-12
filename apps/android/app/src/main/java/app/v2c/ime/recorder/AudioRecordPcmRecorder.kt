@@ -90,6 +90,12 @@ class AudioRecordPcmRecorder(private val context: Context) : PcmRecorder {
                 val level = PcmLevel.of(buf, n)
                 main.post { onLevel(level) }
             }
+            // Release on the recording thread so release() never races with read().
+            try {
+                rec.release()
+            } catch (_: RuntimeException) {
+                // Already released.
+            }
         }, "v2c-pcm-record").also { it.start() }
         return true
     }
@@ -106,22 +112,22 @@ class AudioRecordPcmRecorder(private val context: Context) : PcmRecorder {
 
     private fun halt() {
         running = false
-        thread?.let {
-            try {
-                it.join(500)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-            }
-        }
-        thread = null
+        // stop() unblocks a pending read(); the thread then exits and releases the AudioRecord.
         record?.let {
             try {
                 it.stop()
             } catch (_: IllegalStateException) {
                 // Not recording any more.
             }
-            it.release()
         }
         record = null
+        thread?.let {
+            try {
+                it.join(2000)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
+        thread = null
     }
 }

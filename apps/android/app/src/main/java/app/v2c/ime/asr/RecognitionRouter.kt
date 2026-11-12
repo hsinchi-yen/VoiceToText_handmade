@@ -98,6 +98,7 @@ class RecognitionRouter(
 
     /** Converts the system recognizer's text to zh-TW. */
     fun finishSystemText(text: String): RecognizeResult {
+        if (text.isBlank()) return RecognizeResult.Failure(RouteFailure.NO_SPEECH)
         val started = clock.nowMs()
         return try {
             val out = ffi.toZhTw(text)
@@ -157,7 +158,8 @@ class RecognitionRouter(
             val raw = pieces.joinToString("") {
                 ffi.transcribePcm(PcmChunker.toLittleEndianBytes(it), PcmChunker.SAMPLE_RATE, id)
             }
-            val text = ffi.toZhTw(raw)
+            // A blank raw transcript is "no speech"; do not convert it into something non-blank.
+            val text = if (raw.isBlank()) "" else ffi.toZhTw(raw)
             log.log("lan done source=$source chunks=${pieces.size} pcm=${pcm.size} chars=${text.length} ms=${clock.nowMs() - started}")
             text
         } catch (e: V2cFfiException) {
@@ -171,7 +173,8 @@ class RecognitionRouter(
         val started = clock.nowMs()
         return try {
             val pieces = PcmChunker.split(pcm)
-            val text = pieces.joinToString("") { local.transcribe(it, PcmChunker.SAMPLE_RATE) }
+            val raw = pieces.joinToString("") { local.transcribe(it, PcmChunker.SAMPLE_RATE) }
+            val text = if (raw.isBlank()) "" else raw
             log.log("local done chunks=${pieces.size} pcm=${pcm.size} chars=${text.length} ms=${clock.nowMs() - started}")
             text
         } catch (e: Exception) {

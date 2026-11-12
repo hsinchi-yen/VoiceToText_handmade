@@ -126,7 +126,8 @@ class V2cImeService :
         networkWatcher.stop()
         session.destroy()
         source.detach()
-        localAsr.release()
+        // release() is synchronized with transcribe(); never block the main thread on it.
+        Thread({ localAsr.release() }, "v2c-local-release").start()
         probeExecutor.shutdownNow()
         scope.cancel()
         lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
@@ -164,11 +165,12 @@ class V2cImeService :
             router = router,
             recorder = AudioRecordPcmRecorder(this),
             translator = translator,
+            onPlanChanged = { source.refresh() },
         ) { text -> currentInputConnection?.commitText(text, 1) }
         source = SourceController(router, prefs, downloader) { SpeechRecognizer.isRecognitionAvailable(this) }
         source.attach()
         networkWatcher = NetworkWatcher(this) {
-            // System thread: drop the cached LAN at once, then re-probe.
+            // System thread, only for a real network change: drop the cached LAN at once, then re-probe.
             detector.invalidate()
             scope.launch {
                 session.onLanChanged(LanSite.UNREACHABLE)
@@ -195,8 +197,9 @@ class V2cImeService :
     /** Probes the LAN off the main thread and publishes the result to the keyboard. */
     private fun refreshLan() {
         scope.launch {
-            val site = withContext(Dispatchers.IO) { detector.refresh() }
-            session.onLanChanged(site)
+            withContext(Dispatchers.IO) { detector.refresh() }
+            // Publish the cache, not refresh()'s return: an older overlapping probe must not reach the UI.
+            session.onLanChanged(detector.current())
             source.refresh()
         }
     }

@@ -86,7 +86,7 @@ class FakeFfi : V2cFfi {
 
     override fun toZhTw(text: String): String {
         if (zhTwFails) throw V2cFfiException(FfiErrorCode.INTERNAL)
-        return "tw:$text"
+        return if (text.isBlank()) text else "tw:$text"
     }
 }
 

@@ -52,8 +52,9 @@ class UniffiV2cFfi : V2cFfi {
         block()
     } catch (e: FfiException) {
         throw V2cFfiException(e.toCode())
-    } catch (e: UnsatisfiedLinkError) {
-        // Native library missing for this ABI.
+    } catch (e: LinkageError) {
+        // Native library missing for this ABI (UnsatisfiedLinkError, ExceptionInInitializerError,
+        // NoClassDefFoundError from the JNA/uniffi static init): degrade instead of crashing the IME.
         throw V2cFfiException(FfiErrorCode.INTERNAL)
     } catch (e: uniffi.v2c_ffi.InternalException) {
         throw V2cFfiException(FfiErrorCode.INTERNAL)
