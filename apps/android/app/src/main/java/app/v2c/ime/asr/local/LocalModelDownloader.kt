@@ -114,20 +114,23 @@ class LocalModelDownloader(
     fun path(name: String): File = File(modelDir, name)
 
     /**
-     * Starts (or resumes) the download in the background. No-op when ready. While a run is still
-     * finishing (for example right after [cancel]) the start is remembered and begins as soon as
-     * that run ends.
+     * Starts (or resumes) the download in the background. No-op when ready or while a download is
+     * already running. While a run is still finishing after [cancel] or [delete] the start is
+     * remembered and begins as soon as that run ends.
      */
     fun start() {
         synchronized(lock) {
-            if (state == DownloadState.Ready) return
-            // Reset here, not on the executor thread: a cancel() issued right after start()
-            // must not be overwritten when the queued task finally runs.
-            if (!deleteRequested) cancelRequested = false
+            if (state == DownloadState.Ready && !deleteRequested) return
             if (running) {
-                startPending = true
+                // A healthy run keeps going (no second run that could auto-retry a failure).
+                // A run winding down after cancel()/delete() remembers the start and resumes after.
+                if (cancelRequested || deleteRequested) startPending = true
+                if (!deleteRequested) cancelRequested = false
                 return
             }
+            // Reset here, not on the executor thread: a cancel() issued right after start()
+            // must not be overwritten when the queued task finally runs.
+            cancelRequested = false
             running = true
         }
         executor.execute { run() }
@@ -177,7 +180,13 @@ class LocalModelDownloader(
                 wipe()
                 return
             }
-            synchronized(lock) { startPending = false }
+            synchronized(lock) {
+                // A remembered start() is newer than any cancel()/delete(): both clear startPending.
+                if (startPending) {
+                    startPending = false
+                    cancelRequested = false
+                }
+            }
             // A start() remembered during a run that then finished Ready has nothing left to do.
             if (state == DownloadState.Ready) return
             val result = try {

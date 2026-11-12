@@ -397,14 +397,12 @@ class LocalModelDownloaderTest {
     }
 
     @Test
-    fun startRememberedDuringARunThatEndsReadyDoesNotRunAgain() {
-        val fetcher = FakeFetcher()
+    fun startDuringAHealthyDownloadIsANoOp() {
+        val fetcher = FakeFetcher(corrupt = true)
         lateinit var d: LocalModelDownloader
         d = downloader(fetcher)
-        val states = mutableListOf<DownloadState>()
         var tapped = false
         d.addListener {
-            states += it
             // A second tap while the first run is still downloading.
             if (it is DownloadState.Downloading && !tapped) {
                 tapped = true
@@ -414,10 +412,24 @@ class LocalModelDownloaderTest {
 
         d.download()
 
+        // No second run that would silently re-download after the hash mismatch.
+        assertEquals(DownloadState.Failed(DownloadFailure.HASH_MISMATCH), d.state)
+        assertEquals(1, fetcher.offsets.size)
+    }
+
+    @Test
+    fun startAfterDeleteWhileTheRunIsEndingDownloadsAgain() {
+        val d = LocalModelDownloader(spec, tmp.root, FakeFetcher(), queuedExecutor)
+        d.start()
+        queue.removeFirst().run() // first run completes
         assertEquals(DownloadState.Ready, d.state)
-        assertEquals(2, fetcher.offsets.size) // a.bin and b.txt once each
-        assertEquals(DownloadState.Ready, states.last())
-        assertEquals(1, states.count { it == DownloadState.Ready })
+
+        d.delete()
+        d.start() // the user taps download again before the delete ran
+        while (queue.isNotEmpty()) queue.removeFirst().run()
+
+        assertEquals(DownloadState.Ready, d.state)
+        assertTrue(d.path("a.bin").readBytes().contentEquals(blobA))
     }
 
     @Test
