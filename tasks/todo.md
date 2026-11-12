@@ -92,17 +92,19 @@
 - [ ] W8 T2.3 v2c-ffi（uniffi＋cargo-ndk；`choose_asr`、`load_lan_services`、`transcribe_pcm`、`translate`）
   - [x] Rust 端完成並合併進本機 main（2026-11-12，你核准）：uniffi 0.32 proc-macro、同步 FFI＋內部 tokio；`transcribe_pcm(pcm_le: ByteArray, rate, service_id)`；`cargo test -p v2c-ffi` 21 項（含路由表每列、強制來源不靜默改用、逾時、空白翻譯）、clippy、fmt 通過；Gradle／綁定／assets／R8 接線步驟在 `crates/v2c-ffi/ANDROID.md`
   - [x] Gradle 接線已寫好並合併（2026-11-12，與 T2.5 一起）：`cargoNdk`、`generateUniffiKotlin`（輸出 `app/build/generated/uniffi`）、`copyPresets`（原樣複製 TN／RD 到 `assets/presets`）、JNA 5.19.1 `@aar`（Maven Central 最新版，已查證）、`proguard-rules.pro`（R8 仍關閉，規則備好）；`-Pv2c.skipRust=true` 可略過 cargo 工作
-  - [ ] 受阻（本機沒有 JDK／SDK／NDK／cargo-ndk，接線**未經建置驗證**）：`cargo ndk` 建置、`assembleDebug`、`zipalign -c -P 16`、Kotlin 呼叫 `to_zh_tw`
+  - [x] 2026-11-13 Linux 驗證：`cargo ndk` 建置、`assembleDebug`、`zipalign -c -P 16`、模擬器上 Kotlin 呼叫 `to_zh_tw`／`transcribe_pcm`／`translate` 成功
   - [ ] 🧑 安裝 Android Rust 工具（見 human-checklist）
 - [x] W9 T2.2 退格與換行 — 已合併（2026-11-12，你核准與 T2.6 一起合併）；長按加速與 imeOptions 判斷為純 Kotlin 並有單元測試
   - [ ] 🧑 實機測試（見 human-checklist Phase 2：LINE、Chrome、Gmail）
-- [ ] W9 T2.6 手機本機模型（sherpa-onnx；候選比較）— 已合併（2026-11-12，你核准）：程式、下載狀態機、測試、比較工具；第 3 輪審查通過（Windows 上曾建置通過；Linux 上的最後修正與新增測試**未編譯、未執行**，見 android_handover.md）；待人工：實機跑比較工具、定案預設模型（見 docs/android-local-model.md）
+- [ ] W9 T2.6 手機本機模型（sherpa-onnx；候選比較）— 已合併（2026-11-12，你核准）：程式、下載狀態機、測試、比較工具；第 3 輪審查通過（Windows 上曾建置通過；Linux 上的最後修正 2026-11-13 已建置並通過單元測試）；待人工：實機跑比較工具、定案預設模型（見 docs/android-local-model.md）
   - [ ] 🧑 手機比較候選模型並決定預設
-- [ ] W10 T2.4 區網偵測、辨識路由、來源小圖示、中翻英鍵 — 已合併（2026-11-12，審查 2 輪通過）；程式與純 JVM 單元測試已寫（LAN 偵測快取／重測、路由與退回、來源選單狀態、30 秒切段、中翻英）；Linux 環境沒有 JDK／Android SDK，尚未編譯或執行測試，需在有 Android 工具的機器跑 `./gradlew assembleDebug lint testDebugUnitTest`
+- [ ] W10 T2.4 區網偵測、辨識路由、來源小圖示、中翻英鍵 — 已合併（2026-11-12，審查 2 輪通過）；程式與純 JVM 單元測試已寫（LAN 偵測快取／重測、路由與退回、來源選單狀態、30 秒切段、中翻英）；2026-11-13 在 Linux 建置、單元測試、模擬器冒煙測試通過
   - [ ] 🧑 公司 Wi-Fi／VPN 與行動網路下實機測試（見 human-checklist）
 - [ ] W10b T2.5 release APK 與安裝說明
-  - [x] 腳本與文件已寫好並合併（2026-11-12，審查 2 輪通過）：`tools/build-android.sh` 與 `tools/build-android.ps1`（`--check`／`-Check`；沒有 `keystore.properties` 時印 `keytool` 指令並停止）、release 簽署設定（讀 git-ignored 的 `keystore.properties`）、`docs/android-install.md`、README Android 段落；`bash -n` 通過，未實際建置（本機沒有 JDK／SDK）
+  - [x] 腳本與文件已寫好並合併（2026-11-12，審查 2 輪通過）：`tools/build-android.sh` 與 `tools/build-android.ps1`（`--check`／`-Check`；沒有 `keystore.properties` 時印 `keytool` 指令並停止）、release 簽署設定（讀 git-ignored 的 `keystore.properties`）、`docs/android-install.md`、README Android 段落；`.sh` 2026-11-13 在 Linux 以拋棄式金鑰完整跑通；`.ps1` 待 Windows 實跑
   - [ ] 🧑 產生簽署金鑰、跑腳本取得 APK、側載照 `docs/android-install.md` 操作一遍
+- [x] 2026-11-13 Linux 建置與模擬器驗證（工具裝在 `tests/tmp/`，你同意）：`assembleDebug lint testDebugUnitTest` 通過（單元測試 146 項）；APK 的 `.so` 16 KB 對齊；`tools/build-android.sh` 用拋棄式金鑰完整跑通（APK 已刪）；Android 16 模擬器上鍵盤、來源選單、區網 TEA／Breeze、中翻英、本機模型下載與辨識（CER 7.7%）都正常，沒有當機。詳見 `android_handover.md` 第 2 節
+  - [x] 修正：TEA `:8001` 也要金鑰，共用預設檔 `needs_key`／`default_keys` 加上 `*-tea-asr`（你決定；桌面套用對話框 TEA 也會出現金鑰欄）
 - [ ] **檢查點 2**：手機使用一週；決定 Linux 用哪台電腦
 
 ## Phase 3 — Linux（Ubuntu GNOME Wayland）

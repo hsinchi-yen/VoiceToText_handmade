@@ -37,7 +37,7 @@
 每張卡都經過獨立審查（Opus）才合併。Windows 上 `cargo test --workspace`（桌面 206 項）、clippy、fmt、`npm run check`（0／0）、`npm test`（40 項）、`npm run build` 全部通過。
 
 ### 預設組態重點（細節見 `docs/cloud-setup.md`、`presets.rs` 模組說明）
-- TN＝`10.20.30.23`、RD＝`10.88.95.2`；各有 TEA-ASR `:8001`、Breeze-ASR `:8002`（需金鑰、內建預設金鑰 `tn8227` 套用時自動存入、逾時 8000）、Qwen3.8 27B `:8000`（潤飾／中翻英）。
+- TN＝`10.20.30.23`、RD＝`10.88.95.2`；各有 TEA-ASR `:8001`、Breeze-ASR `:8002`（兩者都需金鑰、內建預設金鑰 `tn8227` 套用時自動存入；Breeze 逾時 8000）、Qwen3.8 27B `:8000`（潤飾／中翻英）。
 - 套用時選 TEA 或 Breeze 當語音辨識；文字模型向 `/v1/models` 自動偵測，只有一個模型才採用，否則用檔內 `Qwen3.8-27B-UD-Q6_K_L`。
 - 只寫 `[[cloud]]` 與 `[route]`；**不改 `[local]`**。TN↔RD 切換兩組服務與金鑰都保留，使用者自己的服務不動。
 - 端點（kind／scheme／host／port／path）一改就刪舊金鑰；網路路徑（`\\`、`//`）與 > 64 KiB 的檔案一律拒絕。
@@ -90,10 +90,10 @@ Linux 的 webview 是 WebKitGTK（Windows 是 WebView2／Chromium），開 App �
 ### 4.4 預設組態在 Linux
 - `docs/linux-setup.md` 第 7.3 節：方法一「首頁 → 套用預設組態」、方法二手動改 `config.toml`。
 - **注意**：預設組態不改 `[local]`。Linux 定案是遠端 `tea-asr-1`＋本機 SenseVoice 備援，所以仍要確認 `~/.local/share/v2c/models/` 有 SenseVoice 模型，且 `[local] asr = "sense_voice"`（初次設定或設定 → 進階 → 地端語音模型）。若希望套用預設組態時在 Linux 自動設 `local.asr = sense_voice`，需另開卡（會動到 `presets.rs` 的白名單規則）。
-- 套用時選 Breeze-ASR 不用貼金鑰：內建預設金鑰會自動存進 GNOME 登入鑰匙圈（要換別的金鑰才在欄位輸入）；TEA-ASR `:8001` 不需要金鑰。
+- 套用時選 Breeze-ASR 不用貼金鑰：內建預設金鑰會自動存進 GNOME 登入鑰匙圈（要換別的金鑰才在欄位輸入）；TEA-ASR `:8001` 也需要金鑰，2026-11-13 起同樣內建預設金鑰（之前的預設組態沒附，套用 TEA 會 401，請重新套用一次預設組態）。
 
 #### 預設金鑰（T4.8）
-- **金鑰值**：TN、RD 兩組的 Breeze-ASR（`tn-breeze-asr`、`rd-breeze-asr`）都是 `tn8227`。這是區網伺服器的共用金鑰，依專案負責人 2026-11-12 的決定刻意寫在 `presets/TN_CUSTOM_LLM_ADDR.toml`、`RD_CUSTOM_LLM_ADDR.toml` 的 `[preset] default_keys` 並進 git。
+- **金鑰值**：TN、RD 兩組的 TEA-ASR 與 Breeze-ASR（`*-tea-asr`、`*-breeze-asr`）都是 `tn8227`（TEA 於 2026-11-13 補上）。這是區網伺服器的共用金鑰，依專案負責人 2026-11-12 的決定刻意寫在 `presets/TN_CUSTOM_LLM_ADDR.toml`、`RD_CUSTOM_LLM_ADDR.toml` 的 `[preset] default_keys` 並進 git。
 - **存放位置**：只在套用時存進系統金鑰庫（Linux＝Secret Service／GNOME 登入鑰匙圈，service＝`v2c`、username＝服務代號，見 `v2c-core::secrets::KEYRING_SERVICE`），**不寫進 `config.toml`**，也不寫進日誌。預覽只回傳 `has_default_key`（畫面顯示「已內建預設金鑰，可不填」），金鑰本身不會送到前端；`DefaultKeys` 的 `Debug` 只印代號。
 - **選用順序**（每個 `needs_key` 服務）：使用者輸入的金鑰 → 網址沒變的已存舊金鑰 → 預設金鑰 → 網址改了的舊金鑰刪除。不論這次語音辨識選 TEA 或 Breeze，預設金鑰都會存，之後改選 Breeze 不用再貼。
 - **Best effort**：沒輸入金鑰、網址也沒變時，存預設金鑰失敗（鑰匙圈鎖住、沒有 Secret Service）只會記 `warn`（`preset: keyring unavailable, default key skipped`）並跳過，**預設組態仍會套用**；但這時 Breeze 會因為沒有金鑰而測試失敗。使用者輸入的金鑰或端點改變時存失敗，則整個套用回滾（`keyring_failed`）。

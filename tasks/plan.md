@@ -325,7 +325,7 @@ Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫�
 ### 8.1 辨識來源與路由（2026-11-12 你決定：系統辨識＋本機模型＋區網遠端融合）
 
 三種來源：
-- **區網 ASR**：TN／RD 的 TEA-ASR `:8001`（預設）或 Breeze-ASR `:8002`。端點來自打包進 APK 的 TN／RD 預設組態檔（`apps/desktop/src-tauri/presets/*.toml` 原樣複製），Breeze 用檔內的預設金鑰，不需使用者輸入。Kotlin 用 `AudioRecord` 錄 16 kHz PCM，經 FFI `transcribe_pcm` 交給 `v2c-core` 的相容端點 ASR（使用各服務的 `asr_timeout_ms`）。
+- **區網 ASR**：TN／RD 的 TEA-ASR `:8001`（預設）或 Breeze-ASR `:8002`。端點來自打包進 APK 的 TN／RD 預設組態檔（`apps/desktop/src-tauri/presets/*.toml` 原樣複製），TEA 與 Breeze 都用檔內的預設金鑰，不需使用者輸入。Kotlin 用 `AudioRecord` 錄 16 kHz PCM，經 FFI `transcribe_pcm` 交給 `v2c-core` 的相容端點 ASR（使用各服務的 `asr_timeout_ms`）。
 - **系統辨識**：`SpeechRecognizer`，`EXTRA_LANGUAGE = "zh-TW"`、`EXTRA_PREFER_OFFLINE`（不顯示部分結果，見上方操作風格）；API 31+ 優先 `createOnDeviceSpeechRecognizer`。它自己錄音。
 - **本機模型**：sherpa-onnx 官方 Android 支援（Kotlin API＋預編 `jniLibs`），在 Kotlin 層呼叫，不經 Rust（`v2c-asr-local` 的 `sherpa-onnx` crate 會下載桌面預編庫，不一定支援 `aarch64-linux-android`）。預設 SenseVoice-Small int8（約 230 MB），T2.6 在手機實測候選後定案。不包進 APK：**第一次切到本機模型時，鍵盤詢問一次是否下載**，下載到 App 私有目錄並檢查 SHA-256。輸入是 `AudioRecord` 的 PCM。
 
@@ -345,7 +345,7 @@ Android 的設定頁使用同一套流程（第 1～7 步），以 Compose 畫�
 
 - 中翻英：FFI `translate()`（`v2c-core` 的 LLM provider），用目前區網的 Qwen `:8000`；連不到區網時中翻英鍵變灰，點了顯示「需要連上公司網路」。潤飾不做。
 - 設定來源：TN／RD 兩個預設組態 `.toml` 原樣打包進 APK assets，由 FFI 讀出：`[[cloud]]` 用 `v2c-core` 現有的 `CloudService` 型別，`[preset] default_keys` 用 `v2c-ffi` 內的小型結構。Android 不套用、不合併、不寫回設定檔，所以不需要把桌面的 `presets.rs` 搬進 `v2c-core`，也不改 `v2c-core` 公開介面。
-- 金鑰：只有 Breeze 的內建預設金鑰，直接從打包的組態檔讀進記憶體，不存 Keystore（使用者不輸入任何金鑰）。
+- 金鑰：只有預設組態內建的 TEA／Breeze 預設金鑰，直接從打包的組態檔讀進記憶體，不存 Keystore（使用者不輸入任何金鑰）。
 - 明文 HTTP：`network_security_config` 只對 `10.20.30.23`、`10.88.95.2` 允許 cleartext。
 - Rust 核心：`cargo-ndk` 編 `arm64-v8a`（必要時加 `x86_64` 給模擬器）；uniffi 產生 Kotlin 綁定；FFI 提供**同步**函式（內部自帶 tokio runtime），Kotlin 在 `Dispatchers.IO` 呼叫，避開 uniffi async 的複雜度。
 - 最低版本：Android 9（API 28）；目標與實測裝置是 Android 16／17。
@@ -540,8 +540,8 @@ apps/desktop/ui 重構＋presets（不改 v2c-core） ← Phase 4（第 13 節�
 title = "TN 區網服務"
 id_prefix = "tn-"
 asr_choices = ["tn-tea-asr", "tn-breeze-asr"]   # 套用時讓使用者選一個當 route.asr
-needs_key = ["tn-breeze-asr"]                   # 需要金鑰的服務（金鑰存進系統金鑰庫）
-default_keys = { "tn-breeze-asr" = "tn8227" }  # 沒輸入時存這把共用金鑰（T4.8）
+needs_key = ["tn-tea-asr", "tn-breeze-asr"]     # 需要金鑰的服務（金鑰存進系統金鑰庫）
+default_keys = { "tn-tea-asr" = "tn8227", "tn-breeze-asr" = "tn8227" }  # 沒輸入時存這把共用金鑰（T4.8；TEA 於 2026-11-13 補上）
 detect_llm_model = true                         # 套用時查 /v1/models
 
 [route]
@@ -581,7 +581,7 @@ llm_model = "Qwen3.8-27B-UD-Q6_K_L"
   - 既有服務被更新且主機改變時，照 `save_service` 的規則刪掉舊金鑰（不把金鑰送到新主機）；主機不變時保留金鑰。
   - 文字模型：`detect_llm_model = true` 時向端點查模型清單（重用 `cloud_models` 的查詢），只有一個模型就用它，否則（包含查詢失敗、逾時 3 秒）用檔內的 `llm_model`。
   - 一次原子寫入（持有 `CONFIG_LOCK`、toml_edit 保留註解），寫完發 `v2c:config-changed`。
-  - 金鑰（T4.8）：存進系統金鑰庫（`SecretStore`）；寫設定失敗時還原金鑰（同 `save_service`）。`[preset] default_keys = { "<id>" = "<key>" }` 可為 `needs_key` 內的服務附預設金鑰（id 必須在 `needs_key`；值去頭尾空白、非空、無控制字元、≤256 字元，否則整份拒絕）。內建 TN、RD 各附 Breeze 的共用金鑰 `tn8227`（2026-11-12 使用者決定，入版控）。每個 `needs_key` 服務依序選金鑰：(a) 對話框輸入的 → (b) 已存且端點未變的舊金鑰 → (c) `default_keys` → (d) 都沒有就列入 `key_missing`；未被選為語音辨識的 `needs_key` 服務也會補上預設金鑰（之後切到 Breeze 不用再貼）。端點改變時舊金鑰被 (a) 或 (c) 取代，都沒有才刪除。預覽只回 `has_default_key`，金鑰值不進 UI 與日誌。
+  - 金鑰（T4.8）：存進系統金鑰庫（`SecretStore`）；寫設定失敗時還原金鑰（同 `save_service`）。`[preset] default_keys = { "<id>" = "<key>" }` 可為 `needs_key` 內的服務附預設金鑰（id 必須在 `needs_key`；值去頭尾空白、非空、無控制字元、≤256 字元，否則整份拒絕）。內建 TN、RD 各附 TEA 與 Breeze 的共用金鑰 `tn8227`（2026-11-12 使用者決定，入版控；TEA 於 2026-11-13 補上，Android 模擬器實測發現 `:8001` 也要金鑰）。每個 `needs_key` 服務依序選金鑰：(a) 對話框輸入的 → (b) 已存且端點未變的舊金鑰 → (c) `default_keys` → (d) 都沒有就列入 `key_missing`；未被選為語音辨識的 `needs_key` 服務也會補上預設金鑰（之後切到 Breeze 不用再貼）。端點改變時舊金鑰被 (a) 或 (c) 取代，都沒有才刪除。預覽只回 `has_default_key`，金鑰值不進 UI 與日誌。
   - 日誌只記預設檔名稱、服務數、錯誤碼、耗時。
 - 指令：`presets_list() -> Vec<PresetSummary>`、`presets_preview(source) -> PresetPreview`、`presets_apply(source, asr_choice, keys) -> PresetApplied`；`source` = `{ builtin: "TN" }` 或 `{ file: <path> }`。
 

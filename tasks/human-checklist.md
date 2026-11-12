@@ -164,6 +164,8 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] T2.6 本機模型：用 `tests/fixtures/audio` 的錄音在手機跑比較工具，依比較表決定預設模型；飛航模式下能輸入
 - [ ] T2.5 產生 APK 簽署金鑰（`keytool`，指令見 `docs/android-install.md` 第 1.2 節，也會由腳本印出）並建立 `apps/android/keystore.properties`；備份金鑰（弄丟就不能更新已安裝的 App）
 - [ ] T2.5 先跑 `bash tools/build-android.sh --check`（Windows：`tools\build-android.ps1 -Check`），裝好缺的工具後建置；第一次建置是 T2.3 Gradle 接線的首次驗證（`cargoNdk`、綁定產生、16 KB 對齊）；再照說明側載安裝一遍
+- [ ] 桌面（Windows／Linux）：重新套用一次 TN 或 RD 預設組態，讓 TEA-ASR 也存到內建金鑰（2026-11-13 前的預設組態沒附 TEA 金鑰，TEA 會回 401）
+- [ ] Windows：跑 `tools\build-android.ps1`（第一次實跑；Linux 的 `.sh` 已驗證），有錯把輸出貼回來
 - [ ] 檢查點 2：手機日常使用一週
 - [ ] 決定 Linux 用哪台電腦（同一台雙系統或另一台），並提供規格
 
