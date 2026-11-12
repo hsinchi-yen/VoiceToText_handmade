@@ -97,7 +97,8 @@
   - [ ] 🧑 實機測試（見 human-checklist Phase 2：LINE、Chrome、Gmail）
 - [ ] W9 T2.6 手機本機模型（sherpa-onnx；候選比較）— 已合併（2026-11-12，你核准）：程式、下載狀態機、測試、比較工具；第 3 輪審查通過（Windows 上曾建置通過；Linux 上的最後修正只做了純 JVM 單元測試，見 android_handover.md）；待人工：實機跑比較工具、定案預設模型（見 docs/android-local-model.md）
   - [ ] 🧑 手機比較候選模型並決定預設
-- [ ] W10 T2.4 區網偵測、辨識路由、來源小圖示、中翻英鍵
+- [ ] W10 T2.4 區網偵測、辨識路由、來源小圖示、中翻英鍵 — 程式與純 JVM 單元測試已寫（LAN 偵測快取／重測、路由與退回、來源選單狀態、30 秒切段、中翻英）；Linux 環境沒有 JDK／Android SDK，尚未編譯或執行測試，需在有 Android 工具的機器跑 `./gradlew assembleDebug lint testDebugUnitTest`
+  - [ ] 🧑 公司 Wi-Fi／VPN 與行動網路下實機測試（見 human-checklist）
 - [ ] W10b T2.5 release APK 與安裝說明
 - [ ] **檢查點 2**：手機使用一週；決定 Linux 用哪台電腦
 

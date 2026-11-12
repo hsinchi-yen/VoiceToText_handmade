@@ -15,6 +15,20 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import app.v2c.ime.asr.ErrorMapping
+import app.v2c.ime.asr.Finished
+import app.v2c.ime.asr.Prepared
+import app.v2c.ime.asr.RecognitionRouter
+import app.v2c.ime.asr.VoiceMode
+import app.v2c.ime.ffi.AsrSource
+import app.v2c.ime.ffi.LanSite
+import app.v2c.ime.recorder.PcmRecorder
+import app.v2c.ime.translate.Translator
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class ErrorKind(@StringRes val message: Int) {
     NO_PERMISSION(R.string.error_no_permission),
@@ -24,6 +38,12 @@ enum class ErrorKind(@StringRes val message: Int) {
     SAY_AGAIN(R.string.error_say_again),
     LANGUAGE_UNSUPPORTED(R.string.error_language_unsupported),
     GENERIC(R.string.error_generic),
+    NO_SOURCE(R.string.error_no_source),
+    LAN_UNREACHABLE(R.string.error_lan_unreachable),
+    LOCAL_NOT_READY(R.string.error_local_not_ready),
+    LAN_FAILED(R.string.error_lan_failed),
+    NEEDS_LAN(R.string.error_needs_lan),
+    TRANSLATE_FAILED(R.string.error_translate_failed),
 }
 
 sealed interface VoiceUiState {
@@ -41,6 +61,10 @@ sealed interface VoiceUiState {
  */
 class VoiceSession(
     private val context: Context,
+    private val scope: CoroutineScope,
+    private val router: RecognitionRouter,
+    private val recorder: PcmRecorder,
+    private val translator: Translator,
     private val onText: (String) -> Unit,
 ) {
     var state: VoiceUiState by mutableStateOf(VoiceUiState.Idle)
@@ -50,22 +74,55 @@ class VoiceSession(
     var levels: FloatArray by mutableStateOf(FloatArray(WAVE_BARS))
         private set
 
+    /** Current company LAN (cached detection); drives the translate key's enabled state. */
+    var lan: LanSite by mutableStateOf(LanSite.UNREACHABLE)
+        private set
+
+    val translateEnabled: Boolean get() = lan != LanSite.UNREACHABLE
+
+    fun onLanChanged(site: LanSite) {
+        lan = site
+    }
+
     private val detector = TapHoldDetector()
+    private var prepared: Prepared? = null
+    private var activeMode = VoiceMode.DICTATE
+    private var job: Job? = null
     private var recognizer: SpeechRecognizer? = null
     private var currentKind = RecognizerKind.NONE
 
     /** Set once the on-device recognizer reports zh-TW unsupported; lasts for the service lifetime. */
     private var onDeviceUnsupported = false
 
-    fun onMicPress() = apply(detector.onPress(SystemClock.uptimeMillis()))
+    fun onMicPress() = press(VoiceMode.DICTATE)
 
     fun onMicRelease() = apply(detector.onRelease(SystemClock.uptimeMillis()))
+
+    /** The Chinese-to-English key behaves like the mic key but commits English. */
+    fun onTranslatePress() = press(VoiceMode.TRANSLATE)
+
+    fun onTranslateRelease() = onMicRelease()
+
+    private fun press(mode: VoiceMode) {
+        val idle = state !is VoiceUiState.Recording && state !is VoiceUiState.Recognizing
+        if (idle && mode == VoiceMode.TRANSLATE && !translateEnabled) {
+            fail(ErrorKind.NEEDS_LAN)
+            return
+        }
+        val action = detector.onPress(SystemClock.uptimeMillis())
+        if (action == TapHoldDetector.Action.START) activeMode = mode
+        apply(action)
+    }
 
     fun dismissError() {
         if (state is VoiceUiState.Failed) state = VoiceUiState.Idle
     }
 
     fun destroy() {
+        job?.cancel()
+        job = null
+        recorder.cancel()
+        prepared = null
         releaseRecognizer()
         detector.reset()
         state = VoiceUiState.Idle
@@ -91,6 +148,17 @@ class VoiceSession(
             fail(ErrorKind.NO_PERMISSION)
             return
         }
+        // Route this utterance (plan section 8.1): LAN / local record PCM here, system records itself.
+        val p = router.prepare(systemAvailable())
+        prepared = p
+        if (p.plan.primary == AsrSource.NONE) {
+            fail(ErrorMapping.forHint(p.plan.hint) ?: ErrorKind.GENERIC)
+            return
+        }
+        if (p.plan.primary != AsrSource.SYSTEM) {
+            startPcm()
+            return
+        }
         // Ordering constraint: release the old recognizer FIRST. releaseRecognizer() resets
         // currentKind, and createRecognizer() sets it; reversing this would leave currentKind
         // as NONE and break the language-error fallback in onError.
@@ -110,8 +178,58 @@ class VoiceSession(
     private fun stop() {
         if (state is VoiceUiState.Recording) {
             state = VoiceUiState.Recognizing
-            recognizer?.stopListening()
+            if (prepared?.plan?.primary == AsrSource.SYSTEM) {
+                recognizer?.stopListening()
+            } else {
+                stopPcm()
+            }
         }
+    }
+
+    private fun startPcm() {
+        levels = FloatArray(WAVE_BARS)
+        val started = recorder.start(::pushLevel)
+        if (!started) {
+            fail(ErrorKind.GENERIC)
+            return
+        }
+        state = VoiceUiState.Recording(SystemClock.uptimeMillis())
+    }
+
+    private fun stopPcm() {
+        val pcm = recorder.stop()
+        val p = prepared
+        if (p == null) {
+            fail(ErrorKind.GENERIC)
+            return
+        }
+        val mode = activeMode
+        job?.cancel()
+        job = scope.launch {
+            val finished = withContext(Dispatchers.IO) {
+                ErrorMapping.finish(router.recognizePcm(p, pcm), mode, translator)
+            }
+            deliver(finished)
+        }
+    }
+
+    /** Main thread. Dropped when the session was destroyed meanwhile. */
+    private fun deliver(finished: Finished) {
+        if (state !is VoiceUiState.Recognizing) return
+        when (finished) {
+            is Finished.Commit -> {
+                onText(finished.text)
+                state = VoiceUiState.Idle
+            }
+            is Finished.Error -> fail(finished.kind)
+        }
+    }
+
+    private fun pushLevel(level: Float) {
+        val next = FloatArray(WAVE_BARS)
+        System.arraycopy(levels, 1, next, 0, WAVE_BARS - 1)
+        next[WAVE_BARS - 1] = level
+        levels = next
     }
 
     private fun systemAvailable() = SpeechRecognizer.isRecognitionAvailable(context)
@@ -168,11 +286,7 @@ class VoiceSession(
 
         override fun onRmsChanged(rmsdB: Float) {
             // rmsdB is roughly -2..10; keep a rolling window of normalized levels.
-            val level = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
-            val next = FloatArray(WAVE_BARS)
-            System.arraycopy(levels, 1, next, 0, WAVE_BARS - 1)
-            next[WAVE_BARS - 1] = level
-            levels = next
+            pushLevel(((rmsdB + 2f) / 12f).coerceIn(0f, 1f))
         }
 
         override fun onEndOfSpeech() {
@@ -193,8 +307,16 @@ class VoiceSession(
             if (text.isNullOrEmpty()) {
                 state = VoiceUiState.Failed(ErrorKind.NO_SPEECH)
             } else {
-                onText(text)
-                state = VoiceUiState.Idle
+                // zh-TW conversion (and translation for the translate key) runs off the main thread.
+                state = VoiceUiState.Recognizing
+                val mode = activeMode
+                job?.cancel()
+                job = scope.launch {
+                    val finished = withContext(Dispatchers.IO) {
+                        ErrorMapping.finish(router.finishSystemText(text), mode, translator)
+                    }
+                    deliver(finished)
+                }
             }
         }
 
@@ -202,10 +324,15 @@ class VoiceSession(
             // Some services send ERROR_CLIENT / BUSY after results or after destroy; ignore those.
             if (!isActive) return
             // Resolve with the still-active kind BEFORE releasing (release resets currentKind).
-            val outcome = RecognizerChoice.resolveError(currentKind, classify(error), systemAvailable())
+            val errorClass = classify(error)
+            val outcome = RecognizerChoice.resolveError(currentKind, errorClass, systemAvailable())
             if (outcome.markOnDeviceUnsupported) onDeviceUnsupported = true
             releaseRecognizer()
-            fail(outcome.kind)
+            // The system recognizer recorded the audio itself, so a local-model fallback needs the
+            // user to speak again. The on-device -> system switch above takes precedence.
+            val toLocal = !outcome.markOnDeviceUnsupported &&
+                prepared?.let { router.systemFailed(it, errorClass) } == true
+            fail(if (toLocal) ErrorKind.SAY_AGAIN else outcome.kind)
         }
 
         // ERROR_LANGUAGE_* are API 31 constants; they are inlined ints and older systems never

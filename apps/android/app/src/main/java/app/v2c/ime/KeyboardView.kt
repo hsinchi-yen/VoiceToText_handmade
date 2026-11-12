@@ -47,7 +47,15 @@ import android.os.SystemClock
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.platform.LocalView
+import app.v2c.ime.asr.ErrorMapping
+import app.v2c.ime.asr.SourceMenuState
+import app.v2c.ime.asr.local.LocalModelPrompt
+import app.v2c.ime.asr.local.LocalModels
+import app.v2c.ime.ffi.AsrSource
 import app.v2c.ime.keyboard.BackspaceRepeat
+import app.v2c.ime.keyboard.SourceController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -64,6 +72,7 @@ internal fun formatElapsed(elapsedMs: Long): String {
 @Composable
 fun KeyboardView(
     session: VoiceSession,
+    source: SourceController,
     onOpenSetup: () -> Unit,
     onInstallSpeechService: () -> Unit,
     onBackspace: (repeating: Boolean) -> Boolean = { false },
@@ -81,40 +90,97 @@ fun KeyboardView(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                TopRow()
+                if (source.promptVisible) {
+                    LocalModelPrompt(
+                        state = source.downloadState,
+                        spec = LocalModels.DEFAULT,
+                        alreadyAsked = false,
+                        onDownload = source::download,
+                        onCancel = source::cancelDownload,
+                        onDecline = source::decline,
+                    )
+                }
+                TopRow(source)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    // Reserved: translate key (behaviour: T2.2 / T2.4).
-                    PlaceholderKey(stringResource(R.string.key_translate), Modifier.width(88.dp))
+                    TranslateKey(session, Modifier.width(88.dp))
                     MicKey(session)
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         BackspaceKey(onBackspace, Modifier.width(88.dp))
                         EnterKey(onEnter, Modifier.width(88.dp))
                     }
                 }
-                StatusArea(session, onOpenSetup, onInstallSpeechService)
+                StatusArea(session, source, onOpenSetup, onInstallSpeechService)
             }
         }
     }
 }
 
 @Composable
-private fun TopRow() {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        // Reserved: recognition-source icon (behaviour: T2.4). Shows the current source.
-        Box(
-            modifier = Modifier
-                .background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(50))
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-        ) {
-            Text(
-                text = stringResource(R.string.source_system),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
+private fun TopRow(source: SourceController) {
+    val plan = source.plan
+    val menu = source.menu
+    val reason = if (plan != null && plan.primary == AsrSource.NONE) ErrorMapping.forHint(plan.hint) else null
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (menu.menuOpen) {
+            // Inline menu instead of a popup window: popups are unreliable inside an IME window.
+            SourceMenuState.items.forEach { pick ->
+                val selected = pick == menu.pick
+                Box(
+                    modifier = Modifier
+                        .background(
+                            if (selected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.secondaryContainer
+                            },
+                            RoundedCornerShape(50),
+                        )
+                        .pointerInput(pick) { detectTapGestures(onTap = { source.select(pick) }) }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Text(
+                        text = SourceMenuState.shortLabel(pick),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        },
+                    )
+                }
+            }
+            TextButton(onClick = source::dismissMenu) { Text("×") }
+        } else {
+            val chipDescription = stringResource(R.string.desc_source_chip)
+            Box(
+                modifier = Modifier
+                    .semantics { contentDescription = chipDescription }
+                    .background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(50))
+                    .pointerInput(source) { detectTapGestures(onLongPress = { source.openMenu() }) }
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    text = SourceMenuState.chipLabel(menu.pick, plan).text,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+            if (reason != null) {
+                // A forced (or the only) source that cannot be used: say why, never switch silently.
+                Text(
+                    text = stringResource(reason.message),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
     }
 }
@@ -175,15 +241,27 @@ private fun EnterKey(onEnter: () -> Unit, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun PlaceholderKey(label: String, modifier: Modifier = Modifier) {
+private fun TranslateKey(session: VoiceSession, modifier: Modifier = Modifier) {
+    // Greyed out without a company LAN; a tap still goes to the session, which shows
+    // "需要連上公司網路".
     Box(
         modifier = modifier
             .height(KeyHeight)
-            .alpha(0.4f)
-            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp)),
+            .alpha(if (session.translateEnabled) 1f else 0.4f)
+            .background(MaterialTheme.colorScheme.tertiaryContainer, RoundedCornerShape(16.dp))
+            .pointerInput(session) {
+                awaitEachGesture {
+                    awaitFirstDown()
+                    session.onTranslatePress()
+                    do {
+                        val event = awaitPointerEvent()
+                    } while (event.changes.any { it.pressed })
+                    session.onTranslateRelease()
+                }
+            },
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(stringResource(R.string.key_translate), color = MaterialTheme.colorScheme.onTertiaryContainer)
     }
 }
 
@@ -225,6 +303,7 @@ private fun MicKey(session: VoiceSession) {
 @Composable
 private fun StatusArea(
     session: VoiceSession,
+    source: SourceController,
     onOpenSetup: () -> Unit,
     onInstallSpeechService: () -> Unit,
 ) {
@@ -257,6 +336,17 @@ private fun StatusArea(
                         }
                         ErrorKind.UNAVAILABLE -> Button(onClick = onInstallSpeechService) {
                             Text(stringResource(R.string.action_install_google))
+                        }
+                        ErrorKind.NO_SOURCE -> {
+                            Button(onClick = onInstallSpeechService) {
+                                Text(stringResource(R.string.action_install_google))
+                            }
+                            Button(onClick = source::showPrompt) {
+                                Text(stringResource(R.string.action_download_local))
+                            }
+                        }
+                        ErrorKind.LOCAL_NOT_READY -> Button(onClick = source::showPrompt) {
+                            Text(stringResource(R.string.action_download_local))
                         }
                         else -> Unit
                     }
