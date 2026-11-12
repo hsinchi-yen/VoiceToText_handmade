@@ -31,13 +31,32 @@
     <string name="action_install_google">安裝語音服務</string>
 
     <!-- Setup -->
-    <string name="setup_title">設定 v2c 語音鍵盤</string>
-    <string name="setup_step_permission">1. 允許使用麥克風</string>
-    <string name="setup_step_enable">2. 啟用 v2c 鍵盤</string>
-    <string name="setup_step_switch">3. 切換到 v2c 鍵盤</string>
+    <string name="setup_title">v2c 語音鍵盤</string>
+    <string name="setup_subtitle">說中文或英文，文字直接打進輸入框</string>
+    <string name="setup_status_ready">已就緒</string>
+    <string name="setup_status_left">還差 %1$d 步</string>
+    <string name="setup_progress">設定進度</string>
+    <string name="setup_progress_count">%1$d / %2$d</string>
+    <string name="setup_section_steps">設定步驟</string>
+    <string name="setup_step_permission">允許使用麥克風</string>
+    <string name="setup_step_permission_desc">錄音只在你按下麥克風時進行。</string>
+    <string name="setup_step_enable">啟用 v2c 鍵盤</string>
+    <string name="setup_step_enable_desc">在系統的「螢幕鍵盤」清單裡打開 v2c 語音鍵盤。</string>
+    <string name="setup_step_switch">切換到 v2c 鍵盤</string>
+    <string name="setup_step_switch_desc">之後可用導覽列右下角的鍵盤圖示切換回其他鍵盤。</string>
     <string name="setup_button_grant">授權</string>
-    <string name="setup_button_enable">開啟輸入法設定</string>
+    <string name="setup_button_enable">開啟設定</string>
     <string name="setup_button_switch">選擇鍵盤</string>
     <string name="setup_done">已完成</string>
     <string name="setup_all_done">全部完成！在任何輸入框點一下，就能用 v2c 語音輸入。</string>
+    <string name="setup_section_try">試用</string>
+    <string name="setup_try_hint">點這裡，按麥克風說一句話</string>
+    <string name="setup_try_locked">完成上面三個步驟後就能在這裡試打。</string>
+    <string name="setup_section_howto">怎麼用</string>
+    <string name="setup_tip_tap">點一下麥克風開始、再點一下送出；也可以按住說話、放開送出。</string>
+    <string name="setup_tip_translate">中→英 鍵：說中文，輸出英文（需要公司網路）。</string>
+    <string name="setup_tip_source">長按左上角的來源小圖示，可切換 自動／TEA／Breeze／系統／本機。</string>
+    <string name="setup_tip_network">連上公司 Wi-Fi 或 VPN 時自動用區網辨識；沒有網路時用系統辨識或本機模型。</string>
+    <string name="setup_tip_local">本機模型約 237 MB，第一次切到「本機」時才會詢問下載。</string>
+    <string name="setup_footer">v2c 版本 %1$s</string>
 </resources>

@@ -23,8 +23,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,12 +35,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.isSystemInDarkTheme
 import android.os.SystemClock
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -51,6 +47,7 @@ import app.v2c.ime.asr.ErrorMapping
 import app.v2c.ime.asr.SourceMenuState
 import app.v2c.ime.asr.local.LocalModelPrompt
 import app.v2c.ime.asr.local.LocalModels
+import app.v2c.ime.ui.V2cTheme
 import app.v2c.ime.ffi.AsrSource
 import app.v2c.ime.keyboard.BackspaceRepeat
 import app.v2c.ime.keyboard.SourceController
@@ -78,7 +75,7 @@ fun KeyboardView(
     onBackspace: (repeating: Boolean) -> Boolean = { false },
     onEnter: () -> Unit = {},
 ) {
-    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
+    V2cTheme {
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
@@ -269,6 +266,7 @@ private fun TranslateKey(session: VoiceSession, modifier: Modifier = Modifier) {
 private fun MicKey(session: VoiceSession) {
     val recording = session.state is VoiceUiState.Recording
     val color = if (recording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    val onColor = if (recording) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary
     Box(
         modifier = Modifier
             .size(MicSize)
@@ -288,12 +286,12 @@ private fun MicKey(session: VoiceSession) {
         contentAlignment = Alignment.Center,
     ) {
         if (session.state is VoiceUiState.Recognizing) {
-            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(40.dp))
+            CircularProgressIndicator(color = onColor, modifier = Modifier.size(40.dp))
         } else {
             Icon(
                 painter = painterResource(R.drawable.ic_mic),
                 contentDescription = stringResource(R.string.desc_mic),
-                tint = Color.White,
+                tint = onColor,
                 modifier = Modifier.size(48.dp),
             )
         }

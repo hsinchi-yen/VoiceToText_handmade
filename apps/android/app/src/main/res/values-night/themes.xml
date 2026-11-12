@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.V2c" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/v2c_surface</item>
+    </style>
+</resources>

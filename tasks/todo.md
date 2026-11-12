@@ -105,6 +105,7 @@
   - [ ] 🧑 產生簽署金鑰、跑腳本取得 APK、側載照 `docs/android-install.md` 操作一遍
 - [x] 2026-11-13 Linux 建置與模擬器驗證（工具裝在 `tests/tmp/`，你同意）：`assembleDebug lint testDebugUnitTest` 通過（單元測試 146 項）；APK 的 `.so` 16 KB 對齊；`tools/build-android.sh` 用拋棄式金鑰完整跑通（APK 已刪）；Android 16 模擬器上鍵盤、來源選單、區網 TEA／Breeze、中翻英、本機模型下載與辨識（CER 7.7%）都正常，沒有當機。詳見 `android_handover.md` 第 2 節
   - [x] 修正：TEA `:8001` 也要金鑰，共用預設檔 `needs_key`／`default_keys` 加上 `*-tea-asr`（你決定；桌面套用對話框 TEA 也會出現金鑰欄）
+- [x] 2026-11-13 Android 介面精修（你要求）：共用主題 `ui/V2cTheme.kt`（色票、圓角、字級對齊桌面 `apps/desktop/ui/app.css`，淺色／深色）；App 圖示改用桌面的候選 B（adaptive icon）；設定頁改成工具軟體風格（品牌列、進度卡、步驟清單、完成後可直接試打、使用說明）；鍵盤與 debug 比較工具套用同一主題；修正從鍵盤挑選器選 v2c 後第 3 步不會變成已完成、鍵盤彈出時內容被推到狀態列下、深色模式麥克風圖示對比不足。模擬器淺色／深色截圖確認，lint 0 錯誤、單元測試 146 項通過
 - [ ] **檢查點 2**：手機使用一週；決定 Linux 用哪台電腦
 
 ## Phase 3 — Linux（Ubuntu GNOME Wayland）

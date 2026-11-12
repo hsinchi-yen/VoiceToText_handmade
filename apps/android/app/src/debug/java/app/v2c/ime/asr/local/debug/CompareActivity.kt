@@ -1,13 +1,40 @@
 package app.v2c.ime.asr.local.debug
 
-import android.app.Activity
 import android.os.Bundle
 import android.util.Log
-import android.view.ViewGroup
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
 import app.v2c.ime.asr.local.Cer
 import app.v2c.ime.asr.local.DownloadState
 import app.v2c.ime.asr.local.LocalModelDownloader
@@ -18,6 +45,8 @@ import app.v2c.ime.asr.local.WavReader
 import app.v2c.ime.asr.local.ZhTwConverter
 import app.v2c.ime.ffi.UniffiV2cFfi
 import app.v2c.ime.ffi.V2cFfiException
+import app.v2c.ime.ui.LocalV2cStatus
+import app.v2c.ime.ui.V2cTheme
 import java.io.File
 import java.util.Locale
 
@@ -28,74 +57,168 @@ import java.util.Locale
  * 1. `adb push tests/fixtures/audio/. /sdcard/Android/data/app.v2c.ime/files/compare/`
  *    (pairs of `name.wav` + `name.txt` with the expected text, or `name.raw.txt` which takes
  *    precedence; 16-bit PCM WAV).
- * 2. Open this activity, press "Download" for a model (needs network once), then "Run".
+ * 2. Open this activity, press "下載" for a model (needs network once), then "執行".
  * 3. Results appear on screen and in `files/compare/result-<model>.csv` (pull it with adb).
  *
  * Output is numbers only (CER, latency, real-time factor). Recognized text is never logged,
  * written or shown, and the expected text is only used to compute the CER.
  */
-class CompareActivity : Activity() {
-    private lateinit var out: TextView
+class CompareActivity : ComponentActivity() {
     private val downloaders = LinkedHashMap<String, LocalModelDownloader>()
+
+    /** Per model id: download state, "running" flag, last summary line (numbers only). */
+    private val states = mutableStateMapOf<String, DownloadState>()
+    private val running = mutableStateMapOf<String, Boolean>()
+    private val summaries = mutableStateMapOf<String, String>()
+    private val message = mutableStateOf("")
 
     private val compareDir: File get() = File(getExternalFilesDir(null), "compare")
     private val modelsRoot: File get() = File(filesDir, "models")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 160, 24, 24) } // clear the status bar (edge-to-edge)
+        enableEdgeToEdge()
         for (spec in LocalModels.ALL) {
             val d = LocalModelDownloader(spec, modelsRoot)
             downloaders[spec.id] = d
-            d.addListener { s -> if (s !is DownloadState.Downloading) show("${spec.id}: ${describe(s)}") }
-            val row = LinearLayout(this)
-            row.addView(label("${spec.displayName} (${spec.totalMegabytes} MB)"))
-            row.addView(button("Download") { d.start() })
-            row.addView(button("Run") { runCompare(spec) })
-            row.addView(button("Delete") { d.delete() }) // non-blocking: runs on the downloader thread
-            root.addView(row)
+            states[spec.id] = d.state
+            d.addListener { s -> runOnUiThread { states[spec.id] = s } }
+            File(compareDir, "result-${spec.id}.csv").takeIf { it.isFile }?.readLines()?.lastOrNull()
+                ?.let { summaries[spec.id] = it }
         }
-        out = TextView(this).apply { textSize = 12f; setTextIsSelectable(true) }
-        root.addView(ScrollView(this).apply { addView(out) })
-        setContentView(root, ViewGroup.LayoutParams(-1, -1))
-        show("Put name.wav + name.txt in ${compareDir.path}")
+        val wavs = compareDir.listFiles { f -> f.extension.equals("wav", true) }?.size ?: 0
+        message.value = "錄音檔：$wavs 個（${compareDir.path}）"
+        setContent { V2cTheme { Screen() } }
     }
 
-    private fun label(t: String) = TextView(this).apply { text = t; textSize = 12f }
-
-    private fun button(t: String, onClick: () -> Unit) =
-        Button(this).apply { text = t; setOnClickListener { onClick() } }
-
-    private fun show(line: String) {
-        runOnUiThread { out.append(line + "\n") }
+    @Composable
+    private fun Screen() {
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+            Box(contentAlignment = Alignment.TopCenter) {
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = 720.dp)
+                        .fillMaxWidth()
+                        .safeDrawingPadding()
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("本機模型比較", style = MaterialTheme.typography.headlineSmall)
+                    Text(
+                        "只輸出字錯率與延遲，不顯示、不記錄辨識文字。debug 版限定。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        message.value,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    for (spec in LocalModels.ALL) ModelCard(spec)
+                }
+            }
+        }
     }
 
-    private fun describe(s: DownloadState): String = when (s) {
-        is DownloadState.Failed -> "failed ${s.reason}"
-        else -> s.javaClass.simpleName
+    @Composable
+    private fun ModelCard(spec: LocalModelSpec) {
+        val d = downloaders.getValue(spec.id)
+        val state = states[spec.id] ?: DownloadState.NotDownloaded
+        val busy = running[spec.id] == true
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(spec.displayName, style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "${spec.totalMegabytes} MB",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    StatePill(state, busy)
+                }
+                if (state is DownloadState.Downloading) {
+                    LinearProgressIndicator(
+                        progress = { state.fraction },
+                        modifier = Modifier.fillMaxWidth().height(6.dp),
+                        drawStopIndicator = {},
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (state == DownloadState.Ready) {
+                        Button(onClick = { runCompare(spec) }, enabled = !busy) { Text("執行") }
+                        OutlinedButton(onClick = { d.delete() }, enabled = !busy) { Text("刪除") }
+                    } else if (state is DownloadState.Downloading || state == DownloadState.Verifying) {
+                        OutlinedButton(onClick = { d.cancel() }) { Text("取消") }
+                    } else {
+                        FilledTonalButton(onClick = { d.start() }) { Text("下載") }
+                    }
+                }
+                summaries[spec.id]?.let { summary ->
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Text(
+                        summary.replace(' ', '\n'),
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun StatePill(state: DownloadState, busy: Boolean) {
+        val s = LocalV2cStatus.current
+        val c = MaterialTheme.colorScheme
+        val (text, bg, fg) = when {
+            busy -> Triple("執行中…", c.primaryContainer, c.onPrimaryContainer)
+            state == DownloadState.Ready -> Triple("已下載", s.successContainer, s.success)
+            state is DownloadState.Downloading ->
+                Triple("${(state.fraction * 100).toInt()}%", c.primaryContainer, c.onPrimaryContainer)
+            state == DownloadState.Verifying -> Triple("檢查中", c.primaryContainer, c.onPrimaryContainer)
+            state is DownloadState.Failed -> Triple("失敗 ${state.reason}", c.errorContainer, c.onErrorContainer)
+            else -> Triple("未下載", c.surfaceContainerHighest, c.onSurfaceVariant)
+        }
+        Pill(text, bg, fg)
+    }
+
+    @Composable
+    private fun Pill(text: String, bg: Color, fg: Color) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = fg,
+            modifier = Modifier.background(bg, CircleShape).padding(horizontal = 12.dp, vertical = 6.dp),
+        )
     }
 
     private fun runCompare(spec: LocalModelSpec) {
         val d = downloaders.getValue(spec.id)
-        if (!d.isReady()) {
-            show("${spec.id}: model not downloaded")
-            return
-        }
+        if (!d.isReady()) return
+        running[spec.id] = true
         Thread {
-            try {
+            val summary = try {
                 compare(spec, d)
             } catch (e: Exception) {
-                show("${spec.id}: error ${e.javaClass.simpleName}")
+                "error=${e.javaClass.simpleName}"
+            }
+            runOnUiThread {
+                summaries[spec.id] = summary
+                running[spec.id] = false
             }
         }.start()
     }
 
-    private fun compare(spec: LocalModelSpec, d: LocalModelDownloader) {
+    /** Runs every WAV through the model; returns the summary line (numbers only). */
+    private fun compare(spec: LocalModelSpec, d: LocalModelDownloader): String {
         val wavs = compareDir.listFiles { f -> f.extension.equals("wav", true) }?.sortedBy { it.name }.orEmpty()
-        if (wavs.isEmpty()) {
-            show("no wav files in ${compareDir.path}")
-            return
-        }
+        if (wavs.isEmpty()) return "no_wav_files"
         // Same zh_tw conversion as the keyboard, so the CER is not inflated by simplified characters.
         val ffi = UniffiV2cFfi()
         val asr = SherpaLocalAsr(
@@ -147,6 +270,6 @@ class CompareActivity : Activity() {
         )
         File(compareDir, "result-${spec.id}.csv").writeText(rows.toString() + summary + "\n")
         Log.i("v2c.compare", summary)
-        show(rows.toString() + summary)
+        return summary
     }
 }
