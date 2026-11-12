@@ -87,11 +87,15 @@
 - [ ] **檢查點 1**：日常使用一週，問題記在 `dogfood-windows.md`
 
 ## Phase 2 — Android
-- [ ] W8 T2.1 語音鍵盤 IME 最小路徑
-- [ ] W8 T2.3 v2c-ffi（uniffi＋cargo-ndk）
-- [ ] W9 T2.2 功能鍵
-- [ ] W9 T2.4 中翻英鍵＋雲端 ASR 備援
-- [ ] W10 T2.5 設定頁、串接雲端精靈、release APK
+- [x] T2.0 依 2026-11-12 的決定改寫 Phase 2 文件（`v2cplan.md` Android 各列與模型分工、`tasks/plan.md` 第 8 節、卡片 T2.1～T2.6、分派流程）：只有語音輸入＋中翻英、沒有設定頁；系統辨識＋本機模型＋區網 TEA／Breeze 融合；Typeless 式操作；Android 16／17；原 T2.7（預設組態搬進 core）取消
+- [ ] W8 T2.1 語音鍵盤 IME 最小路徑（Typeless 式大麥克風＋系統辨識）
+- [ ] W8 T2.3 v2c-ffi（uniffi＋cargo-ndk；`choose_asr`、`load_lan_services`、`transcribe_pcm`、`translate`）
+  - [ ] 🧑 安裝 Android Rust 工具（見 human-checklist）
+- [ ] W9 T2.2 退格與換行
+- [ ] W9 T2.6 手機本機模型（sherpa-onnx；候選比較）
+  - [ ] 🧑 手機比較候選模型並決定預設
+- [ ] W10 T2.4 區網偵測、辨識路由、來源小圖示、中翻英鍵
+- [ ] W10b T2.5 release APK 與安裝說明
 - [ ] **檢查點 2**：手機使用一週；決定 Linux 用哪台電腦
 
 ## Phase 3 — Linux（Ubuntu GNOME Wayland）

@@ -42,9 +42,11 @@
 | 桌面地端 LLM | 使用者自行以 **LM Studio** 起模型；本工具只走 OpenAI 相容 API（預設 `http://localhost:1234/v1`），不代裝任何軟體 |
 | 雲端 | 官方 API（Gemini、OpenAI、Claude）＋ OpenAI 相容自訂端點（可填自架服務）；雲端失敗自動退回地端 |
 | 顯示卡記憶體 | RTX 2060 同時負責畫面輸出：保留約 600 MiB（2026-11-10 實測後你決定：保留 2 GB 時 Breeze 與 LM Studio 3B 無法同時在 GPU 上），v2c＋LM Studio 上限約 4 GB；三種方案（均衡／省顯存／不用顯卡），顯存不足或遊戲、剪片時自動改用 CPU |
-| Android ASR | Android 內建 `SpeechRecognizer`；不可用時改用已串接的雲端 ASR，都沒有則提示安裝 Google 語音服務 |
+| Android 範圍（2026-11-12 你決定） | **只有語音輸入與中翻英**；沒有設定頁、輸入紀錄、串接雲端精靈、詞庫、潤飾；使用者不輸入任何金鑰 |
+| Android ASR（2026-11-12 你決定，取代「只用內建 `SpeechRecognizer`」） | 三種來源融合，每句話自動選：**連得到區網**（自動偵測 TN 或 RD）→ 區網 TEA-ASR-1.1 為主（可切 Breeze-ASR-25），失敗退回本機模型；**連不到區網** → Android 內建 `SpeechRecognizer` 為主、手機本機模型（預設 SenseVoice-Small，T2.6 實測後定案）為輔；都不可用則提示安裝 Google 語音服務或下載本機模型。手動切換：長按鍵盤上的辨識來源小圖示（自動／TEA／Breeze／系統／本機）。本機模型不包進 APK，第一次切到時詢問下載 |
 | Android 潤飾 | 不做 |
-| Android 中翻英 | 設定雲端/相容端點後才顯示翻譯鍵 |
+| Android 中翻英 | 說中文、輸出英文；用目前區網的 Qwen；連不到區網時翻譯鍵變灰並提示 |
+| Android 區網設定來源 | TN／RD 預設組態檔原樣打包進 APK（含 Breeze 預設金鑰），只讀不寫；不需要把預設組態邏輯搬進 `v2c-core` |
 
 註：Claude API 不接受音訊，只用於潤飾/翻譯；雲端語音辨識選項為 Gemini、OpenAI 及相容端點。
 
@@ -54,7 +56,9 @@
 |------|------|
 | 桌面技術 | **Rust + Tauri v2**，Windows 與 Linux 共用同一套程式 |
 | Android 架構 | **Kotlin**（InputMethodService + Jetpack Compose）外殼＋ **Rust 共用核心**（uniffi） |
-| Android 鍵盤 | 純語音鍵盤：大麥克風鍵、中翻英鍵、退格、換行、切回原輸入法 |
+| Android 鍵盤 | 純語音鍵盤（沒有字母鍵）：大麥克風鍵、中翻英鍵、退格、換行、辨識來源小圖示；切換鍵盤用 Android 導覽列的按鈕，不另放「切回原輸入法」鍵 |
+| Android 操作風格（2026-11-12 你決定） | 比照 Typeless 的 Android 語音鍵盤：整個鍵盤以一顆大麥克風為主，**點一下開始、再點一下結束並送出**（也支援按住說話、放開送出），錄音時顯示波形與計時，辨識中顯示進度，完成直接把文字打進輸入框、不另外確認；鍵盤上不顯示辨識中的文字。浮動泡泡（無障礙服務，搭配其他鍵盤使用）不做 |
+| Android 版本（2026-11-12） | 你的手機是 Android 16／17：`targetSdk`／`compileSdk` 以 36～37 為準（【實作前確認】當時 Google Play 要求與 AGP、Kotlin、Compose 編譯器的相容版本）；`minSdk` 維持 28；所有原生 `.so`（v2c-ffi、sherpa-onnx）必須 16 KB 頁面對齊 |
 | 隱私 | 輸入紀錄以 Windows DPAPI 加密、預設保留 7 天；「不記錄的 App」清單（預設：密碼管理器）；**日誌永不記錄辨識文字** |
 | 散布 | 第一版不簽章、不做自動更新；README 說明 SmartScreen 與防毒誤判處理；要正式分享時再加簽章與 Tauri 自動更新 |
 
@@ -64,6 +68,7 @@
 |------|------|
 | Agent | Claude Code：主 agent 負責分派，實作 agent 各在自己的 git worktree 開發；共用規範寫在 `AGENTS.md`（日後可加入 Codex） |
 | 並行數 | 最多 3 個實作 agent＋1 個審查 agent |
+| 模型分工（2026-11-12 你決定，Phase 2 起） | 主 agent（Opus）分派與決定下一步；實作 agent 用 **Sonnet**；審查 agent 用 **Opus**；測試 agent 用 **Haiku**（照卡片的驗證指令執行並回報結果）。流程見 `tasks/cards/README.md`〈分派流程〉 |
 | 介面先行 | T0.0 由單一 agent 完成 workspace 骨架與 `v2c-core` 介面，經你審查合併後才平行開發 |
 | 版本控制 | 本機 git；一任務一分支；合併門檻：`cargo test`、`cargo clippy` 通過＋審查 agent 通過；Phase 1 結束再決定是否推 GitHub |
 | 合併權限 | 一般任務由主 agent 自動合併；**介面變更、檢查點、含「🧑 需人工」項目的任務需你核准** |
@@ -84,6 +89,9 @@
 | 系統管理員權限的視窗無法注入（UIPI） | 偵測後提示並改放剪貼簿 |
 | 鍵盤掛勾＋模擬輸入被防毒誤判為鍵盤側錄程式；SmartScreen 警告 | T1.11 以 Windows Defender 實測；README 說明 |
 | 輸入紀錄含私人內容 | DPAPI 加密、7 天保留、不記錄的 App、日誌不記文字 |
-| Android 內建辨識不可用或自動語言判斷有限 | 以 zh-TW 為主；退回雲端 ASR |
+| Android 內建辨識不可用或自動語言判斷有限 | 以 zh-TW 為主；可長按小圖示切到本機模型；區網連得到時自動走區網 ASR |
+| 手機本機模型的大小（約 230 MB）與效能 | 不包進 APK、第一次切到時才下載並檢查 SHA-256；T2.6 在你的手機實測候選模型，太慢則只當選用功能 |
+| 區網偵測誤判（伺服器關閉、VPN 時好時壞） | 短逾時探測並快取，網路變更時更新；偵測失敗直接走本機，不等辨識逾時；區網辨識失敗同一句退回本機 |
+| 區網服務是明文 HTTP | `network_security_config` 只對 TN、RD 兩個區網位址允許明文，其他一律 HTTPS |
 | GNOME Wayland 的熱鍵與注入限制 | T3.0 已查證（plan.md 第 9 節）；Linux 改做 IBus 引擎，使用者需在 GNOME 設定加入 v2c 輸入來源 |
 | 多 agent 平行開發造成介面分歧與合併衝突 | 介面先行、任務卡限定範圍、介面變更需你核准 |
