@@ -71,7 +71,7 @@ enum Open {
 /// `Recording` arrives every 50 ms while recording; a longer gap means that recording ended
 /// (the controller sends no event when it stops, and the previous utterance's `Transcribing`
 /// / `Done` can arrive while the next one is recording).
-pub const RECORDING_GAP: Duration = Duration::from_millis(300);
+pub const RECORDING_GAP: Duration = Duration::from_millis(500);
 
 /// Turns the controller's status stream into notifications. Progress is silent; an error or
 /// the hands-free hint opens a bubble.
