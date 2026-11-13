@@ -34,19 +34,18 @@ use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
 use toml_edit::Value;
 use tracing::{info, warn};
-use v2c_core::config::{CloudKind, Config, TimeoutConfig, LOCAL};
+use v2c_core::config::{CloudKind, Config, LOCAL};
 use v2c_core::portable::{self, MergePlan, PortableError, PortableFile};
-use v2c_core::route::{self, suggested_models, CloudHttp};
+use v2c_core::route::suggested_models;
 use v2c_core::secrets::{ApiKey, SecretStore};
 use v2c_core::vocab::Vocab;
 
 use super::cloud::{
-    check_caller, config_lock, config_path, load_config, secret_store, set_str, set_value,
-    update_config, upsert_service,
+    announce_saved, check_caller, config_lock, config_path, load_config, secret_store, set_str,
+    set_value, update_config, upsert_service,
 };
-use super::presets::{detect_one, file_sources, restore_keys, update_keys, Keys};
+use super::presets::{file_sources, restore_keys, update_keys, Keys};
 use crate::app_state::AppState;
-use crate::tray::CONFIG_CHANGED_EVENT;
 
 /// Platform label written to `[v2c] exported_from`.
 const PLATFORM: &str = if cfg!(windows) { "windows" } else { "linux" };
@@ -352,35 +351,6 @@ fn resolve_asr(file: &PortableFile, choice: Option<&str>) -> Result<Option<Strin
     }
 }
 
-/// For a file with `detect_llm_model`: asks each endpoint with a text model for its model list
-/// (no key, 3 s) and uses the one listed model. Returns the source (`detected` / `file`) per id.
-async fn detect_models(file: &mut PortableFile, http: &CloudHttp) -> HashMap<String, &'static str> {
-    let mut sources = HashMap::new();
-    let timeouts = TimeoutConfig {
-        asr_cloud_ms: 1000,
-        llm_cloud_ms: 1000,
-    };
-    let mut detected = 0usize;
-    for svc in &mut file.services {
-        if svc.llm_model.is_none() {
-            continue;
-        }
-        let mut source = "file";
-        if file.detect_llm_model && svc.kind == CloudKind::OpenAiCompat {
-            if let Some(model) = detect_one(svc, http, &timeouts).await {
-                svc.llm_model = Some(model);
-                source = "detected";
-                detected += 1;
-            }
-        }
-        sources.insert(svc.id.clone(), source);
-    }
-    if file.detect_llm_model {
-        info!(detected, "config import: model detection");
-    }
-    sources
-}
-
 fn build_preview(
     cfg: &Config,
     vocab: &Vocab,
@@ -486,7 +456,7 @@ fn build_preview(
     })
 }
 
-/// Preview from file text (no detection); tests only, the command detects models first.
+/// Preview from file text; tests only (the command reads the file first).
 #[cfg(test)]
 pub fn preview_text(
     config_path: &Path,
@@ -652,10 +622,6 @@ fn vocab_path(app: &tauri::AppHandle) -> PathBuf {
     app.state::<AppState>().paths.vocab_file()
 }
 
-fn http_client() -> Result<CloudHttp, IoError> {
-    route::cloud_http_client().map_err(|_| "internal_error".into())
-}
-
 /// A bare file name for the save dialog: no folders, `.toml`, short; anything else falls back.
 fn safe_default_name(name: &str) -> String {
     let ok = !name.is_empty()
@@ -790,7 +756,7 @@ pub async fn config_import_preview(
     let (file, hash) = load_file(path, None)
         .await
         .inspect_err(|e| warn!(code = e.code, "config import preview refused"))?;
-    // No model detection here: the preview must open at once (detection runs on apply).
+    // No network: the file's model names are used as they are (preview and apply).
     let sources = file_sources(&file.services);
     let (cfg_path, vocab) = (config_path(&app), vocab_path(&app));
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -821,10 +787,10 @@ pub async fn config_import_apply(
 ) -> Result<ConfigApplied, IoError> {
     check_caller(window.label())?;
     let started = Instant::now();
-    let (mut file, _) = load_file(path, Some(file_hash))
+    // No network here: `detect_llm_model` is ignored and the file's model names are used.
+    let (file, _) = load_file(path, Some(file_hash))
         .await
         .inspect_err(|e| warn!(code = e.code, "config import refused"))?;
-    detect_models(&mut file, &http_client()?).await;
     let (cfg_path, vocab) = (config_path(&app), vocab_path(&app));
     let result = tauri::async_runtime::spawn_blocking(move || {
         apply_file(
@@ -848,7 +814,7 @@ pub async fn config_import_apply(
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 "config imported (user-chosen file)"
             );
-            let _ = app.emit(CONFIG_CHANGED_EVENT, ());
+            announce_saved(&app);
             if a.vocab_added > 0 {
                 let _ = app.emit(super::vocab::VOCAB_CHANGED_EVENT, a.vocab_total);
             }

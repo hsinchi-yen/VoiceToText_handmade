@@ -9,7 +9,8 @@
 //!
 //! Commands (main window only):
 //! - `presets_list`: the built-ins with a short summary.
-//! - `presets_preview(source)`: what applying would do (after model detection).
+//! - `presets_preview(source)`: what applying would do. Neither this nor apply touches the
+//!   network: the file's model names are used as they are.
 //! - `presets_apply(source, asr_choice, keys)`: writes the services and routes, then emits
 //!   `v2c:config-changed`.
 //!
@@ -36,30 +37,26 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use tauri::Emitter;
 use toml_edit::{Item, Table, Value};
 use tracing::{info, warn};
-use v2c_core::config::{CloudKind, CloudService, Config, RouteConfig, TimeoutConfig, LOCAL};
-use v2c_core::route::{self, CloudHttp};
-use v2c_core::secrets::{ApiKey, MemorySecretStore, SecretStore};
+use v2c_core::config::{CloudKind, CloudService, Config, RouteConfig, LOCAL};
+use v2c_core::route;
+use v2c_core::secrets::{ApiKey, SecretStore};
 use zeroize::Zeroize;
 
 use super::cloud::{
-    blocking, check_caller, check_name_unique, config_lock, config_path, load_config,
-    normalize_name, parse_asr_timeout, same_endpoint, secret_store, set_str, set_value, test_draft,
-    update_config, upsert_service, CloudDraft, MsInput,
+    announce_saved, blocking, check_caller, check_name_unique, config_lock, config_path,
+    load_config, normalize_name, parse_asr_timeout, same_endpoint, secret_store, set_str,
+    set_value, update_config, upsert_service, MsInput,
 };
-use crate::tray::CONFIG_CHANGED_EVENT;
 
-/// Model-list query timeout during detection (apply only). A LAN server answers in tens of
-/// milliseconds; off the LAN the file's model is used after this wait.
-const DETECT_TIMEOUT: Duration = Duration::from_secs(1);
-
-/// Model source per service with a text model, without asking the network (`file`). The
-/// preview uses it so opening a preset or file never waits on an unreachable LAN server.
+/// Model source per service with a text model: always the file's own value (`file`).
+/// Neither preview nor apply asks the network (2026-11-13 decision: applying must not wait
+/// on, or fail because of, an unreachable LAN server; the connection is checked with
+/// 「測試連線」 on the services page).
 pub(crate) fn file_sources(services: &[CloudService]) -> HashMap<String, &'static str> {
     services
         .iter()
@@ -235,7 +232,10 @@ struct PresetMeta {
     needs_key: Vec<String>,
     #[serde(default)]
     default_keys: DefaultKeys,
+    /// Still part of the file format (Android, older files), but the desktop no longer queries
+    /// the endpoint when applying (2026-11-13): the file's model name is used.
     #[serde(default)]
+    #[cfg_attr(not(test), allow(dead_code))]
     detect_llm_model: bool,
 }
 
@@ -403,78 +403,6 @@ fn load_source(source: &PresetSource) -> Result<Resolved, &'static str> {
         preset,
         sources: HashMap::new(),
     })
-}
-
-// ---------------------------------------------------------------------------------------
-// Model detection
-// ---------------------------------------------------------------------------------------
-
-/// For each service with a text model: when the preset asks for it, queries the endpoint's
-/// model list (no key, 3 s); exactly one model replaces the file's value. Records the source
-/// (`detected` / `file`) per service.
-async fn detect_models(r: &mut Resolved, http: &CloudHttp) {
-    r.sources.clear();
-    let detect = r.preset.meta.detect_llm_model;
-    let timeouts = TimeoutConfig {
-        asr_cloud_ms: DETECT_TIMEOUT.as_millis() as u64,
-        llm_cloud_ms: DETECT_TIMEOUT.as_millis() as u64,
-    };
-    let mut detected = 0usize;
-    for svc in &mut r.preset.services {
-        if svc.llm_model.is_none() {
-            continue;
-        }
-        let mut source = "file";
-        if detect {
-            if let Some(model) = detect_one(svc, http, &timeouts).await {
-                svc.llm_model = Some(model);
-                source = "detected";
-                detected += 1;
-            }
-        }
-        r.sources.insert(svc.id.clone(), source);
-    }
-    if detect {
-        info!(preset = %r.label, detected, "preset model detection");
-    }
-}
-
-pub(crate) async fn detect_one(
-    svc: &CloudService,
-    http: &CloudHttp,
-    t: &TimeoutConfig,
-) -> Option<String> {
-    let url = svc.base_url.clone()?;
-    // The id only labels the log line of the probe; it matches no saved service.
-    let draft = CloudDraft {
-        id: Some(svc.id.clone()),
-        kind: CloudKind::OpenAiCompat,
-        name: None,
-        base_url: Some(url),
-        api_key: None,
-        asr_model: None,
-        llm_model: None,
-        asr_timeout_ms: None,
-    };
-    let probe = tokio::time::timeout(
-        DETECT_TIMEOUT,
-        test_draft(
-            &draft,
-            &MemorySecretStore::new(),
-            &[],
-            http,
-            t,
-            false,
-            false,
-        ),
-    )
-    .await
-    .ok()?;
-    let (result, _) = probe.ok()?;
-    match result.models.as_deref() {
-        Some([only]) if !only.trim().is_empty() => Some(only.trim().to_owned()),
-        _ => None,
-    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -756,10 +684,6 @@ fn apply_resolved(
 // Tauri commands
 // ---------------------------------------------------------------------------------------
 
-fn http_client() -> Result<CloudHttp, &'static str> {
-    route::cloud_http_client().map_err(|_| "internal_error")
-}
-
 #[tauri::command]
 pub fn presets_list(window: tauri::WebviewWindow) -> Result<Vec<PresetSummary>, &'static str> {
     check_caller(window.label())?;
@@ -779,7 +703,7 @@ pub async fn presets_preview(
         blocking(move || load_source(&source)).await
     }
     .inspect_err(|code| warn!(code, "preset preview refused"))?;
-    // No model detection here: the preview must open at once (detection runs on apply).
+    // No network: the file's model names are used as they are (preview and apply).
     resolved.sources = file_sources(&resolved.preset.services);
     let path = config_path(&app);
     let label = resolved.label.clone();
@@ -809,7 +733,8 @@ pub async fn presets_apply(
     let mut resolved = blocking(move || load_source(&source))
         .await
         .inspect_err(|code| warn!(code, "preset apply refused"))?;
-    detect_models(&mut resolved, &http_client()?).await;
+    // No network here: the file's model names are used as they are.
+    resolved.sources = file_sources(&resolved.preset.services);
     let path = config_path(&app);
     let label = resolved.label.clone();
     let result = blocking(move || {
@@ -825,7 +750,7 @@ pub async fn presets_apply(
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 "preset applied"
             );
-            let _ = app.emit(CONFIG_CHANGED_EVENT, ());
+            announce_saved(&app);
         }
         Err(code) => warn!(preset = %label, code, "preset apply refused"),
     }
@@ -835,10 +760,8 @@ pub async fn presets_apply(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use std::sync::{Arc, Mutex};
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use v2c_core::secrets::MemorySecretStore;
 
     const TN: &str = BUILTINS[0].1;
     const RD: &str = BUILTINS[1].1;
@@ -1639,28 +1562,10 @@ llm_model = "t"
         assert!(!dir.config().exists(), "config must not be written");
     }
 
-    // ---- model detection ----
-
-    fn mock_preset(base: &str) -> String {
-        TN.replace("http://10.20.30.23:8000", base)
-            .replace("http://10.20.30.23:8001", base)
-            .replace("http://10.20.30.23:8002", base)
-    }
-
-    async fn detect_with(models: ResponseTemplate) -> Resolved {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/v1/models"))
-            .respond_with(models)
-            .mount(&server)
-            .await;
-        let mut r = resolved(&mock_preset(&server.uri()));
-        detect_models(&mut r, &route::cloud_http_client().unwrap()).await;
-        r
-    }
+    // ---- no network on preview or apply ----
 
     #[test]
-    fn preview_sources_never_touch_the_network() {
+    fn sources_are_the_file_values() {
         let r = resolved(TN);
         let s = file_sources(&r.preset.services);
         // Only the text model service gets a source, and it is the file's own value.
@@ -1668,45 +1573,16 @@ llm_model = "t"
         assert_eq!(s.get("tn-qwen"), Some(&"file"));
     }
 
-    fn qwen_model(r: &Resolved) -> String {
-        r.preset
-            .services
-            .iter()
-            .find(|s| s.id == "tn-qwen")
-            .unwrap()
-            .llm_model
-            .clone()
-            .unwrap()
-    }
-
-    #[tokio::test]
-    async fn one_listed_model_is_detected() {
-        let r = detect_with(
-            ResponseTemplate::new(200).set_body_json(json!({"data": [{"id": "my-live-model"}]})),
-        )
-        .await;
-        assert_eq!(qwen_model(&r), "my-live-model");
-        assert_eq!(r.sources.get("tn-qwen"), Some(&"detected"));
-        assert!(!r.sources.contains_key("tn-tea-asr"));
-    }
-
-    #[tokio::test]
-    async fn several_models_or_errors_fall_back_to_file() {
-        let several = detect_with(
-            ResponseTemplate::new(200).set_body_json(json!({"data": [{"id": "a"}, {"id": "b"}]})),
-        )
-        .await;
-        let server_error = detect_with(ResponseTemplate::new(500)).await;
-        let slow = detect_with(
-            ResponseTemplate::new(200)
-                .set_delay(Duration::from_secs(6))
-                .set_body_json(json!({"data": [{"id": "late"}]})),
-        )
-        .await;
-        for r in [several, server_error, slow] {
-            assert_eq!(qwen_model(&r), "Qwen3.8-27B-UD-Q6_K_L");
-            assert_eq!(r.sources.get("tn-qwen"), Some(&"file"));
-        }
+    #[test]
+    fn apply_writes_the_file_model_without_asking_the_network() {
+        // The built-in TN endpoints are unreachable here; applying must not care.
+        let dir = TempDir::new("nonet");
+        let store = MemorySecretStore::new();
+        apply(&dir.config(), &store, TN, "tn-tea-asr", &Keys::of(&[])).unwrap();
+        let cfg = load_config(&dir.config()).unwrap();
+        let qwen = cfg.cloud_service("tn-qwen").unwrap();
+        assert_eq!(qwen.llm_model.as_deref(), Some("Qwen3.8-27B-UD-Q6_K_L"));
+        assert_eq!(cfg.route.asr, "tn-tea-asr");
     }
 
     #[test]

@@ -228,3 +228,26 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] 用記事本打開匯出的檔案：確認沒有金鑰，詞庫在 `[vocabulary]`；把某個 `base_url` 改掉再匯入，預覽顯示「更新」並提示舊金鑰會刪除
 - [ ] 首頁 → 套用預設組態 → 從檔案載入：選匯出檔，進到同一個匯入預覽畫面
 - [ ] Linux（GNOME Wayland，`linux_handover.md`）：同樣操作一次，確認「匯出設定」「匯入設定」的檔案對話框能開（GTK3 行程內對話框，不走 portal；請特別用 AppImage 測，打不開就回報，改用 xdg-portal feature）
+
+### Linux 0.3.0（2026-11-13 agent 已完成建置、啟動量測、重複開啟與日誌檢查，見 `tasks/todo.md`「0.3.0 交付」）
+- [x] 安裝：`cd releases/linux && sha256sum -c --ignore-missing SHA256SUMS.txt && sudo apt install ./v2c_0.3.0_amd64.deb`（2026-11-13 你已安裝 c99d4a1 的建置，agent 冒煙測試通過）
+- [ ] `ibus restart`（安裝後還沒執行）
+- [ ] 匯出設定：.deb 與 AppImage 各試一次，檔案對話框能開、有樣式（打不開就試 `GTK_USE_PORTAL=1 v2c` 並回報）
+- [ ] 用文字編輯器開匯出檔：沒有金鑰；有 `[v2c] format = 1`、`[[cloud]]`、`[route]`；有詞庫才有 `[vocabulary]`
+- [ ] 服務頁刪一個服務 → 匯入設定 → 預覽「新增」→ 套用後服務回來、需要金鑰的服務出現金鑰欄
+- [ ] 改掉檔內某服務 `base_url` 再匯入：預覽「更新」並標示舊金鑰會刪除
+- [ ] 首頁 → 套用預設組態 →「從檔案載入」：進到同一個匯入預覽畫面
+- [ ] 手寫組態檔（只有 `[vocabulary]`）匯入，詞庫增加；故意寫 `asr_modle`，預覽上方列出 `cloud[1].asr_modle`
+- [ ] 早期錯誤通知：暫時把 `~/.local/share/v2c/models/sherpa-onnx-sense-voice-…` 改名後啟動，Wayland 應跳「找不到語音模型」類通知；測完改回
+- [ ] 按住右 Ctrl 說幾句：日誌 `Timings` 行的 `xruns=` 是否一直是 0（PipeWire 常非 0 就記下來）
+- [ ] 0.2.0 留下的目視項目：Wayland 通知精簡（T4.9）、WebKitGTK 字型／深淺色／`<dialog>`／窄視窗、匯入預覽對話框、應用程式選單與頂列圖示（方案 B）
+- [x] 重新套用一次 RD 或 TN 預設組態（語音辨識選原本的 Breeze），讓 TEA-ASR 也存到內建金鑰（2026-11-13 冒煙測試已重套 TN 與 RD，六個服務測試連線全過）
+
+### 0.3.0 修正：套用預設組態／匯入設定立即生效（Windows，c99d4a1 之後）
+> 先前的 `releases/v2c_0.3.0_x64-setup.exe` 是修正前建置的，預覽畫面會當掉、只改金鑰也要重開才生效。Linux 已驗證，見 `tasks/todo.md`「0.3.0 交付」。
+- [ ] `git pull` 到 c99d4a1 以後，跑 `tools\build-installer.ps1` 重建安裝檔（`releases\SHA256SUMS.txt` 會更新），覆蓋安裝
+- [ ] 首頁 → 套用預設組態 → TN → 選「TN TEA-ASR」→ 套用：第 2 步預覽會出現，按下後立刻顯示「已套用「TN 區網服務」，設定立即生效。」（不再等區網），服務頁三個 TN 服務測試連線通過，不用重開就能說話
+- [ ] 再套用 RD → 選「RD Breeze-ASR」：同樣立即生效，三個 RD 服務測試連線通過
+- [ ] 設定頁 → 匯入設定 → 選 `docs\examples\v2c-config.rd-lan.toml`：預覽出現，套用後顯示「已匯入…設定立即生效。」，下一句話就走 RD
+- [ ] 服務頁只改某服務的金鑰（其他不動）→ 儲存 → 不重開直接說一句，確認用的是新金鑰
+- [ ] 日誌（`%APPDATA%\v2c\logs`）出現 `providers rebuilt`，沒有金鑰、沒有辨識文字

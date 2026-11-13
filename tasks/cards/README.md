@@ -38,6 +38,7 @@
 | W20 | T4.6a ∥ T4.6b ∥ T4.7 | 圖示＋版本 0.2.0、文件、浮動標籤波形 |
 | W21 | T4.8 ∥ T4.9 | T4.8 預設組態內建 Breeze 預設金鑰（Windows 端）；T4.9 Linux Wayland 通知精簡（Linux 端）。皆無卡片檔 |
 | ✅ | 檢查點 4 | 🧑 安裝 0.2.0 實機驗收；Linux 見 `../../linux_handover.md` |
+| W21b | T4.12 | Linux：Secret Service 背景接上後重建雲端服務（啟動時序修正；2026-11-13 Linux 端，0.3.0 上為 T4.12b）。無卡片檔 |
 | W22 | T5.1 | Phase 5（2026-11-13 你決定）：組態檔格式（core `portable`）＋手寫規則 `docs/config-file.md`；新增 v2c-core 公開介面，合併需你核准 |
 | W23 | T5.2 ∥ T5.3 | 桌面（Windows＋Linux）與 Android 匯出／匯入；T5.3 另需 T2.8 合併；兩張都含 🧑，合併需你核准 |
 | W24 | T4.10 ∥ T4.11 | 桌面加速（2026-11-13 你決定）：不改輸出、不改 v2c-core 公開介面。T4.10 辨識 audio_ctx＋提早載入＋暖機＋浮動標籤延後＋Xrun 計數（🧑）；T4.11 連線重用＋Claude 提示詞快取 |

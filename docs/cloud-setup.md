@@ -29,7 +29,7 @@ v2c 預設**全部使用地端模型**：語音辨識用你電腦上的 Breeze-A
 | 需要金鑰 | TEA-ASR 與 Breeze-ASR（都已內建預設金鑰） | TEA-ASR 與 Breeze-ASR（都已內建預設金鑰） |
 
 - Breeze-ASR 的語音辨識逾時已預設為 8000 毫秒（Breeze 較慢）。
-- 文字模型的名稱會自動偵測：按「套用」時 v2c 會向伺服器查模型清單（最多等 1 秒），剛好只有一個模型就用它，否則用預設組態內寫的名稱。預覽畫面不連網，所以會立刻出現，顯示的是預設組態內寫的名稱（「預設值」）。
+- 套用時不連線檢查遠端伺服器：預覽與套用都立刻完成，文字模型直接用預設組態內寫的名稱（「預設值」），設定寫入本機後立即生效。要確認連得上，請到「服務」頁按各服務的「測試連線」。
 - 只有在能連到這些位址的網路（公司區網或 VPN）才用得到。
 
 ### 套用步驟
@@ -308,7 +308,7 @@ id_prefix = "office-"                        # 本檔所有服務代號都要以
 asr_choices = ["office-asr-fast", "office-asr-big"]   # 套用時讓使用者二選一
 needs_key = ["office-asr-big"]               # 這些服務會詢問金鑰
 # default_keys = { "office-asr-big" = "shared-lan-key" }   # 選填，見下方警告
-detect_llm_model = true                      # 自動偵測文字模型名稱
+detect_llm_model = true                      # 電腦版已忽略（套用不連網）
 
 [route]
 polish = "office-llm"
@@ -347,7 +347,7 @@ llm_model = "my-text-model"
 | `asr_choices` | 套用時可選的語音辨識服務（至少一個，且該服務要有 `asr_model`） |
 | `needs_key` | 需要金鑰的服務代號（金鑰在套用畫面輸入，存進系統金鑰庫） |
 | `default_keys` | 選填。`{ "服務代號" = "金鑰" }`：使用者沒輸入、也沒有網址相同的舊金鑰時，套用會改存這把金鑰（代號必須在 `needs_key` 內；金鑰去頭尾空白後不可為空、不可含控制字元、最多 256 字元，否則整份拒絕）。畫面只會顯示「已內建預設金鑰，可不填」，不會顯示金鑰內容 |
-| `detect_llm_model` | `true` 時向伺服器查模型清單，剛好一個就採用 |
+| `detect_llm_model` | 電腦版已忽略：套用時不連網，直接用檔內的模型名稱 |
 | `[route] polish`／`translate` | 要用的文字模型服務（該服務要有 `llm_model`） |
 | `[route] asr` | 忽略：語音辨識一律依你在套用畫面的選擇 |
 | `[[cloud]]` | 服務；`kind` 一律是 `open_ai_compat`，必須有 `base_url`，其餘欄位（`name`、`asr_model`、`llm_model`、`asr_timeout_ms`）同 `config.toml` |
