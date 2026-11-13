@@ -41,12 +41,11 @@ use v2c_core::secrets::{ApiKey, SecretStore};
 use v2c_core::vocab::Vocab;
 
 use super::cloud::{
-    check_caller, config_lock, config_path, load_config, secret_store, set_str, set_value,
-    update_config, upsert_service,
+    announce_saved, check_caller, config_lock, config_path, load_config, secret_store, set_str,
+    set_value, update_config, upsert_service,
 };
 use super::presets::{detect_one, file_sources, restore_keys, update_keys, Keys};
 use crate::app_state::AppState;
-use crate::tray::CONFIG_CHANGED_EVENT;
 
 /// Platform label written to `[v2c] exported_from`.
 const PLATFORM: &str = if cfg!(windows) { "windows" } else { "linux" };
@@ -848,7 +847,7 @@ pub async fn config_import_apply(
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 "config imported (user-chosen file)"
             );
-            let _ = app.emit(CONFIG_CHANGED_EVENT, ());
+            announce_saved(&app);
             if a.vocab_added > 0 {
                 let _ = app.emit(super::vocab::VOCAB_CHANGED_EVENT, a.vocab_total);
             }

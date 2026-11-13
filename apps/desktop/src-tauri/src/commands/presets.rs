@@ -39,7 +39,6 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::Emitter;
 use toml_edit::{Item, Table, Value};
 use tracing::{info, warn};
 use v2c_core::config::{CloudKind, CloudService, Config, RouteConfig, TimeoutConfig, LOCAL};
@@ -48,11 +47,10 @@ use v2c_core::secrets::{ApiKey, MemorySecretStore, SecretStore};
 use zeroize::Zeroize;
 
 use super::cloud::{
-    blocking, check_caller, check_name_unique, config_lock, config_path, load_config,
-    normalize_name, parse_asr_timeout, same_endpoint, secret_store, set_str, set_value, test_draft,
-    update_config, upsert_service, CloudDraft, MsInput,
+    announce_saved, blocking, check_caller, check_name_unique, config_lock, config_path,
+    load_config, normalize_name, parse_asr_timeout, same_endpoint, secret_store, set_str,
+    set_value, test_draft, update_config, upsert_service, CloudDraft, MsInput,
 };
-use crate::tray::CONFIG_CHANGED_EVENT;
 
 /// Model-list query timeout during detection (apply only). A LAN server answers in tens of
 /// milliseconds; off the LAN the file's model is used after this wait.
@@ -825,7 +823,7 @@ pub async fn presets_apply(
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 "preset applied"
             );
-            let _ = app.emit(CONFIG_CHANGED_EVENT, ());
+            announce_saved(&app);
         }
         Err(code) => warn!(preset = %label, code, "preset apply refused"),
     }

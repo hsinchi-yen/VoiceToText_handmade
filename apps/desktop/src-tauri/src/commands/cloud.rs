@@ -1040,6 +1040,15 @@ fn open_in_browser(url: &'static str) -> Result<(), &'static str> {
     cmd.map(|_| ()).map_err(|_| "open_failed")
 }
 
+/// After a command saved services and/or keys: reload `config.toml` (via
+/// `v2c:config-changed`) and rebuild the providers so a changed key is used at once. A reload
+/// alone skips the rebuild when `config.toml` came out identical (only a key changed), and the
+/// running provider would keep the old key, or none, until a restart.
+pub(crate) fn announce_saved(app: &tauri::AppHandle) {
+    let _ = app.emit(CONFIG_CHANGED_EVENT, ());
+    app.state::<AppState>().engine.rebuild_providers();
+}
+
 pub(crate) fn config_path(app: &tauri::AppHandle) -> std::path::PathBuf {
     app.state::<AppState>().paths.config_file()
 }
@@ -1136,7 +1145,7 @@ pub async fn cloud_save(
     check_caller(window.label())?;
     let path = config_path(&app);
     let row = blocking(move || save_service(&path, &secret_store()?, &draft, purposes)).await?;
-    let _ = app.emit(CONFIG_CHANGED_EVENT, ());
+    announce_saved(&app);
     Ok(row)
 }
 
@@ -1149,7 +1158,7 @@ pub async fn cloud_remove(
     check_caller(window.label())?;
     let path = config_path(&app);
     let result = blocking(move || remove_service(&path, &secret_store()?, &id)).await?;
-    let _ = app.emit(CONFIG_CHANGED_EVENT, ());
+    announce_saved(&app);
     Ok(result)
 }
 

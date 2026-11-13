@@ -1040,13 +1040,19 @@ impl Engine {
 
     // ---- config reload ---------------------------------------------------------------------
 
-    /// Rebuilds the providers from the current config without a config change. Linux calls
-    /// this once the Secret Service store is installed: it connects in the background, so the
-    /// build in [`Engine::new`] usually runs first and every cloud service fails with "no
-    /// credential store" until something rebuilds them. If the config changes while this
-    /// builds, it builds again from the newer config, so an older config's providers never
-    /// replace a newer one's (a reload that skips the provider rebuild still gets the keys).
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    /// Rebuilds the providers from the current config without a config change. Providers read
+    /// their API keys when they are built, and keys live in the keyring, not in `config.toml`,
+    /// so [`Engine::reload`] cannot see a key change. Called:
+    /// - after a command stored or removed a key (preset, file import, services page): when
+    ///   `config.toml` came out identical, the reload is a no-op and the running provider would
+    ///   keep sending the old key, or none, until a restart;
+    /// - on Linux, once the Secret Service store is installed: it connects in the background,
+    ///   so the build in [`Engine::new`] usually runs first and every cloud service fails with
+    ///   "no credential store" until something rebuilds them.
+    ///
+    /// If the config changes while this builds, it builds again from the newer config, so an
+    /// older config's providers never replace a newer one's (a reload that skips the provider
+    /// rebuild still gets the keys).
     pub fn rebuild_providers(&self) {
         loop {
             let cfg = self.config();
@@ -1637,6 +1643,46 @@ mod tests {
         assert_eq!(e.test_local_asr().await.err(), Some("already_running"));
         drop(busy);
         e.testing.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn a_key_stored_without_a_config_change_reaches_the_providers() {
+        // A keyed kind: without a key it cannot be built at all, so "has the key" is visible.
+        let mut cfg = Config::with_defaults();
+        cfg.cloud.push(CloudService {
+            id: "gem".into(),
+            name: None,
+            kind: CloudKind::Gemini,
+            base_url: None,
+            asr_model: None,
+            llm_model: None,
+            asr_timeout_ms: None,
+        });
+        cfg.route.asr = "gem".into();
+        cfg.route.polish = "gem".into();
+        let store = Arc::new(MemorySecretStore::default());
+        let dir = std::env::temp_dir().join(format!("v2c-engine-key-{}", std::process::id()));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            local_data_dir: dir,
+        };
+        let (status, _) = broadcast::channel(16);
+        let e = Engine::new(paths, cfg.clone(), status, store.clone());
+        assert!(e.providers().cloud_asr.is_none());
+
+        // A preset / import / services-page save stored the key; config.toml is unchanged.
+        store
+            .set("gem", &v2c_core::secrets::ApiKey::new("AIza-TEST"))
+            .unwrap();
+        e.reload(cfg);
+        assert!(
+            e.providers().cloud_asr.is_none(),
+            "reload alone cannot see a key change"
+        );
+
+        e.rebuild_providers();
+        assert!(e.providers().cloud_asr.is_some());
+        assert!(e.providers().cloud_polish.is_some());
     }
 
     #[tokio::test]
