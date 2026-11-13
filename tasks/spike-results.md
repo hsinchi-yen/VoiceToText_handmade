@@ -210,3 +210,27 @@ $env:CMAKE_CUDA_ARCHITECTURES = '75'         # 只編 RTX 2060 (Turing)，省很
 - 驗收要求 ≥ −30%：第 2 組 −27.5% 略低，第 1 組與先前調查（−37%）高於；GPU 共用時分母被其他程式的負載墊高，**需關掉 App 後重量**才能下定論。
 - 暖機（bench 內，含載入後第一次推論）：改前 1.77～1.83 秒，改後 1.21～1.27 秒（ctx 768）；App 的暖機另外限制 8 個 token。
 - 模型載入 9～36 秒（讀檔 I/O，受磁碟快取與其他程式影響很大），與改動無關。
+
+### T4.10 (GPU free, 2026-11-13)
+
+Measured with v2c closed (RTX 2060, q8_0, `--lang zh`, 3 interleaved rounds, `--repeat 3` = 30 clips per run). Before = `--audio-ctx 1500`, after = no flag.
+
+| Round | Before ASR mean/max (ms) | After ASR mean/max (ms) | Before/After CER | Before/After warm-up (ms) |
+|-------|--------------------------|-------------------------|------------------|---------------------------|
+| 1 | 1968 / 2511 | 1312 / 1590 | 3.6% / 3.3% | 1497 / 840 |
+| 2 | 1939 / 2254 | 1311 / 1596 | 3.6% / 3.3% | 1435 / 854 |
+| 3 | 1927 / 2228 | 1297 / 1584 | 3.6% / 3.3% | 1415 / 835 |
+| Median | 1939 | 1311 | 3.6% / 3.3% | 1435 / 840 |
+
+- ASR mean change: -32.4% (threshold -30%): PASS. CER not worse: PASS.
+
+App startup ("v2c starting" to "speech recognition ready", seconds; installed 0.2.0 vs T4.10 release build with the same DLLs, alternating, one instance at a time):
+
+| Launch | 0.2.0 baseline | T4.10 | overlay ready (base/new) |
+|--------|----------------|-------|--------------------------|
+| 1 | 5.22 | 3.77 | 1.20 / 0.83 |
+| 2 | 4.60 | 3.62 | 0.67 / 0.69 |
+| 3 | 4.88 | 3.64 | 0.69 / 0.69 |
+| Median | 4.88 | 3.64 | |
+
+- Startup gain: 1.24 s (threshold 1.5 s): FAIL (short by 0.26 s). Model files were warm in the page cache for all launches.
