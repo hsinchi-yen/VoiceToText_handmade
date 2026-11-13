@@ -185,7 +185,6 @@ fn phone_services() -> Vec<CloudServiceConfig> {
     gemini.uses = vec![CloudUse::Asr, CloudUse::Translate];
     let mut custom = svc("cloud-custom", CloudProvider::Custom);
     custom.base_url = Some("https://relay.example.com/v1".into());
-    custom.asr_timeout_ms = Some(20_000);
     let claude = svc("cloud-claude", CloudProvider::Claude);
     vec![gemini, custom, claude]
 }
@@ -238,4 +237,35 @@ fn export_skips_what_would_not_parse() {
     let e = export(&[bad], Some("cloud-custom"), None, &[]);
     assert_eq!(e.skipped, vec!["cloud-custom".to_string()]);
     assert!(portable::parse(&e.text).is_ok());
+}
+
+#[test]
+fn asr_timeout_is_ignored_and_does_not_make_a_service_updated() {
+    let file = "[v2c]\nformat = 1\n[[cloud]]\nid = \"r\"\nkind = \"open_ai_compat\"\n\
+        base_url = \"https://relay.example.com/v1\"\nllm_model = \"m\"\nasr_timeout_ms = 9000\n";
+    let mut custom = svc("cloud-custom", CloudProvider::Custom);
+    custom.base_url = Some("https://relay.example.com/v1".into());
+    custom.model = "m".into();
+    custom.asr_model = None;
+    let p = preview(file, &[custom], &[]);
+    assert_eq!(p.error_code, None);
+    assert_eq!(p.services[0].status, ImportStatus::Unchanged);
+    assert_eq!(p.services[0].config.asr_timeout_ms, None);
+    assert!(p.ignored.contains(&"asr_timeout_ms".to_string()));
+}
+
+#[test]
+fn every_valid_fixture_parses() {
+    let dir = format!("{}/../../tests/fixtures/config", env!("CARGO_MANIFEST_DIR"));
+    let mut n = 0;
+    for e in std::fs::read_dir(dir).unwrap() {
+        let path = e.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if name.starts_with("valid-") {
+            n += 1;
+            let p = preview(&std::fs::read_to_string(&path).unwrap(), &[], &[]);
+            assert_eq!(p.error_code, None, "{name}");
+        }
+    }
+    assert!(n >= 3);
 }

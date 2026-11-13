@@ -109,8 +109,8 @@ object ConfigFileIo {
             now.get(Calendar.DAY_OF_MONTH),
         )
 
-    /** Services of the preview that still need a key typed (masked field in the dialog). */
-    fun needingKeys(preview: ConfigFilePreview): List<ImportedService> = preview.services.filter { it.needsKey }
+    /** Services that get a masked key field: no key yet, or the old key is dropped. */
+    fun needingKeys(preview: ConfigFilePreview): List<ImportedService> = preview.services.filter { it.needsKey || it.dropOldKey }
 
     /** True when applying changes something (a service or a use). */
     fun hasChanges(repo: CloudRepository, preview: ConfigFilePreview): Boolean = preview.services.any { s ->

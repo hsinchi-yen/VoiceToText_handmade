@@ -248,9 +248,13 @@ pub fn preview(
             let mut c = with_suggested((*s).clone());
             c.id = phone_id(s.kind).to_owned();
             c.name = None;
+            c.asr_timeout_ms = None; // the phone cannot hold a timeout
             c
         })
         .collect();
+    if chosen.iter().any(|s| s.asr_timeout_ms.is_some()) {
+        ignored.push("asr_timeout_ms".into());
+    }
     let target = |wanted: &Option<String>, field: &str, ignored: &mut Vec<String>| {
         let id = wanted.as_deref()?;
         if id == v2c_core::config::LOCAL {
@@ -332,7 +336,7 @@ pub fn preview(
                     asr_model: s.asr_model.clone(),
                     base_url: s.base_url.clone(),
                     uses,
-                    asr_timeout_ms: s.asr_timeout_ms,
+                    asr_timeout_ms: None,
                 },
                 status,
                 needs_key: plan.key_missing.contains(&s.id),

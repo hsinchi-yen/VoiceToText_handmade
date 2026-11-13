@@ -203,4 +203,13 @@ class ConfigFileIoTest {
         assertEquals(R.string.cfg_ignored_vocab, ConfigFileIo.ignoredLabel("vocabulary"))
         assertNull(ConfigFileIo.ignoredLabel("hotkey"))
     }
+
+    @Test
+    fun aDroppedKeyGetsAKeyFieldEvenWhenTheFileDoesNotListIt() {
+        val p = preview(
+            imported(CloudKind.CUSTOM, ImportStatus.UPDATED, needsKey = false, dropOldKey = true, baseUrl = "https://x.example.com/v1"),
+            imported(CloudKind.GEMINI, ImportStatus.ADDED, needsKey = false),
+        )
+        assertEquals(listOf("cloud-custom"), ConfigFileIo.needingKeys(p).map { it.config.id })
+    }
 }

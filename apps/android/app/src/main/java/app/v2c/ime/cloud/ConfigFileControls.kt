@@ -175,7 +175,13 @@ private fun writeExport(context: Context, ffi: V2cFfi, repo: CloudRepository, ur
     val started = System.nanoTime()
     return try {
         val export = ConfigFileIo.export(ffi, repo)
-        context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(export.text.toByteArray(Charsets.UTF_8)) }
+        val out = try {
+            context.contentResolver.openOutputStream(uri, "wt")
+        } catch (_: Exception) {
+            // Some providers reject the truncate mode.
+            context.contentResolver.openOutputStream(uri, "w")
+        }
+        out?.use { it.write(export.text.toByteArray(Charsets.UTF_8)) }
             ?: return null
         val count = repo.services().size - export.skipped.size
         Log.i(TAG, "config exported services=$count skipped=${export.skipped.size} ms=${(System.nanoTime() - started) / 1_000_000}")
