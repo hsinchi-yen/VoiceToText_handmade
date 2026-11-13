@@ -7,14 +7,22 @@
 - 有 NVIDIA 顯示卡時使用 **Breeze-ASR-25**（台灣中文最準）；沒有時使用 **SenseVoice-Small**（CPU）。
 - 潤飾（去贅字、全形標點、確保繁體）與中翻英使用你自己的 **LM Studio**（選用）；也可以交給服務（公司區網的預設組態、或 Gemini 等雲端，選用）。
 
-目前版本：0.2.0（Windows，未簽章；Linux 測試中）。
+目前版本：0.3.0（Windows、Android、Linux 三個平台；Windows 版未簽章，Linux 測試中）。
 
 ## 最短路徑
 
-1. 執行安裝檔 `v2c_0.2.0_x64-setup.exe`（見下方〈安裝〉）。
+1. 執行安裝檔 `v2c_0.3.0_x64-setup.exe`（見下方〈安裝〉）。
 2. 第一次開啟會進入「初次設定」：下載語音模型、測試麥克風，約幾分鐘。
    公司區網有現成伺服器的話，也可以改在「首頁 → 套用預設組態」一鍵設好（見 [docs/cloud-setup.md](docs/cloud-setup.md)）。
 3. 在任何輸入框按住 **右 Ctrl** 說話，放開就會出字。
+
+## 0.3.0 新功能
+
+- **更快**：Breeze 語音辨識在短句上約快 32%（依錄音長度調整運算量，錯字率沒有變差）；啟動到「語音辨識就緒」約從 4.9 秒縮短到 2.7 秒（視窗建立前就開始載入模型，暖機改在背景進行，剛啟動就說的第一句可能多等不到 1 秒）。以上為開發機（RTX 2060）實測，你的電腦會有差異。
+- **Claude 潤飾更省**：使用 Claude 潤飾時會啟用提示快取（prompt caching），輸入較便宜、較快；中翻英的提示太短，不會快取。
+- **Android 雲端服務**：可設定 Gemini、OpenAI、Claude 或自訂端點，離開公司區網也能辨識與中翻英；金鑰以 Android Keystore 加密。辨識順序為區網 → 雲端 → 手機本地。見 [docs/android-install.md](docs/android-install.md)。
+- **匯出／匯入設定**：桌面版「設定」頁最下面的「匯出設定」、「匯入設定」，Android 的雲端服務區塊也有；檔案不含金鑰，匯入前會先預覽。「套用預設組態 → 從檔案載入」也走同一個預覽。手寫規則見 [docs/config-file.md](docs/config-file.md)。
+- Windows、Android、Linux 版本號統一為 0.3.0。
 
 ## 0.2.0 有什麼新的
 
@@ -40,7 +48,7 @@
 
 ## 安裝
 
-1. 取得安裝檔 `v2c_0.2.0_x64-setup.exe`。安裝檔約 460 MB，**不放在 GitHub 上**，請在自己的 Windows 電腦用一鍵腳本產生（見下方「[從原始碼建置](#從原始碼建置)」）：
+1. 取得安裝檔 `v2c_0.3.0_x64-setup.exe`。安裝檔約 460 MB，**不放在 GitHub 上**，請在自己的 Windows 電腦用一鍵腳本產生（見下方「[從原始碼建置](#從原始碼建置)」）：
    ```powershell
    powershell -ExecutionPolicy Bypass -File tools\build-windows.ps1
    ```
@@ -51,7 +59,7 @@
 
 ### 防毒軟體（Windows Defender）
 
-開發者在建置機上以 Windows Defender（病毒碼 1.463.203.0）掃描過第一版（0.1.0）的安裝檔與 `v2c.exe`，未發現威脅；0.2.0 請以你自己的掃描結果為準。
+開發者在建置機上以 Windows Defender（病毒碼 1.463.203.0）掃描過第一版（0.1.0）的安裝檔與 `v2c.exe`，未發現威脅；0.3.0 請以你自己的掃描結果為準。
 v2c 會攔截鍵盤（只為了偵測右 Ctrl，按鍵不會被記錄或擋下）並模擬打字，這類行為偶爾會被防毒軟體誤判。如果被攔下：
 
 1. 開啟「Windows 安全性」→「病毒與威脅防護」→「保護歷程記錄」，確認被攔下的是 v2c 的檔案。
@@ -103,11 +111,12 @@ v2c 就會自動使用。建議設定與顯示卡記憶體的分配請看 [docs/
 ## 服務與預設組態（選用）
 
 **公司區網（TN／RD）**：「首頁 → 套用預設組態」→ 選 TN 或 RD → 選語音辨識（TEA-ASR 或 Breeze-ASR）→「套用」，一次設好語音辨識、潤飾、中翻英。
-內建預設組態已附區網 TEA-ASR 與 Breeze-ASR 的共用預設金鑰，不用自己輸入金鑰。也可以按「從檔案載入」使用自己寫的預設組態檔。詳見 [docs/cloud-setup.md](docs/cloud-setup.md)。
+內建預設組態已附區網 TEA-ASR 與 Breeze-ASR 的共用預設金鑰，不用自己輸入金鑰。也可以按「從檔案載入」使用自己寫的預設組態檔（會先顯示和「匯入設定」相同的預覽，格式見 [docs/config-file.md](docs/config-file.md)）。詳見 [docs/cloud-setup.md](docs/cloud-setup.md)。
 
 **其他服務**：到「服務」頁按「新增服務」，用精靈串接 Gemini、OpenAI、Claude 或自訂的 OpenAI 相容端點，並指定把語音辨識／潤飾／中翻英哪些交給它。
 雲端服務會依用量向你收費。各家取得金鑰的方法請看 [docs/cloud-setup.md](docs/cloud-setup.md)，推薦的模型與設定請看 [docs/cloud-models.md](docs/cloud-models.md)。
 系統列選單的「全部改用地端」可以隨時一鍵切回。
+換電腦或分享設定：「設定」頁最下面的「匯出設定」、「匯入設定」（檔案不含金鑰），見 [docs/cloud-setup.md](docs/cloud-setup.md) 與 [docs/config-file.md](docs/config-file.md)。
 
 想自己在區網裡另一台 Ubuntu 電腦架設模型（Breeze 語音辨識＋Qwen／GLM 文字模型，CPU 或 NVIDIA GPU），讓多台電腦共用，請看 [docs/lan-server-guide.md](docs/lan-server-guide.md)。
 
@@ -117,6 +126,7 @@ v2c 就會自動使用。建議設定與顯示卡記憶體的分配請看 [docs/
 |------|------|
 | [docs/cloud-setup.md](docs/cloud-setup.md) | 預設組態、新增服務精靈、各家取得金鑰、疑難排解 |
 | [docs/cloud-models.md](docs/cloud-models.md) | 雲端服務推薦的模型與費用 |
+| [docs/config-file.md](docs/config-file.md) | 組態檔手寫規則、匯出／匯入設定檔格式 |
 | [docs/lan-server-guide.md](docs/lan-server-guide.md) | 在區網的 Ubuntu 電腦架設語音辨識與文字模型 |
 | [docs/local-setup.md](docs/local-setup.md) | 地端模型：顯示卡記憶體、LM Studio 設定 |
 | [docs/linux-setup.md](docs/linux-setup.md) | Linux 版安裝與設定（測試中） |
@@ -219,17 +229,17 @@ Breeze 模型的轉檔方式見 [tools/convert-breeze/README.md](tools/convert-b
 
 ## Android（語音鍵盤）
 
-Android 版是語音輸入法：點一下麥克風說話，文字直接輸入；「中→英」鍵說中文、輸出英文。辨識來源有區網 TEA／Breeze、手機系統辨識、可下載的本機模型（離線）。沒有設定頁。
+Android 版是語音輸入法：點一下麥克風說話，文字直接輸入；「中→英」鍵說中文、輸出英文。辨識來源有區網 TEA／Breeze、雲端服務（Gemini、OpenAI、自訂端點，選用）、手機系統辨識、可下載的本機模型（離線）。
 
 - APK 不放進 git，請自己建置：`bash tools/build-android.sh --check`（Windows：`powershell -ExecutionPolicy Bypass -File tools\build-android.ps1 -Check`）會列出缺少的工具與簽署金鑰；全部就緒後不加 `--check` 直接建置，成品在 `releases/v2c_<版本>_android.apk`，雜湊在 `releases/SHA256SUMS.txt`。
-- 安裝（側載）、授權麥克風、啟用並切換鍵盤、點一下／按住說話、長按小圖示切換辨識來源、本機模型下載、需要公司網路的功能：見 [docs/android-install.md](docs/android-install.md)。
+- 安裝（側載）、授權麥克風、啟用並切換鍵盤、點一下／按住說話、長按小圖示切換辨識來源、本機模型下載、雲端服務（自動順序：區網 → 雲端 → 手機本地）、匯入／匯出設定、需要公司網路的功能：見 [docs/android-install.md](docs/android-install.md)。
 
 ## Linux（測試中）
 
 Linux 版（Ubuntu 22.04／GNOME，透過 IBus 輸入）還沒有在實機上按住說話驗證過。這一版只有 CPU 版：語音辨識用區網的遠端服務或 SenseVoice，不支援 Breeze／CUDA。
 
-- 安裝：`sudo apt install ./v2c_0.2.0_amd64.deb`，再登出並重新登入（或執行 `ibus restart`，會讓所有 App 的輸入法短暫中斷），然後在「設定 → 鍵盤 → 輸入來源」加入「v2c 語音輸入」（「設定」裡加不進去時，用 [docs/linux-setup.md](docs/linux-setup.md) 第 7.2.1 節的 `gsettings` 指令）。.deb 會一併安裝 IBus 輸入法元件。
-- 也會產生免安裝的 `v2c_0.2.0_amd64.AppImage`，但它不含 IBus 元件，建議用 .deb。
+- 安裝：`sudo apt install ./v2c_0.3.0_amd64.deb`，再登出並重新登入（或執行 `ibus restart`，會讓所有 App 的輸入法短暫中斷），然後在「設定 → 鍵盤 → 輸入來源」加入「v2c 語音輸入」（「設定」裡加不進去時，用 [docs/linux-setup.md](docs/linux-setup.md) 第 7.2.1 節的 `gsettings` 指令）。.deb 會一併安裝 IBus 輸入法元件。
+- 也會產生免安裝的 `v2c_0.3.0_amd64.AppImage`，但它不含 IBus 元件，建議用 .deb。
 - 設定檔在 `~/.config/v2c/config.toml`，模型在 `~/.local/share/v2c/models/`。
 - 安裝檔不放進 git，請自己建置：`bash releases/linux/build.sh --check` 會列出缺少的套件；`bash releases/linux/build.sh` 會產生 .deb 與 AppImage，放在 `releases/linux/`，雜湊寫在 `releases/linux/SHA256SUMS.txt`（見 [releases/linux/README.md](releases/linux/README.md)）。
 

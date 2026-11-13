@@ -85,7 +85,7 @@ powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1 -CpuOnly  # �
 
 ## 4. 改版本號
 
-版本號要同時改這三個地方，安裝檔檔名與 App 顯示的版本才會一致（0.2.0 的安裝檔是 `releases\v2c_0.2.0_x64-setup.exe`）：
+版本號要同時改這三個地方，安裝檔檔名與 App 顯示的版本才會一致（0.3.0 的安裝檔是 `releases2c_0.3.0_x64-setup.exe`）：
 
 | 檔案 | 欄位 |
 |------|------|
