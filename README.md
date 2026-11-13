@@ -19,7 +19,7 @@
 ## 0.3.0 新功能
 
 - **更快**：Breeze 語音辨識在短句上約快 32%（依錄音長度調整運算量，錯字率沒有變差）；啟動到「語音辨識就緒」約從 4.9 秒縮短到 2.7 秒（視窗建立前就開始載入模型，暖機改在背景進行，剛啟動就說的第一句可能多等不到 1 秒）。以上為開發機（RTX 2060）實測，你的電腦會有差異。
-- **Claude 潤飾更省**：使用 Claude 潤飾時會啟用提示快取（prompt caching），輸入較便宜、較快；中翻英的提示太短，不會快取。
+- **Claude 潤飾更省**：使用 Claude 潤飾時會啟用提示快取（prompt caching），輸入較便宜、較快；中翻英的提示通常太短（低於快取門檻），多半不會被快取，但不影響結果。
 - **Android 雲端服務**：可設定 Gemini、OpenAI、Claude 或自訂端點，離開公司區網也能辨識與中翻英；金鑰以 Android Keystore 加密。辨識順序為區網 → 雲端 → 手機本地。見 [docs/android-install.md](docs/android-install.md)。
 - **匯出／匯入設定**：桌面版「設定」頁最下面的「匯出設定」、「匯入設定」，Android 的雲端服務區塊也有；檔案不含金鑰，匯入前會先預覽。「套用預設組態 → 從檔案載入」也走同一個預覽。手寫規則見 [docs/config-file.md](docs/config-file.md)。
 - Windows、Android、Linux 版本號統一為 0.3.0。
@@ -48,7 +48,7 @@
 
 ## 安裝
 
-1. 取得安裝檔 `v2c_0.3.0_x64-setup.exe`。安裝檔約 460 MB，**不放在 GitHub 上**，請在自己的 Windows 電腦用一鍵腳本產生（見下方「[從原始碼建置](#從原始碼建置)」）：
+1. 取得安裝檔 `v2c_0.3.0_x64-setup.exe`。安裝檔約 480 MB（458 MiB），**不放在 GitHub 上**，請在自己的 Windows 電腦用一鍵腳本產生（見下方「[從原始碼建置](#從原始碼建置)」）：
    ```powershell
    powershell -ExecutionPolicy Bypass -File tools\build-windows.ps1
    ```
