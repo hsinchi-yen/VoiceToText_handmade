@@ -174,11 +174,17 @@ fun detectorAt(site: LanSite, ffi: V2cFfi = FakeFfi()): LanDetector {
 }
 
 /** Reversible fake cipher: the token never contains the plaintext. */
-class FakeCipher(var broken: Boolean = false) : app.v2c.ime.cloud.SecretCipher {
-    override fun encrypt(plain: String): String =
+class FakeCipher(var broken: Boolean = false, var throwing: Boolean = false) : app.v2c.ime.cloud.SecretCipher {
+    override fun encrypt(plain: String): String {
+        if (throwing) throw java.security.ProviderException("keystore")
+        return encode(plain)
+    }
+
+    private fun encode(plain: String): String =
         java.util.Base64.getEncoder().encodeToString(("x" + plain.reversed()).toByteArray()).replace("=", "#")
 
     override fun decrypt(token: String): String? {
+        if (throwing) throw java.io.IOException("keystore")
         if (broken) return null
         val raw = String(java.util.Base64.getDecoder().decode(token.replace("#", "=")))
         return raw.removePrefix("x").reversed()

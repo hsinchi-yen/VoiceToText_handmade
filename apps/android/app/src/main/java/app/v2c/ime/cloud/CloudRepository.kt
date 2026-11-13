@@ -56,15 +56,17 @@ class CloudRepository(
     /**
      * Stores [settings] and, when [apiKey] is not blank, its key (blank keeps the existing key).
      * Uses are normalized with [CloudSetupLogic.normalizeUses] and taken away from other services.
+     * Returns false when the key could not be encrypted (settings are then left unchanged).
      */
-    fun save(settings: CloudServiceSettings, apiKey: String?) {
+    fun save(settings: CloudServiceSettings, apiKey: String?): Boolean {
         val clean = settings.copy(uses = CloudSetupLogic.normalizeUses(settings.kind, settings.uses))
+        if (!apiKey.isNullOrBlank() && !vault.put(clean.id, apiKey)) return false
         val others = services().filter { it.kind != clean.kind }.map { other ->
             other.copy(uses = other.uses - clean.uses)
         }
         (others + clean).forEach { write(it) }
         store.put(KEY_KINDS, (others + clean).joinToString(",") { it.kind.name })
-        if (!apiKey.isNullOrBlank()) vault.put(clean.id, apiKey)
+        return true
     }
 
     /** Removes the service and its key. */

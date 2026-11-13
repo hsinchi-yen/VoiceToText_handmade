@@ -92,6 +92,26 @@ class CloudStorageTest {
     }
 
     @Test
+    fun aThrowingKeystoreOnSaveReportsFailureAndStoresNothing() {
+        cipher.throwing = true
+        assertFalse(repo.save(gemini(CloudUse.ASR), "KEY-ONE-9999"))
+        assertTrue(repo.services().isEmpty())
+        assertTrue(keys.map.isEmpty())
+        // Without a new key nothing is encrypted, so saving settings still works.
+        assertTrue(repo.save(gemini(CloudUse.ASR), null))
+    }
+
+    @Test
+    fun aThrowingKeystoreOnReadMeansNoKeyInsteadOfACrash() {
+        repo.save(gemini(CloudUse.ASR), "KEY-ONE-9999")
+        cipher.throwing = true
+        val snap = repo.snapshot()
+        assertTrue(snap.keysForFfi().isEmpty())
+        assertNull(snap.readyServiceFor(CloudUse.ASR))
+        assertNull(repo.lastFour(CloudKind.GEMINI))
+    }
+
+    @Test
     fun toStringNeverContainsAKey() {
         repo.save(gemini(CloudUse.ASR), "AIzaSECRETKEY1234")
         assertFalse(repo.snapshot().toString().contains("SECRETKEY"))

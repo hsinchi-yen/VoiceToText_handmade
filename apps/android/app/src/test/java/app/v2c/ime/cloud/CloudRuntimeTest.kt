@@ -84,6 +84,38 @@ class CloudRuntimeTest {
     }
 
     @Test
+    fun aThrowingKeystoreDuringReloadIsNotReadyAndDoesNotThrow() {
+        configureGemini()
+        cipher.throwing = true
+        assertTrue(runtime.reload()) // keys unreadable, services still pushed
+        assertTrue(runtime.asrConfigured)
+        assertFalse(runtime.asrReady())
+    }
+
+    @Test
+    fun aThrowingRepositoryMeansNotReady() {
+        val badStore = object : KeyValueStore {
+            override fun get(key: String): String? = throw IllegalStateException("storage")
+            override fun put(key: String, value: String) = Unit
+            override fun remove(key: String) = Unit
+        }
+        val broken = CloudRuntime(CloudRepository(badStore, CloudKeyVault(keys, cipher)), ffi, { true }, log)
+        assertFalse(broken.reload())
+        assertFalse(broken.asrReady())
+    }
+
+    @Test
+    fun forcedReloadClearsATestedButUnsavedDraft() {
+        // Nothing saved and never pushed: a plain reload sends nothing ...
+        runtime.reload()
+        assertTrue(ffi.cloudSets.isEmpty())
+        // ... but after a draft test the empty set must reach the FFI.
+        runtime.reload(force = true)
+        assertTrue(ffi.cloudSets.single().first.isEmpty())
+        assertTrue(ffi.cloudSets.single().second.isEmpty())
+    }
+
+    @Test
     fun logsNeverContainTheKey() {
         configureGemini()
         runtime.reload()

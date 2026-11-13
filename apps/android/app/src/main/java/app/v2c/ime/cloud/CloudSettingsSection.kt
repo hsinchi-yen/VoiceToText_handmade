@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledTonalButton
@@ -30,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import app.v2c.ime.R
@@ -90,30 +92,33 @@ fun CloudSettingsSection() {
                     editing = if (editing == kind) null else kind
                 }
                 if (editing == kind) {
+                    // Decrypting the saved key is a Keystore call: off the main thread.
+                    var savedKeyHint by remember(kind, version) { mutableStateOf<String?>(null) }
+                    LaunchedEffect(kind, version) {
+                        savedKeyHint = withContext(Dispatchers.IO) { CloudSetupLogic.maskedKey(repo.lastFour(kind)) }
+                    }
                     ProviderEditor(
                         kind = kind,
                         saved = saved,
                         repo = repo,
-                        savedKeyHint = remember(version) { CloudSetupLogic.maskedKey(repo.lastFour(kind)) },
+                        savedKeyHint = savedKeyHint,
                         onTest = { draft, key ->
                             withContext(Dispatchers.IO) {
                                 try {
                                     CloudSetupLogic.testDraft(ffi, draft, key, repo.snapshot())
                                 } finally {
                                     // The draft stays in Rust memory after a test; restore the saved set.
-                                    runtime.reload()
+                                    runtime.reload(force = true)
                                 }
                             }
                         },
                         onSave = { draft, key ->
-                            scope.launch {
-                                withContext(Dispatchers.IO) {
-                                    repo.save(draft, key)
-                                    runtime.reload()
-                                    resetPickIfCloudGone(context, repo)
-                                }
-                                version++
-                            }
+                            withContext(Dispatchers.IO) {
+                                val ok = repo.save(draft, key)
+                                runtime.reload()
+                                resetPickIfCloudGone(context, repo)
+                                ok
+                            }.also { version++ }
                         },
                         onRemove = {
                             scope.launch {
@@ -181,7 +186,7 @@ private fun ProviderEditor(
     repo: CloudRepository,
     savedKeyHint: String?,
     onTest: suspend (CloudServiceSettings, String?) -> List<UseTestResult>,
-    onSave: (CloudServiceSettings, String?) -> Unit,
+    onSave: suspend (CloudServiceSettings, String?) -> Boolean,
     onRemove: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -198,6 +203,7 @@ private fun ProviderEditor(
     var results by remember(kind) { mutableStateOf<List<UseTestResult>>(emptyList()) }
     var problem by remember(kind) { mutableStateOf<DraftProblem?>(null) }
     var savedNote by remember(kind) { mutableStateOf(false) }
+    var saveFailed by remember(kind) { mutableStateOf(false) }
 
     fun draft() = CloudServiceSettings(kind, model, asrModel, baseUrl, CloudSetupLogic.normalizeUses(kind, uses))
 
@@ -251,6 +257,8 @@ private fun ProviderEditor(
             },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
+            // Other keyboards must not learn or suggest the key.
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
             modifier = Modifier.fillMaxWidth(),
         )
         // Step: models (pre-filled with the suggested ones).
@@ -304,6 +312,13 @@ private fun ProviderEditor(
                 )
             }
         }
+        if (saveFailed) {
+            Text(
+                stringResource(R.string.cloud_save_failed),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
         if (savedNote) Text(stringResource(R.string.cloud_saved), style = MaterialTheme.typography.bodySmall)
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -327,9 +342,14 @@ private fun ProviderEditor(
                 enabled = !testing,
                 onClick = {
                     if (check()) {
-                        onSave(draft(), key)
-                        key = ""
-                        savedNote = true
+                        val d = draft()
+                        val typed = key
+                        scope.launch {
+                            val ok = onSave(d, typed)
+                            saveFailed = !ok
+                            savedNote = ok
+                            if (ok) key = ""
+                        }
                     }
                 },
             ) { Text(stringResource(R.string.cloud_save)) }

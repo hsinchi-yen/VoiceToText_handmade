@@ -61,11 +61,22 @@ class CloudRuntime(
 
     @Volatile private var everPushed = false
 
-    /** Re-reads settings and keys and calls `set_cloud_services`. Returns [loaded]. */
-    fun reload(): Boolean {
-        val snap = repository.snapshot()
+    /**
+     * Re-reads settings and keys and calls `set_cloud_services`. Returns [loaded]. [force] pushes
+     * even an empty set that was never pushed (clears a tested-but-unsaved draft in Rust memory).
+     * Never throws: a failing Keystore or storage means "not ready".
+     */
+    fun reload(force: Boolean = false): Boolean {
+        val snap = try {
+            repository.snapshot()
+        } catch (e: Exception) {
+            log.log("cloud load failed type=${e.javaClass.simpleName}")
+            snapshot = CloudSnapshot.EMPTY
+            loaded = false
+            return false
+        }
         snapshot = snap
-        if (snap.services.isEmpty() && !everPushed) {
+        if (snap.services.isEmpty() && !everPushed && !force) {
             loaded = true
             return true
         }

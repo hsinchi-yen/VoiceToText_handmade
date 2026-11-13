@@ -68,11 +68,9 @@
     <string name="cloud_close">收合</string>
     <string name="cloud_status_configured">已設定</string>
     <string name="cloud_status_not_configured">尚未設定</string>
-    <string name="cloud_uses_asr_translate">語音辨識、中翻英</string>
     <string name="cloud_use_asr">語音辨識</string>
     <string name="cloud_use_translate">中翻英</string>
     <string name="cloud_use_asr_only_note">Claude 不收音訊，只能用於中翻英。</string>
-    <string name="cloud_get_key">取得金鑰</string>
     <string name="cloud_get_key_help">在官方頁面建立金鑰後複製，回到這裡貼上。</string>
     <string name="cloud_get_key_custom">填入端點網址（需要 https://，本機測試可用 http://localhost），伺服器若需要金鑰再貼上。</string>
     <string name="cloud_open_key_page">開啟官方金鑰頁</string>
@@ -84,12 +82,12 @@
     <string name="cloud_base_url_label">端點網址</string>
     <string name="cloud_uses_label">用於</string>
     <string name="cloud_one_per_use">語音辨識、中翻英各只能指定一個雲端服務，選了會取代原本的設定。</string>
+    <string name="cloud_save_failed">無法安全儲存金鑰（Keystore 發生錯誤），請再試一次</string>
     <string name="cloud_test">測試連線</string>
     <string name="cloud_testing">測試中…</string>
     <string name="cloud_save">儲存</string>
     <string name="cloud_saved">已儲存，下一句話生效</string>
     <string name="cloud_remove">移除</string>
-    <string name="cloud_removed">已移除</string>
     <string name="cloud_test_ok">%1$s：連線成功（%2$d 毫秒）</string>
     <string name="cloud_test_fail">%1$s：%2$s</string>
     <string name="cloud_test_unauthorized">金鑰錯誤</string>

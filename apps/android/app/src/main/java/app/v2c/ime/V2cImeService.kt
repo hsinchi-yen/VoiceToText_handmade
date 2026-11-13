@@ -216,7 +216,13 @@ class V2cImeService :
     /** Loads the cloud settings and keys into the FFI off the main thread, then refreshes the UI. */
     private fun refreshCloud() {
         scope.launch {
-            withContext(Dispatchers.IO) { cloud.reload() }
+            withContext(Dispatchers.IO) {
+                try {
+                    cloud.reload()
+                } catch (e: Exception) {
+                    Log.w(LOG_TAG, "cloud reload failed type=${e.javaClass.simpleName}")
+                }
+            }
             session.onCloudChanged()
             source.refresh()
         }

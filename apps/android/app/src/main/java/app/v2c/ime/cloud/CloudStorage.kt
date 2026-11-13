@@ -3,7 +3,6 @@ package app.v2c.ime.cloud
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import java.security.GeneralSecurityException
 import java.security.KeyStore
 import java.util.Base64
 import javax.crypto.Cipher
@@ -78,9 +77,9 @@ class KeystoreSecretCipher(private val alias: String = DEFAULT_ALIAS) : SecretCi
             )
             String(cipher.doFinal(raw, IV_BYTES, raw.size - IV_BYTES), Charsets.UTF_8)
         }
-    } catch (_: GeneralSecurityException) {
-        null
-    } catch (_: IllegalArgumentException) {
+    } catch (_: Exception) {
+        // GeneralSecurityException, IOException from KeyStore.load, ProviderException on some
+        // devices, bad Base64: all mean "cannot read", never a crash.
         null
     }
 
@@ -115,14 +114,26 @@ class KeystoreSecretCipher(private val alias: String = DEFAULT_ALIAS) : SecretCi
  */
 class CloudKeyVault(private val store: KeyValueStore, private val cipher: SecretCipher) {
 
-    fun put(serviceId: String, apiKey: String) {
-        store.put(storeKey(serviceId), cipher.encrypt(apiKey.trim()))
+    /** Encrypts and stores the key. False when the Keystore failed (nothing is stored). */
+    fun put(serviceId: String, apiKey: String): Boolean {
+        val token = try {
+            cipher.encrypt(apiKey.trim())
+        } catch (_: Exception) {
+            return false
+        }
+        store.put(storeKey(serviceId), token)
+        return true
     }
 
     /** The decrypted key, or null when none is stored or it cannot be decrypted. */
     fun get(serviceId: String): String? {
         val token = store.get(storeKey(serviceId)) ?: return null
-        return cipher.decrypt(token)?.takeIf { it.isNotBlank() }
+        val plain = try {
+            cipher.decrypt(token)
+        } catch (_: Exception) {
+            null
+        }
+        return plain?.takeIf { it.isNotBlank() }
     }
 
     fun has(serviceId: String): Boolean = store.get(storeKey(serviceId)) != null
