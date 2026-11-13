@@ -130,7 +130,7 @@
         autocomplete="off"
         spellcheck="false"
         supporting={keyHint(s)}
-        bind:value={keys[s.id]}
+        bind:value={() => keys[s.id] ?? "", (v) => (keys[s.id] = v)}
       />
     {/each}
 
