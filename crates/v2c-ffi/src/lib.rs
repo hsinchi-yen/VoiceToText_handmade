@@ -55,15 +55,16 @@ pub fn translate(text: String, service_id: String) -> Result<String, FfiError> {
 /// their API keys in memory only. `keys` maps service id to key; a missing key makes the
 /// service answer `Unauthorized` (custom endpoints may run without one).
 ///
-/// `Config` for: empty / duplicate id, an id that is also a LAN service id, `Custom` without
-/// `base_url`, or a `base_url` that is not HTTPS (HTTP is accepted on loopback only). Nothing
-/// is changed when it fails.
+/// `Config` for: empty / duplicate id, an id with leading or trailing whitespace, an id that
+/// is also a LAN service id, `Custom` without `base_url`, a `base_url` that is not HTTPS
+/// (HTTP is accepted on loopback only), or `asr_timeout_ms` of 0. Nothing is changed when it
+/// fails.
 #[uniffi::export]
 pub fn set_cloud_services(
     services: Vec<CloudServiceConfig>,
     keys: std::collections::HashMap<String, String>,
 ) -> Result<(), FfiError> {
-    if services.iter().any(|s| services::lan_has(s.id.trim())) {
+    if services.iter().any(|s| services::lan_has(&s.id)) {
         return Err(FfiError::Config);
     }
     services::set_cloud(services::Registry::from_cloud(services, keys)?);
@@ -138,6 +139,7 @@ mod tests {
             asr_model: Some("am".into()),
             base_url: Some(base.into()),
             uses: vec![CloudUse::Asr, CloudUse::Translate],
+            asr_timeout_ms: None,
         }
     }
 

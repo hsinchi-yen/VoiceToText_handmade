@@ -138,6 +138,10 @@ pub struct CloudServiceConfig {
     /// Required for `Custom`; optional override otherwise. HTTPS, or HTTP on loopback only.
     pub base_url: Option<String>,
     pub uses: Vec<CloudUse>,
+    /// Speech recognition timeout for this service in ms; `None` uses the global cloud ASR
+    /// default. Raise it for slow custom endpoints. Must be greater than 0.
+    #[uniffi(default = None)]
+    pub asr_timeout_ms: Option<u64>,
 }
 
 /// Result of [`crate::test_connection`]: `error` is `None` on success.
@@ -275,8 +279,13 @@ impl Registry {
         let mut order = Vec::new();
         let mut uses = HashMap::new();
         for c in configs {
-            let id = c.id.trim().to_owned();
-            if id.is_empty() || services.contains_key(&id) {
+            // Ids are matched exactly (keys, `service_id`), so surrounding whitespace is
+            // rejected instead of trimmed: trimming would detach the id from its key.
+            let id = c.id;
+            if id.is_empty() || id.trim() != id || services.contains_key(&id) {
+                return Err(FfiError::Config);
+            }
+            if c.asr_timeout_ms == Some(0) {
                 return Err(FfiError::Config);
             }
             let base_url = non_empty(c.base_url);
@@ -292,7 +301,7 @@ impl Registry {
                 base_url,
                 asr_model: non_empty(c.asr_model),
                 llm_model: non_empty(Some(c.model)),
-                asr_timeout_ms: None,
+                asr_timeout_ms: c.asr_timeout_ms,
             };
             if let Some(key) = keys.get(&id).filter(|k| !k.is_empty()) {
                 store
@@ -756,7 +765,47 @@ mod cloud_tests {
             asr_model: Some("am".into()),
             base_url: base.map(str::to_owned),
             uses: vec![CloudUse::Asr, CloudUse::Translate],
+            asr_timeout_ms: None,
         }
+    }
+
+    #[test]
+    fn id_with_surrounding_whitespace_is_rejected() {
+        for id in [" cloud", "cloud ", "\tcloud", "cloud\n"] {
+            let err =
+                Registry::from_cloud(vec![cfg(id, CloudProvider::Gemini, None)], keys(id, "k"))
+                    .unwrap_err();
+            assert_eq!(err, FfiError::Config, "id {id:?}");
+        }
+        assert!(Registry::from_cloud(
+            vec![cfg("cloud", CloudProvider::Gemini, None)],
+            keys("cloud", "k")
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn asr_timeout_is_per_service_and_zero_is_rejected() {
+        let mut slow = cfg("slow", CloudProvider::Gemini, None);
+        slow.asr_timeout_ms = Some(20_000);
+        let plain = cfg("plain", CloudProvider::Gemini, None);
+        let r = Registry::from_cloud(vec![slow, plain], HashMap::new()).unwrap();
+        let t = TimeoutConfig::default();
+        assert_eq!(
+            r.service("slow").unwrap().asr_timeout(&t),
+            std::time::Duration::from_millis(20_000)
+        );
+        assert_eq!(
+            r.service("plain").unwrap().asr_timeout(&t),
+            std::time::Duration::from_millis(t.asr_cloud_ms)
+        );
+
+        let mut zero = cfg("zero", CloudProvider::Gemini, None);
+        zero.asr_timeout_ms = Some(0);
+        assert_eq!(
+            Registry::from_cloud(vec![zero], HashMap::new()).unwrap_err(),
+            FfiError::Config
+        );
     }
 
     fn keys(id: &str, key: &str) -> HashMap<String, String> {

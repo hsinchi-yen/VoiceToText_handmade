@@ -165,6 +165,7 @@ val cfg = CloudServiceConfig(
     asrModel = "gemini-3.6-flash",     // null / blank = the provider's suggested model
     baseUrl = null,                    // required for CUSTOM; HTTPS only (HTTP on loopback)
     uses = listOf(CloudUse.ASR, CloudUse.TRANSLATE),
+    asrTimeoutMs = null,               // optional; e.g. 20000uL for a slow custom endpoint
 )
 withContext(Dispatchers.IO) { setCloudServices(listOf(cfg), mapOf("cloud-asr" to apiKey)) }
 
@@ -176,9 +177,9 @@ if (r.error == null) show("${r.latencyMs} ms") else show(r.error)  // FfiExcepti
 
 | Kotlin | Notes |
 |--------|-------|
-| `setCloudServices(services, keys)` | `FfiException.Config` for an empty/duplicate id, an id that is a LAN id, `CUSTOM` without `baseUrl`, or a non-HTTPS `baseUrl` (loopback HTTP is allowed); on failure nothing changes. Empty list clears the cloud services |
+| `setCloudServices(services, keys)` | `FfiException.Config` for an empty/duplicate id, an id with leading/trailing whitespace (rejected, not trimmed), an id that is a LAN id, `asrTimeoutMs = 0`, `CUSTOM` without `baseUrl`, or a non-HTTPS `baseUrl` (loopback HTTP is allowed); on failure nothing changes. Empty list clears the cloud services |
 | `testConnection(serviceId, purpose)` | returns `TestResult(latencyMs: ULong, error: FfiException?)` (not thrown). ASR sends a generated 1 s tone, translate sends a fixed sentence. Codes: `Unauthorized` (bad key, also a missing key), `RateLimited` (HTTP 429, which includes out-of-quota), `Unreachable` (network), `Unsupported` (endpoint without audio / 404; Claude + ASR), `Timeout`, `Server`, `BadResponse` |
-| `transcribePcm` / `translate` with a cloud id | `Unsupported` if the service is not set up for that purpose (`uses`) or is Claude + ASR; `Unauthorized` if an official provider has no key. Timeouts: default ASR timeout for recognition, 8000 ms for translation. No redirects are followed |
+| `transcribePcm` / `translate` with a cloud id | `Unsupported` if the service is not set up for that purpose (`uses`) or is Claude + ASR; `Unauthorized` if an official provider has no key. Timeouts: recognition uses the service's `asrTimeoutMs` (default: the global cloud ASR timeout), translation 8000 ms. No redirects are followed |
 | `chooseAsr(lan, cloudReady, systemAvailable, localModelReady, pick)` | new `cloudReady` (service set up + key readable + `NET_CAPABILITY_VALIDATED`), `AsrPick.CLOUD`, `AsrSource.CLOUD`, `AsrHint.CLOUD_NOT_READY` (forced cloud but not ready: no silent switch). `AsrPlan` gained `fallback2`: LAN -> `fallback = CLOUD`, `fallback2 = LOCAL` (each only when available; same PCM). `retrySpeak` is true when `fallback` is `NONE` |
 
 `translate` / `transcribePcm` throw `NotLoaded` for an id that is not a cloud id until
