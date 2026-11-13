@@ -31,7 +31,8 @@
   }
 
   // A render error inside the dialog must not leave a modal the user cannot close: showModal()
-  // makes the rest of the window inert, so a stuck dialog locks the whole app.
+  // makes the rest of the window inert, so a stuck dialog locks the whole app. `crashed` is never
+  // reset: callers unmount the dialog on close.
   let crashed = $state(false);
   const canDismiss = $derived(dismissible || crashed);
 
@@ -66,8 +67,8 @@
       {#if actions}<div class="actions">{@render actions()}</div>{/if}
 
       {#snippet failed()}
-        <p class="body" role="alert">畫面發生錯誤。請關閉這個視窗後再試一次；若已按過「套用」，請到「服務」頁確認結果。</p>
-        <div class="actions"><Button onclick={() => el?.close()}>關閉</Button></div>
+        <p class="body" role="alert">畫面發生錯誤。請關閉這個對話框後再試一次；若已按過「套用」，請到「服務」頁確認結果。</p>
+        <div class="actions"><Button autofocus onclick={() => el?.close()}>關閉</Button></div>
       {/snippet}
     </svelte:boundary>
   </div>
