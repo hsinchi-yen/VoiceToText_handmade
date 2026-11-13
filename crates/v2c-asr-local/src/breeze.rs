@@ -165,7 +165,47 @@ impl BreezeOutput {
     }
 }
 
+/// Tracks a background warm-up so a recognition that arrives meanwhile can be reported.
+///
+/// The warm-up runs through the same `state` mutex as every recognition, so a clip that comes
+/// in during warm-up simply waits for the lock and then runs normally; this only records that
+/// it happened.
+#[derive(Debug, Default)]
+pub struct WarmGate {
+    warming: std::sync::atomic::AtomicBool,
+    waited: std::sync::atomic::AtomicBool,
+}
+
+impl WarmGate {
+    /// A warm-up is about to run (call before spawning it, so no clip can slip in unnoticed).
+    pub fn begin(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.waited.store(false, SeqCst);
+        self.warming.store(true, SeqCst);
+    }
+
+    /// A recognition is starting; notes whether it has to wait for the warm-up.
+    pub fn note_use(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.warming.load(SeqCst) {
+            self.waited.store(true, SeqCst);
+        }
+    }
+
+    /// The warm-up ended; returns whether a recognition waited on it.
+    pub fn end(&self) -> bool {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.warming.store(false, SeqCst);
+        self.waited.swap(false, SeqCst)
+    }
+
+    pub fn is_warming(&self) -> bool {
+        self.warming.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
 struct Inner {
+    warm: WarmGate,
     // Kept alive for `state`; whisper-rs states hold an `Arc` to the context internally.
     _ctx: WhisperContext,
     /// One reusable state (GPU buffers are allocated once). Inference is serialized.
@@ -234,6 +274,7 @@ impl BreezeAsr {
             .map_err(|_| provider_error(ProviderErrorKind::Server))?;
         Ok(Self {
             inner: Arc::new(Inner {
+                warm: WarmGate::default(),
                 _ctx: ctx,
                 state: Mutex::new(state),
                 opts,
@@ -250,18 +291,40 @@ impl BreezeAsr {
         self.inner.run(clip, ctx, None)
     }
 
+    /// Marks a warm-up as pending. Call it before handing [`BreezeAsr::warm_up`] to another
+    /// thread, so a recognition that starts in between is counted as waiting.
+    pub fn begin_warm_up(&self) {
+        self.inner.warm.begin();
+    }
+
     /// Initialises GPU kernels with 1 s of silence at the smallest context and at most
-    /// [`WARMUP_MAX_TOKENS`] tokens. The output is discarded.
-    pub fn warm_up(&self) -> Result<()> {
+    /// [`WARMUP_MAX_TOKENS`] tokens. The output is discarded. It holds the state lock, so a
+    /// recognition during warm-up waits for it. Returns `(ok, an utterance waited on it)`.
+    pub fn warm_up(&self) -> (bool, bool) {
+        if !self.inner.warm.is_warming() {
+            self.inner.warm.begin();
+        }
         let clip = AudioClip::new(vec![0.0; SAMPLE_RATE as usize]);
-        self.inner
-            .run(&clip, &AsrContext::default(), Some(WARMUP_MAX_TOKENS))
-            .map(|_| ())
+        let ok = self
+            .inner
+            .run_inner(&clip, &AsrContext::default(), Some(WARMUP_MAX_TOKENS))
+            .is_ok();
+        (ok, self.inner.warm.end())
     }
 }
 
 impl Inner {
     fn run(
+        &self,
+        clip: &AudioClip,
+        ctx: &AsrContext,
+        max_tokens: Option<i32>,
+    ) -> Result<BreezeOutput> {
+        self.warm.note_use();
+        self.run_inner(clip, ctx, max_tokens)
+    }
+
+    fn run_inner(
         &self,
         clip: &AudioClip,
         ctx: &AsrContext,
@@ -443,6 +506,57 @@ mod tests {
             prompt: "a\0b".into(),
         };
         assert_eq!(initial_prompt(&ctx), "ab");
+    }
+
+    #[test]
+    fn warm_gate_reports_a_clip_that_arrived_during_warm_up() {
+        let gate = WarmGate::default();
+        gate.note_use(); // before any warm-up: nothing to report
+        gate.begin();
+        assert!(gate.is_warming());
+        gate.note_use();
+        assert!(gate.end());
+        assert!(!gate.is_warming());
+        // The next warm-up starts clean.
+        gate.begin();
+        assert!(!gate.end());
+    }
+
+    #[test]
+    fn clip_during_warm_up_waits_on_the_state_lock_and_runs() {
+        // The same shape as `Inner`: warm-up and recognition share one mutex.
+        let gate = Arc::new(WarmGate::default());
+        let state = Arc::new(Mutex::new(0u32));
+        gate.begin();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let warm = {
+            let (gate, state) = (Arc::clone(&gate), Arc::clone(&state));
+            std::thread::spawn(move || {
+                let mut g = state.lock().unwrap();
+                locked_tx.send(()).unwrap();
+                release_rx.recv().unwrap(); // the warm-up is still running
+                *g += 1;
+                drop(g);
+                gate.end()
+            })
+        };
+        locked_rx.recv().unwrap();
+        let clip = {
+            let (gate, state) = (Arc::clone(&gate), Arc::clone(&state));
+            std::thread::spawn(move || {
+                gate.note_use();
+                let mut g = state.lock().unwrap(); // blocks until the warm-up lets go
+                *g += 10;
+                *g
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(!clip.is_finished(), "the clip must wait for the warm-up");
+        release_tx.send(()).unwrap();
+        // The warm-up ran first, then the clip: no error, nothing dropped.
+        assert_eq!(clip.join().unwrap(), 11);
+        assert!(warm.join().unwrap(), "the wait was reported");
     }
 
     #[test]

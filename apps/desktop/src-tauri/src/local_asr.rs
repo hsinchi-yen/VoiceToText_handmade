@@ -232,12 +232,45 @@ pub fn load_model(
         }
         LocalAsrKind::Breeze => {
             let model = breeze_model(cfg, paths).ok_or("model_missing")?;
-            load_breeze(cfg, &model).map(|b| Arc::new(b) as Arc<dyn AsrProvider>)
+            let breeze = Arc::new(load_breeze(cfg, &model)?);
+            breeze.begin_warm_up();
+            start_background_warmup(Arc::clone(&breeze), |b| b.warm_up());
+            Ok(breeze as Arc<dyn AsrProvider>)
         }
     }
 }
 
-/// Loads Breeze and runs a warm-up (blocking; run off the async workers).
+/// Runs `warm` on its own thread and logs `warmup_ms`, `ok`, and whether an utterance waited.
+///
+/// The thread owns a clone of `asr`, so [`LocalEngines::switch_model`] (which waits until the
+/// old model's `Arc` is unique) does not drop the model while the warm-up is still on the GPU.
+/// `warm` holds the model's own lock: an utterance that arrives meanwhile waits for it and then
+/// runs normally (never an error). The caller marks the warm-up pending first
+/// (`begin_warm_up`), so "ready" is reported without waiting for it.
+fn start_background_warmup<T, F>(asr: Arc<T>, warm: F) -> Option<std::thread::JoinHandle<()>>
+where
+    T: ?Sized + Send + Sync + 'static,
+    F: FnOnce(&T) -> (bool, bool) + Send + 'static,
+{
+    std::thread::Builder::new()
+        .name("v2c-asr-warmup".into())
+        .spawn(move || {
+            let t = Instant::now();
+            let (ok, utterance_waited) = warm(&asr);
+            info!(
+                warmup_ms = t.elapsed().as_millis() as u64,
+                ok,
+                utterance_waited,
+                background = true,
+                "Breeze warm-up"
+            );
+        })
+        .map_err(|e| warn!(error = %e, "could not start the warm-up thread"))
+        .ok()
+}
+
+/// Loads Breeze (blocking; run off the async workers). The warm-up is started by the caller,
+/// in the background ([`start_background_warmup`]).
 pub fn load_breeze(cfg: &Config, model: &Path) -> Result<BreezeAsr, &'static str> {
     let opts = BreezeOptions {
         use_gpu: cfg.gpu.enabled && cfg.gpu.profile != GpuProfile::CpuOnly,
@@ -254,14 +287,6 @@ pub fn load_breeze(cfg: &Config, model: &Path) -> Result<BreezeAsr, &'static str
         gpu_requested = breeze.options().use_gpu,
         model = %model.file_name().map(|f| f.to_string_lossy()).unwrap_or_default(),
         "Breeze loaded"
-    );
-    // The first inference initialises GPU kernels; do it now, not on the first word.
-    let t = Instant::now();
-    let warm = breeze.warm_up();
-    info!(
-        warmup_ms = t.elapsed().as_millis() as u64,
-        ok = warm.is_ok(),
-        "Breeze warm-up"
     );
     Ok(breeze)
 }
@@ -363,6 +388,43 @@ pub(crate) mod tests {
                 lang: Lang::Zh,
             })
         }
+    }
+
+    #[test]
+    fn ready_does_not_wait_for_the_warmup_and_the_model_stays_held() {
+        use std::sync::mpsc;
+        let census = Arc::new(Census::default());
+        let e = LocalEngines::default();
+        let asr = FakeAsr::load(&census).unwrap();
+        let (started_tx, started_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        // Same shape as `load_model`: the slot gets the model, the warm-up thread a clone.
+        let handle = start_background_warmup(Arc::clone(&asr), move |_| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap(); // the warm-up is still running
+            (true, true)
+        })
+        .unwrap();
+        started_rx.recv().unwrap();
+        e.switch_model(Some(LocalAsrKind::Breeze), false, Duration::ZERO, || {
+            Ok(asr.clone())
+        })
+        .unwrap();
+        drop(asr);
+        // Startup can finish ("speech recognition ready") while the warm-up is in flight.
+        e.set_startup(Startup::Done(None));
+        assert!(e.active().is_ok(), "ready before the warm-up completes");
+        // A model switch must not drop the model under the running warm-up.
+        assert_eq!(
+            e.switch_model(None, false, Duration::from_millis(50), || unreachable!()),
+            Err("model_busy")
+        );
+        assert_eq!(census.live(), 1);
+        release_tx.send(()).unwrap();
+        handle.join().unwrap();
+        e.switch_model(None, false, Duration::from_secs(5), || unreachable!())
+            .unwrap();
+        assert_eq!(census.live(), 0);
     }
 
     #[test]
