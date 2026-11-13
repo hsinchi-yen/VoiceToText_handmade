@@ -228,4 +228,4 @@ words = ["Breeze-ASR", "台積電", "v2c"]
 | `route_no_model` | 指定的服務沒有對應的模型（`open_ai_compat` 沒有建議值，所以 `route.asr` 指向它時一定要寫 `asr_model`，`polish`／`translate` 要寫 `llm_model`） | 補上 `asr_model` 或 `llm_model`。 |
 | `preset_bad_reference` | `needs_key` 列了檔案裡沒有的服務、`default_keys` 的 id 不在 `needs_key` 內，或 `asr_choices` 列了不能辨識語音的服務 | 補上該服務、把 id 加進 `needs_key`，或只在 `asr_choices` 列 `local` 與能辨識語音的服務。 |
 | `invalid_key` | 共用金鑰是空的、太長或含控制字元 | 重新貼上正確的金鑰（最長 256 字元）。 |
-| `too_large` | 檔案超過 64 KB | 拆成較小的檔案。 |
+| `too_large` | 檔案超過 256 KB | 拆成較小的檔案。 |

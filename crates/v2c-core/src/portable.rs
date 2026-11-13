@@ -30,7 +30,7 @@ use crate::vocab::{self, Vocab};
 /// The only format version this build understands.
 pub const FORMAT_VERSION: u32 = 1;
 /// Largest file text [`parse`] accepts, in bytes.
-pub const MAX_FILE_BYTES: usize = 64 * 1024;
+pub const MAX_FILE_BYTES: usize = 256 * 1024;
 /// Longest display name of a compatible endpoint, in characters.
 pub const NAME_MAX_CHARS: usize = 32;
 /// Shortest and longest per-service speech recognition timeout, ms.
@@ -622,7 +622,7 @@ pub fn parse(text: &str) -> Result<PortableFile, PortableError> {
     let mut ignored: Vec<String> = table
         .keys()
         .filter(|k| !WHITELIST.contains(&k.as_str()))
-        .cloned()
+        .map(|k| field_label(k))
         .collect();
     ignored.sort();
     ignored.extend(unknown_fields(&table));
@@ -1271,6 +1271,14 @@ mod tests {
         assert_eq!(f.ignored, ["audio", "hotkey"]);
         let plan = plan_merge(&Config::default(), &Vocab::default(), &f, &|_| false);
         assert_eq!(plan.ignored, ["audio", "hotkey"]);
+    }
+
+    #[test]
+    fn odd_top_level_section_names_are_not_echoed() {
+        // A top-level key before any table header is a root key, not a field of `[v2c]`.
+        let f = parse("\"sk-SECRET value\" = 1\n[v2c]\nformat = 1\n").unwrap();
+        assert_eq!(f.ignored, ["?"]);
+        assert!(!format!("{f:?}").contains("SECRET"));
     }
 
     #[test]
