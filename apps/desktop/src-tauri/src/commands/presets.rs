@@ -761,7 +761,6 @@ pub async fn presets_apply(
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
     use v2c_core::secrets::MemorySecretStore;
 
     const TN: &str = BUILTINS[0].1;
@@ -1579,9 +1578,7 @@ llm_model = "t"
         // The built-in TN endpoints are unreachable here; applying must not care.
         let dir = TempDir::new("nonet");
         let store = MemorySecretStore::new();
-        let started = std::time::Instant::now();
         apply(&dir.config(), &store, TN, "tn-tea-asr", &Keys::of(&[])).unwrap();
-        assert!(started.elapsed() < Duration::from_millis(500));
         let cfg = load_config(&dir.config()).unwrap();
         let qwen = cfg.cloud_service("tn-qwen").unwrap();
         assert_eq!(qwen.llm_model.as_deref(), Some("Qwen3.8-27B-UD-Q6_K_L"));

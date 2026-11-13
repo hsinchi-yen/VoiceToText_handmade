@@ -14,7 +14,7 @@ asr_choices = ["rd-tea-asr", "rd-breeze-asr"]
 needs_key = ["rd-tea-asr", "rd-breeze-asr"]
 # Shared key of the company LAN server (not a personal key), committed per the project owner's decision.
 default_keys = { "rd-tea-asr" = "tn8227", "rd-breeze-asr" = "tn8227" }
-# Ask the LLM endpoint for its model list; use it when it names exactly one model.
+# Kept for format compatibility; the desktop ignores it and uses llm_model as written (no network on apply).
 detect_llm_model = true
 
 [route]
