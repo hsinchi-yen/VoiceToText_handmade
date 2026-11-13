@@ -241,4 +241,13 @@
   - [x] 重複開啟：執行中再開一般啟動與 `--ibus` 都立即結束（顯示既有視窗／IBus 重新連線），沒有第二組 `local ASR selected`
   - [x] 日誌與 `config.toml` 沒有內建金鑰（0 筆）、沒有中文字（0 行）；`Timings` 只有數字欄位（0.3.0 的 `xruns=` 要實際說話才會出現，列入 human-checklist）
   - [x] T4.12b：0.3.0 仍有 Linux 金鑰庫啟動時序問題（啟動時所有雲端服務 `no credential store`、整個工作階段默默改用地端）。修正：Secret Service 接上後 `Engine::rebuild_providers()` 依目前設定重建（期間設定變了就用新設定再建）。套到 0.3.0（與 T4.10 `EarlyStatus` 衝突，兩邊保留），全部指令通過（859 項），獨立審查通過，2026-11-13 經你核准合併；AppImage 實測鑰匙圈接上後 2 ms 重建。審查備註：啟動約 25 秒內剛好在鑰匙圈接上那一刻儲存服務設定，仍可能沒帶到金鑰（下次改設定即恢復），不擋合併
+- [x] 修正「套用預設組態」「匯入設定」沒反應或顯示成功但沒生效（2026-11-13 經你核准合併，008bf57／9ab0dce／c99d4a1）
+  - [x] 原因 1：f953eff 之前的版本預覽畫面會當掉（`keys[id]` 未定義，Svelte 5 `props_invalid_value`），第 2 步不會出現；稍早的 Linux 安裝檔與 Windows 0.3.0 安裝檔都在這之前建置
+  - [x] 原因 2：雲端服務只在建立時讀金鑰，`config.toml` 沒變時重新載入直接略過，只改金鑰（重套同一組預設、匯入沒變的檔、服務頁存金鑰）要重開才生效。修正：`announce_saved` 存完一律 `rebuild_providers()`；新增測試
+  - [x] 套用不再先詢問區網 `/v1/models`（每個端點最多 1 秒），直接用檔案裡的 `llm_model`；`v2cplan.md` 第 2 節記下這個決定
+  - [x] 全部檢查通過（861 項測試、clippy、fmt、npm test／check），兩位獨立審查都通過
+  - [x] 重建 Linux：`v2c_0.3.0_amd64.deb` SHA-256 `f96500a6…a3da79`、`v2c_0.3.0_amd64.AppImage` `735544bd…dd0444b`
+  - [x] AppImage 實測：套用 TN（TEA）25 ms 生效、匯入 RD 範例檔（Breeze）15 ms 生效，六個 TN／RD 服務測試連線全過
+  - [x] .deb 由你安裝後冒煙測試：套用 TN（TEA）17 ms、RD（Breeze）18 ms 都顯示「設定立即生效」並立即重建服務；六個服務測試連線全過；日誌 0 ERROR、0 金鑰、0 中文；設定已還原
+  - [ ] 🧑 Windows：拉最新 main 重建安裝檔，測同樣兩個流程（見 human-checklist「0.3.0 修正」）
 - [ ] 🧑 安裝 0.3.0（Windows、Android、Linux）實機驗收：見 `tasks/human-checklist.md` Phase 5 與 T4.10 項目
