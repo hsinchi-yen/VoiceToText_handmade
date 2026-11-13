@@ -210,3 +210,9 @@
 - [x] Linux：`linux_handover.md` 第 3 節建置與測試通過（2026-11-12，Ubuntu 22.04）
 - [x] W21 T4.9 Wayland 通知比照 0.2.0 浮動標籤精簡：正常說話不跳通知，只在出錯、文字沒輸入時通知；免持開始跳「按右 Ctrl 結束」（`linux_app/notes.rs`、`v2c-platform` `NotifyStatus::HandsFree`）
 - [ ] 🧑 Linux 實機驗收（`linux_handover.md` 第 4.2～4.5 節）
+
+## Phase 5 — 組態檔匯出／匯入（2026-11-13）
+> 計畫：`tasks/plan.md` 第 14 節；`v2cplan.md` 第 2 節。金鑰不匯出；範圍＝服務＋用途＋詞庫；匯入＝合併並先預覽。
+- [ ] W22 T5.1 core `portable`（解析、驗證、合併計畫、匯出）＋`docs/config-file.md` 手寫規則＋範例檔
+- [ ] W23 T5.2 桌面匯出／匯入（Windows＋Linux 同一份 Tauri 程式）
+- [ ] W23 T5.3 FFI＋Android 匯出／匯入（需 T2.8）

@@ -637,3 +637,77 @@ T4.5 圖示候選 ─(🧑 選定)───────────────�
 
 - 兩個預設檔含內網位址 `10.20.30.23`、`10.88.95.2`，會進 git（`tasks/plan.md` 已有前者）。若不想公開，改成預設檔 git-ignore、只在建置安裝檔時放入（🧑 T4.1 合併前決定）。
 - RD 主機（`10.88.95.2`）沒有實測過；模型名稱與 `:8002` 需要金鑰是比照 TN 假設。
+
+---
+
+## 14. 組態檔匯出／匯入（Phase 5，2026-11-13 你決定）
+
+目標：Windows、Linux 桌面版與 Android APK 都能把設定匯出成一個 TOML 檔，也能匯入同一個檔；格式公開，使用者可以照 `docs/config-file.md` 手寫。
+
+### 14.1 決定（2026-11-13 你決定）
+
+- **金鑰不匯出**。檔案只列出「哪些服務需要金鑰」（`[preset] needs_key`），匯入時請使用者貼上。手寫檔可以照第 13.1 節的規則用 `[preset] default_keys` 附共用金鑰；匯出功能永遠不寫 `default_keys`。
+- **範圍**：雲端／區網服務（`[[cloud]]`）、各用途由誰處理（`[route]`）、詞庫（`[vocabulary]`）。熱鍵、音訊、GPU、App 規則、輸入紀錄等桌面專屬設定不包含。
+- **匯入方式＝合併**：依 id 新增或更新檔內的服務，其他服務與它們的金鑰不動；匯入前先顯示預覽，按「套用」才寫入。規則與第 13.1 節「套用預設組態」相同。
+
+### 14.2 格式（格式版本 1）
+
+一份組態檔就是第 13.1 節預設組態檔的延伸：多了 `[v2c]` 與 `[vocabulary]`，`[preset]` 裡只有 `needs_key`、`default_keys` 是必要的概念，其他欄位選填。所以既有的 TN／RD 預設組態檔本身就是合法的組態檔。
+
+```toml
+[v2c]
+format = 1                                  # 必填（沒有 [v2c] 但有 [preset] 時視為舊預設組態檔，格式 1）
+exported_from = "windows"                   # 選填，只供顯示：windows / linux / android / 手寫
+exported_at = "2026-11-13T10:00:00+08:00"   # 選填，只供顯示
+
+[preset]                                    # 選填
+title = "我的設定"                          # 選填，預覽標題
+needs_key = ["my-gemini"]                   # 匯入時要貼金鑰的服務
+# default_keys = { "my-lan-asr" = "共用金鑰" }  # 只限手寫；id 必須在 needs_key 內
+
+[route]                                     # 選填；沒寫的欄位不變
+asr = "my-gemini"                           # "local" 或檔內服務 id
+polish = "local"
+translate = "my-gemini"
+cloud_fallback_to_local = true
+
+[[cloud]]
+id = "my-gemini"                            # 必填；英數、-、_；前後不可有空白
+name = "我的 Gemini"                        # 選填，顯示名稱
+kind = "gemini"                             # gemini / open_ai / claude / open_ai_compat
+asr_model = "gemini-3.6-flash"              # 選填，空白＝建議值
+llm_model = "gemini-3.6-flash"              # 選填
+# base_url = "https://..."                  # open_ai_compat 必填
+# asr_timeout_ms = 8000                     # 選填
+
+[vocabulary]                                # 選填
+words = ["Breeze-ASR", "台積電", "v2c"]
+```
+
+- 白名單：只認 `[v2c]`、`[preset]`、`[route]`、`[[cloud]]`、`[vocabulary]`；其他區段（例如從 `config.toml` 整份貼來的 `[hotkey]`）忽略，預覽列出「已忽略的區段」。
+- `format` 大於 1 → 整份拒絕（「檔案由較新版本產生」）。
+- 驗證：沿用第 13.1 節（id 規則、名稱、逾時範圍、`effective_base_url`、能力：Claude 不能當 `route.asr`；`route` 只能指向檔內服務或 `local`；`default_keys` 規則）。id 前後有空白直接拒絕（同 T2.7）。`id_prefix`、`asr_choices`、`detect_llm_model` 照舊支援，但不是必要欄位。任一項不過整份拒絕，設定不變。
+- 詞庫：每一項套用 `vocab::check` 的規則；合併＝聯集（保留現有順序，新詞加在後面，重複的略過），超過上限的列在預覽。
+- 錯誤回報：錯誤碼＋行號（例如 `line 12: unknown kind "gemni"`）。不把檔案內容（詞庫、金鑰、網址）寫進日誌；`toml` 的錯誤訊息含原文片段，只在預覽畫面顯示，不進日誌。
+- 匯出內容：全部 `[[cloud]]`、目前 `[route]`、詞庫、`needs_key`（有存金鑰或該 kind 需要金鑰的服務）、`[v2c]`。欄位順序固定，每個區段前加一行說明註解，方便手改。檔名預設 `v2c-config-YYYYMMDD.toml`。
+
+### 14.3 程式結構
+
+- **`v2c-core::portable`**（新模組，純邏輯，Android 也能編譯；新增公開介面 → 🧑 合併需你核准）：
+  - `parse(text) -> Result<PortableFile, PortableError>`：格式驗證（不需要現有設定）。`PortableError { code, line: Option<u32> }`，`Debug` 不含檔案內容。
+  - `plan_merge(current: &Config, vocab: &Vocab, file: &PortableFile) -> MergePlan`：新增／更新／不變的服務、端點改變要刪的舊金鑰、route 變更、詞庫新增數與被上限擋掉的數、`key_missing`、忽略的區段。純函式，桌面與 Android 共用。
+  - `export(cfg: &Config, vocab: Option<&Vocab>, has_key: &dyn Fn(&str) -> bool, from: &str) -> String`。
+  - `default_keys` 的值用不印內容的型別（同 `presets.rs` 的 `DefaultKeys`）。
+- **桌面（Windows＋Linux 同一份 Tauri 程式）**：`commands/presets.rs` 的驗證與套用（金鑰選擇順序、主機改變刪金鑰、`CONFIG_LOCK` 原子寫入、失敗還原金鑰、`v2c:config-changed`）改成以 `portable` 為基礎；新增指令 `config_export(path)`、`config_import_preview(path)`、`config_import_apply(path, keys)`。設定頁底部（「重新執行初次設定」上方）加「匯出設定／匯入設定」；匯入沿用 `PresetDialog` 的預覽與貼金鑰畫面；首頁「從檔案載入預設組態」改走同一條路。檔案對話框用 Tauri dialog plugin（【實作前確認】Linux 上的 portal 行為）。
+- **Android**：FFI 新增 `parse_config_file(text) -> ConfigFilePreview` 與 `export_config_file(services, translate_id, asr_id) -> String`（變更 FFI 介面 → 🧑 核准）。設定頁「雲端服務」區塊加「匯入／匯出」，用 SAF（`ACTION_OPEN_DOCUMENT`／`ACTION_CREATE_DOCUMENT`，不需要儲存權限）。手機只套用手機用得到的部分：
+  - 匯入官方服務（gemini／open_ai／claude）與 HTTPS 的 `open_ai_compat`；id 與內建 TN／RD 區網服務相同的跳過（標示「已內建」）；其他 HTTP 端點跳過並註明原因（手機雲端服務只允許 HTTPS，見第 8.3 節）。
+  - `route.asr` → 該服務加上「語音辨識」用途；`route.translate` → 加上「中翻英」用途（各最多一個，第 8.3 節）；`route.polish`、`[vocabulary]` 忽略（手機沒有潤飾與詞庫），預覽列出。
+  - 匯出只含手機上設定的雲端服務與用途，沒有 `[vocabulary]`。
+- 跨平台測試：同一組 fixture（`tests/fixtures/config/*.toml`，入版控、不含真實金鑰）在 core 單元測試、桌面指令測試、FFI 測試都跑一次；`docs/examples/v2c-config.example.toml` 也必須能被 `parse` 接受（文件與程式不會脫節）。
+
+### 14.4 依賴
+
+```
+T5.1 core portable＋編寫規則文件 ─┬─> T5.2 桌面匯出／匯入（Windows＋Linux）
+                                   └─> T5.3 FFI＋Android 匯出／匯入（另需 T2.8 合併）
+```
