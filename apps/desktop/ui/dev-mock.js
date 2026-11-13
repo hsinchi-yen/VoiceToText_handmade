@@ -148,7 +148,7 @@ function settingsView(cfg) {
 /** One entry per backend command used by the UI. Args are the invoke() payload object. */
 export const commands = {
   // status / app
-  app_info: () => ({ version: "0.2.0-dev", cuda: true, data_dir: "C:\\Users\\demo\\AppData\\Roaming\\v2c" }),
+  app_info: () => ({ version: "0.3.0-dev", cuda: true, data_dir: "C:\\Users\\demo\\AppData\\Roaming\\v2c" }),
   last_status: () => ({ kind: "done", chars: 28, latency_ms: 640 }),
   open_doc: () => null,
 

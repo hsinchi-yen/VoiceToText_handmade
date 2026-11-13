@@ -175,6 +175,8 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 
 ## Phase 3（Linux：目前執行 agent 的這台電腦，Ubuntu 22.04／GNOME 42 Wayland）
 
+> 2026-11-13 你決定：Phase 0～4 的 Linux 項目（本節與 Phase 4 的 Linux 兩項）不在 Windows 這邊等待，全部交給 `linux_handover.md`，在 Linux 機器上照做即可。
+
 > mock 測試通過只代表模擬流程正確，**不代表**真實 GNOME Wayland 端到端可用。檢查點 2（手機）尚未通過。
 
 - [x] 核准 T3.0（2026-11-10）：`tasks/plan.md` 第 9 節與 `tasks/cards/T3.*.md`
@@ -204,9 +206,10 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] T3.6 Secret Service 寫入測試：`V2C_SECRET_REAL_WRITE=1 cargo test -p v2c-platform -- --ignored secret_real_write`（會在 login 鑰匙圈建立再刪除 `v2c-test` 項目）
 - [ ] T3.7 安裝 .deb：在 `releases/linux/` 執行 `sha256sum -c --ignore-missing SHA256SUMS.txt`，再 `sudo apt install ./v2c_0.1.6_amd64.deb`，`ibus restart`，加入「v2c 語音輸入」輸入來源，實機按住右 Ctrl 說話（含切到 v2c 時由 ibus-daemon 啟動 `v2c --ibus`）。步驟見 `docs/linux-setup.md` 第 7 節（「設定」視窗加不進輸入來源時用 7.2.1 的指令）
 - [ ] T3.7（選做）AppImage：`./v2c_0.1.6_amd64.AppImage` 能否啟動（需要 libfuse2）
-## Phase 4（0.2.0：介面精簡、預設組態、新圖示、新浮動標籤）
-- [ ] 安裝 `releases\v2c_0.2.0_x64-setup.exe`（核對 `releases\SHA256SUMS.txt`）
-- [ ] 首頁 → 套用預設組態 → TN → 選「TN TEA-ASR」→ 套用：三個端點測試連線通過，首頁「預設組態」卡顯示「TN 區網服務」；再選一次「TN Breeze-ASR」：金鑰欄顯示「已內建預設金鑰，可不填」，不用貼金鑰，套用後 Breeze 測試連線通過（預設金鑰 `tn8227` 自動存入）
+## Phase 4（介面精簡、預設組態、新圖示、新浮動標籤；Windows 改用 0.3.0 驗收）
+- [ ] 安裝 `releases\v2c_0.3.0_x64-setup.exe`（2026-11-13 重建版，核對 `releases\SHA256SUMS.txt`；首頁底部顯示「版本 0.3.0」）
+- [ ] 首頁 → 套用預設組態 → TN：**立刻**進到預覽畫面（不再停在清單）→ 選「TN TEA-ASR」→ 套用 → 「已套用」→ 完成：視窗恢復可操作，首頁「預設組態」卡顯示「TN 區網服務」；到「服務」頁對三個端點按「測試連線」皆通過。再套用一次並選「TN Breeze-ASR」：金鑰欄顯示「已內建預設金鑰，可不填」，不用貼金鑰，Breeze 測試連線通過（預設金鑰 `tn8227` 自動存入）
+- [ ] 若任何對話框出現「畫面發生錯誤」：按「關閉」應能回到首頁並繼續操作；請把當時步驟回報給 agent
 - [ ] RD（`10.88.95.2`）沒實測過：套用 RD，確認模型名稱自動偵測正確、`:8002` 是否接受內建預設金鑰 `tn8227`（不用貼）；切回 TN 時 TN 的金鑰仍在
 - [ ] 按住右 Ctrl 說話：浮動標籤是黑底綠色波形 → 進度條 → 淡出，沒有「錄音中／完成」文字；文字輸出的感覺比 0.1.6 順
 - [ ] 雙擊右 Ctrl 免持：波形左邊綠點、右邊「按右 Ctrl 結束」；單擊結束
@@ -215,8 +218,8 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 - [ ] 設定頁預設只看到常用 4 項；「進階」可展開；改一項不儲存就切頁會詢問
 - [ ] 從系統列「輸入紀錄」直接開到「詞庫與紀錄 → 輸入紀錄」分頁
 - [ ] 整體是否比 0.1.6 簡潔；有覺得複雜的地方記下來
-- [ ] Linux：照 `linux_handover.md` 第 3、4 節（第 3 節建置與測試已由 agent 在 Linux 跑過）
-- [ ] Linux Wayland（T4.9）：按住右 Ctrl 說一句，**不應跳出**「錄音中／辨識中／完成」通知；快速按兩下右 Ctrl 跳出「免持模式：按右 Ctrl 結束」，再按一下結束後通知消失；拔掉麥克風說話仍會跳錯誤通知
+- [x] Linux：已移交 `linux_handover.md` 第 3、4 節（2026-11-13；第 3 節建置與測試已由 agent 在 Linux 跑過）
+- [x] 已移交 `linux_handover.md`：Linux Wayland（T4.9）：按住右 Ctrl 說一句，**不應跳出**「錄音中／辨識中／完成」通知；快速按兩下右 Ctrl 跳出「免持模式：按右 Ctrl 結束」，再按一下結束後通知消失；拔掉麥克風說話仍會跳錯誤通知
 
 - [ ] 錄音檔已推上 GitHub（`34fcbe2`）：`tests/fixtures/audio/README.md` 寫的是「不會進 git」，若要公開 repo 請確認
 

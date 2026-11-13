@@ -2,6 +2,8 @@
   // Modal dialog on the native <dialog> element: showModal() traps focus (the rest of the page
   // is inert), Esc closes it, and focus returns to the opener. A click on the backdrop also
   // closes it unless `dismissible` is false. `open` is bindable; `actions` is the button row.
+  import Button from "./Button.svelte";
+
   let {
     open = $bindable(false),
     title = "",
@@ -28,12 +30,22 @@
     }
   }
 
+  // A render error inside the dialog must not leave a modal the user cannot close: showModal()
+  // makes the rest of the window inert, so a stuck dialog locks the whole app.
+  let crashed = $state(false);
+  const canDismiss = $derived(dismissible || crashed);
+
+  function onRenderError(error) {
+    crashed = true;
+    console.error("dialog content failed to render", error);
+  }
+
   function handleCancel(e) {
-    if (!dismissible) e.preventDefault();
+    if (!canDismiss) e.preventDefault();
   }
 
   function handleClick(e) {
-    if (dismissible && e.target === el) el.close();
+    if (canDismiss && e.target === el) el.close();
   }
 </script>
 
@@ -49,8 +61,15 @@
 >
   <div class="surface">
     {#if title}<h2 id={uid + "-title"}>{title}</h2>{/if}
-    <div class="body">{@render children?.()}</div>
-    {#if actions}<div class="actions">{@render actions()}</div>{/if}
+    <svelte:boundary onerror={onRenderError}>
+      <div class="body">{@render children?.()}</div>
+      {#if actions}<div class="actions">{@render actions()}</div>{/if}
+
+      {#snippet failed()}
+        <p class="body" role="alert">畫面發生錯誤。請關閉這個視窗後再試一次；若已按過「套用」，請到「服務」頁確認結果。</p>
+        <div class="actions"><Button onclick={() => el?.close()}>關閉</Button></div>
+      {/snippet}
+    </svelte:boundary>
   </div>
 </dialog>
 

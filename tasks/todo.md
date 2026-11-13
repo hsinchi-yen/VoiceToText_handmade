@@ -115,6 +115,7 @@
 - [ ] **檢查點 2**：手機使用一週；決定 Linux 用哪台電腦
 
 ## Phase 3 — Linux（Ubuntu GNOME Wayland）
+> 2026-11-13 你決定：Phase 0～4 的 Linux 實機安裝與驗收不在 Windows 這邊等待，一律交給 `linux_handover.md`，在 Linux 機器上做；下列 Linux 🧑 項目與檢查點 3 視為「已移交」，不擋後續進度。
 - [ ] W11 T3.0 重新查證並拆出 T3.1～T3.4 任務卡
   - [x] 2026-11-10：Linux 主機改為目前執行 agent 的電腦（使用者決定）；檢查點 2 **尚未通過**，使用者授權提前進行
   - [x] 唯讀查證本機（Ubuntu 22.04／GNOME 42 Wayland：沒有 GlobalShortcuts、Clipboard portal，RemoteDesktop v1；沒有麥克風、NVIDIA、cmake、webkit2gtk-4.1）與既有 LLM（llama.cpp Qwen3.8-27B，10.20.30.23:8000，不支援音訊），更新 plan.md 第 9 節並拆出 T3.1～T3.4
@@ -188,7 +189,7 @@
   - [x] `crates/v2c-platform/tests/linux_*.rs` 加 `#![cfg(target_os = "linux")]`，Windows 上 `cargo test --workspace` 不會編譯 Linux 測試
   - [x] `releases/v2c_0.1.4_amd64.deb`、`v2c_0.1.4_amd64.AppImage`
   - [ ] 🧑 Windows 上 `cargo test --workspace` 與 `npm run tauri:build:cuda` 確認沒有回歸（這台 Linux 無法建置 Windows）
-- [ ] **檢查點 3**：第一版交付
+- [x] **檢查點 3**：第一版交付（2026-11-13 已移交 `linux_handover.md`；實機結果由 Linux 端回報）
   - [x] 2026-11-11：Linux 語音辨識定案為遠端 `tea-asr-1`＋本機 SenseVoice 備援（`docs/linux-setup.md` 第 3、4 節）
   - [x] 2026-11-11：IBus 限制「輸入來源不是 v2c 時右 Ctrl 沒反應」決定保留並寫進文件（第 6.3 節）
   - [ ] 🧑 實機安裝 .deb、按住說話成功後才算通過（只有模擬測試通過，不算實機交付）
@@ -207,10 +208,11 @@
 - [x] T4.8 TN／RD 預設組態內建 Breeze-ASR 共用預設金鑰 `tn8227`（你決定進 git）；套用順序：輸入的 → 已存且端點未變的 → 預設；預設金鑰寫入失敗只略過並提示，不會讓套用失敗
 - [x] main 上 `cargo test --workspace`、clippy、fmt、`npm run check`／`test`／`build` 全部通過
 - [x] Windows 安裝檔 `releases/v2c_0.2.0_x64-setup.exe`（2026-11-12 重建，含 T4.8；CUDA 版，458.1 MiB，SHA-256 `4eb66fd4…eda162c`，建置機 Defender 掃描無威脅）
-- [ ] 🧑 檢查點 4（Windows）：安裝 0.2.0，TN、RD 各套用一次並實際說話；確認介面夠簡潔、浮動標籤順暢（見 human-checklist）
+- [ ] 🧑 檢查點 4（Windows）：改用 **0.3.0** 驗收（2026-11-13 你決定）：安裝 0.3.0，TN、RD 各套用一次並實際說話；確認介面夠簡潔、浮動標籤順暢（見 human-checklist）
+  - [x] 2026-11-13 修正：0.3.0 第一次建置（18:14）套用預設組態／從檔案載入時預覽畫面當掉、整個視窗無法操作（`props_invalid_value`，已由 `f953eff` 修正）；另外讓對話框內的畫面錯誤只顯示錯誤並可關閉，不再鎖住整個視窗。Edge 實測 TN、RD、取消／Esc、從預設對話框載入檔案、設定頁匯入皆通過，舊版可重現當機
 - [x] Linux：`linux_handover.md` 第 3 節建置與測試通過（2026-11-12，Ubuntu 22.04）
 - [x] W21 T4.9 Wayland 通知比照 0.2.0 浮動標籤精簡：正常說話不跳通知，只在出錯、文字沒輸入時通知；免持開始跳「按右 Ctrl 結束」（`linux_app/notes.rs`、`v2c-platform` `NotifyStatus::HandsFree`）
-- [ ] 🧑 Linux 實機驗收（`linux_handover.md` 第 4.2～4.5 節）
+- [x] Linux 實機驗收：已移交 `linux_handover.md` 第 4.2～4.5 節（2026-11-13 你決定，不在 Windows 這邊等待）
 
 ## Phase 5 — 組態檔匯出／匯入（2026-11-13）
 > 計畫：`tasks/plan.md` 第 14 節；`v2cplan.md` 第 2 節。金鑰不匯出；範圍＝服務＋用途＋詞庫；匯入＝合併並先預覽。
