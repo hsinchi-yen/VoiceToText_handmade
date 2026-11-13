@@ -40,6 +40,7 @@
 | ✅ | 檢查點 4 | 🧑 安裝 0.2.0 實機驗收；Linux 見 `../../linux_handover.md` |
 | W22 | T5.1 | Phase 5（2026-11-13 你決定）：組態檔格式（core `portable`）＋手寫規則 `docs/config-file.md`；新增 v2c-core 公開介面，合併需你核准 |
 | W23 | T5.2 ∥ T5.3 | 桌面（Windows＋Linux）與 Android 匯出／匯入；T5.3 另需 T2.8 合併；兩張都含 🧑，合併需你核准 |
+| W24 | T4.10 ∥ T4.11 | 桌面加速（2026-11-13 你決定）：不改輸出、不改 v2c-core 公開介面。T4.10 辨識 audio_ctx＋提早載入＋暖機＋浮動標籤延後＋Xrun 計數（🧑）；T4.11 連線重用＋Claude 提示詞快取 |
 
 ## 分派流程（2026-11-12 你決定，Phase 2 起）
 
