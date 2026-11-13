@@ -257,8 +257,7 @@ pub fn load_breeze(cfg: &Config, model: &Path) -> Result<BreezeAsr, &'static str
     );
     // The first inference initialises GPU kernels; do it now, not on the first word.
     let t = Instant::now();
-    let warm =
-        breeze.transcribe_blocking(&AudioClip::new(vec![0.0; 16_000]), &AsrContext::default());
+    let warm = breeze.warm_up();
     info!(
         warmup_ms = t.elapsed().as_millis() as u64,
         ok = warm.is_ok(),

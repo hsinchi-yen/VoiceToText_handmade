@@ -359,8 +359,9 @@ pub fn overlay_rect(work_area: PxRect, scale: f64) -> PxRect {
     }
 }
 
-/// Creates the hidden overlay window and starts the task that drives it from `status`.
-pub fn start(app: &AppHandle, status: &broadcast::Sender<StatusEvent>) -> tauri::Result<()> {
+/// Creates the hidden overlay window and starts the task that drives it from `rx` (subscribed
+/// by the caller earlier, so events sent before the window exists are still delivered).
+pub fn start(app: &AppHandle, rx: broadcast::Receiver<StatusEvent>) -> tauri::Result<()> {
     let window =
         WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html#/overlay".into()))
             .title("v2c overlay")
@@ -399,7 +400,6 @@ pub fn start(app: &AppHandle, status: &broadcast::Sender<StatusEvent>) -> tauri:
         let _ = ready_tx.send(());
     });
 
-    let rx = status.subscribe();
     tauri::async_runtime::spawn(drive(app.clone(), window, rx, ready_rx));
     info!("overlay window created");
     Ok(())

@@ -102,8 +102,8 @@ pub struct BreezeOptions {
     /// CPU threads for whisper.cpp.
     pub n_threads: usize,
     pub language: LanguageMode,
-    /// Encoder context size override (`audio_ctx`, max 1500 = 30 s). `None` = full window.
-    /// Smaller values are faster on short clips but may cost accuracy; for experiments only.
+    /// Encoder context size (`audio_ctx`, max 1500 = 30 s). `None` = chosen per clip from its
+    /// length ([`adaptive_audio_ctx`]); `Some(n)` forces `n` (`Some(1500)` = the full window).
     pub audio_ctx: Option<u32>,
 }
 
@@ -121,6 +121,30 @@ impl Default for BreezeOptions {
             audio_ctx: None,
         }
     }
+}
+
+/// Encoder frames per second of audio (whisper: 16 kHz, hop 160, conv stride 2).
+const FRAMES_PER_SEC: f64 = 50.0;
+/// Full whisper window (30 s).
+pub const FULL_AUDIO_CTX: u32 = 1500;
+/// Lowest `audio_ctx` ever used: measured 512 hurt one clip and 384 collapsed (T4.10).
+pub const MIN_AUDIO_CTX: u32 = 768;
+/// Token cap of the warm-up run.
+const WARMUP_MAX_TOKENS: i32 = 8;
+/// Spare frames (1 s) on top of the clip length.
+const AUDIO_CTX_MARGIN: u32 = 50;
+/// Clips longer than this use the full window (`MIN_AUDIO_CTX` covers 15.36 s).
+const ADAPTIVE_MAX_SECS: f64 = 14.0;
+
+/// `audio_ctx` for a clip of `samples` samples: `max(768, ceil(secs * 50) + 50)`, and the full
+/// 1500 for clips over 14 s. A context shorter than the clip would cut audio off.
+pub fn adaptive_audio_ctx(samples: usize) -> u32 {
+    let secs = samples as f64 / f64::from(SAMPLE_RATE);
+    if secs > ADAPTIVE_MAX_SECS {
+        return FULL_AUDIO_CTX;
+    }
+    let frames = (secs * FRAMES_PER_SEC).ceil() as u32 + AUDIO_CTX_MARGIN;
+    frames.clamp(MIN_AUDIO_CTX, FULL_AUDIO_CTX)
 }
 
 /// Detailed result of one recognition, used by `v2c-cli bench`.
@@ -223,12 +247,26 @@ impl BreezeAsr {
 
     /// Runs recognition on the calling thread. Blocks for the whole inference.
     pub fn transcribe_blocking(&self, clip: &AudioClip, ctx: &AsrContext) -> Result<BreezeOutput> {
-        self.inner.run(clip, ctx)
+        self.inner.run(clip, ctx, None)
+    }
+
+    /// Initialises GPU kernels with 1 s of silence at the smallest context and at most
+    /// [`WARMUP_MAX_TOKENS`] tokens. The output is discarded.
+    pub fn warm_up(&self) -> Result<()> {
+        let clip = AudioClip::new(vec![0.0; SAMPLE_RATE as usize]);
+        self.inner
+            .run(&clip, &AsrContext::default(), Some(WARMUP_MAX_TOKENS))
+            .map(|_| ())
     }
 }
 
 impl Inner {
-    fn run(&self, clip: &AudioClip, ctx: &AsrContext) -> Result<BreezeOutput> {
+    fn run(
+        &self,
+        clip: &AudioClip,
+        ctx: &AsrContext,
+        max_tokens: Option<i32>,
+    ) -> Result<BreezeOutput> {
         if clip.sample_rate != SAMPLE_RATE {
             return Err(V2cError::Audio(format!(
                 "expected {SAMPLE_RATE} Hz audio, got {} Hz",
@@ -273,8 +311,13 @@ impl Inner {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
-        if let Some(n) = self.opts.audio_ctx {
-            params.set_audio_ctx(n.min(1500) as i32);
+        let audio_ctx = self
+            .opts
+            .audio_ctx
+            .unwrap_or_else(|| adaptive_audio_ctx(clip.samples.len()));
+        params.set_audio_ctx(audio_ctx.min(FULL_AUDIO_CTX) as i32);
+        if let Some(n) = max_tokens {
+            params.set_max_tokens(n);
         }
         if !prompt.is_empty() {
             params.set_initial_prompt(&prompt);
@@ -328,12 +371,12 @@ impl AsrProvider for BreezeAsr {
             let inner = Arc::clone(&self.inner);
             let clip = clip.clone();
             let ctx = ctx.clone();
-            tokio::task::spawn_blocking(move || inner.run(&clip, &ctx))
+            tokio::task::spawn_blocking(move || inner.run(&clip, &ctx, None))
                 .await
                 .map_err(|_| provider_error(ProviderErrorKind::Server))?
                 .map(|o| o.transcript)
         } else {
-            self.inner.run(clip, ctx).map(|o| o.transcript)
+            self.inner.run(clip, ctx, None).map(|o| o.transcript)
         }
     }
 }
@@ -396,6 +439,23 @@ mod tests {
             prompt: "a\0b".into(),
         };
         assert_eq!(initial_prompt(&ctx), "ab");
+    }
+
+    #[test]
+    fn adaptive_audio_ctx_scales_with_clip_length() {
+        let secs = |s: f64| (s * 16_000.0) as usize;
+        // Short clips sit on the floor.
+        assert_eq!(adaptive_audio_ctx(secs(1.0)), MIN_AUDIO_CTX);
+        assert_eq!(adaptive_audio_ctx(secs(5.0)), MIN_AUDIO_CTX);
+        // Exactly 14 s: 700 + 50 margin -> 750, still the floor; never below the clip.
+        assert_eq!(adaptive_audio_ctx(secs(14.0)), MIN_AUDIO_CTX);
+        assert!(adaptive_audio_ctx(secs(14.0)) >= 14 * 50);
+        // Just over 14 s and anything longer: the full window.
+        assert_eq!(adaptive_audio_ctx(secs(14.1)), FULL_AUDIO_CTX);
+        assert_eq!(adaptive_audio_ctx(secs(29.0)), FULL_AUDIO_CTX);
+        assert_eq!(adaptive_audio_ctx(secs(60.0)), FULL_AUDIO_CTX);
+        // Empty input still returns the floor.
+        assert_eq!(adaptive_audio_ctx(0), MIN_AUDIO_CTX);
     }
 
     #[test]

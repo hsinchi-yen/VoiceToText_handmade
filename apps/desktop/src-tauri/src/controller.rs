@@ -103,6 +103,8 @@ struct Job {
     clip: AudioClip,
     mode: Mode,
     released_at: Instant,
+    /// Dropped-sample events while recording this clip.
+    xruns: u32,
     /// Hands-free recording stopped at the time limit.
     at_limit: bool,
 }
@@ -169,11 +171,12 @@ pub async fn run(deps: Deps, mut events: mpsc::UnboundedReceiver<Event>) {
                             hands_free = false;
                             let released_at = Instant::now();
                             let clip = deps.source.finish();
+                            let xruns = deps.source.take_xruns();
                             let at_limit = cmd == Command::StopAtLimit;
                             if at_limit {
                                 info!("hands-free recording reached the time limit");
                             }
-                            let job = Job { clip, mode, released_at, at_limit };
+                            let job = Job { clip, mode, released_at, xruns, at_limit };
                             if !busy {
                                 busy = true;
                                 spawn_job(Arc::clone(&deps), job, done_tx.clone());
@@ -279,6 +282,7 @@ async fn process(deps: &Deps, job: Job) {
         pipeline_ms = output.timings.total_ms,
         inject_ms,
         latency_ms,
+        xruns = job.xruns,
         app = app_exe.as_deref().unwrap_or("?"),
         warnings = output.warnings.len(),
         "Timings"

@@ -61,10 +61,17 @@ fn main() {
     let secrets = install_keyring();
     let (status, _) = broadcast::channel::<StatusEvent>(256);
     let engine = Engine::new(paths.clone(), config.clone(), status.clone(), secrets);
+    // Subscribed before the ASR thread starts: its status events wait here until the forwarder
+    // (set up inside Tauri's `setup`) takes over.
+    let early_status = status.subscribe();
+    // Model loading is I/O bound and needs nothing from Tauri, so it overlaps the ~1 s that
+    // `Builder::build()` spends creating WebView2 and the main window.
+    start_asr_thread(&engine);
     let state = AppState {
         paths,
         config: Arc::new(config),
         status,
+        early_status: Mutex::new(Some(early_status)),
         last_status: Arc::new(Mutex::new(None)),
         engine,
         keep_alive: Mutex::new(Vec::new()),
@@ -147,17 +154,28 @@ fn main() {
         .setup(move |app| {
             let handle = app.handle();
             commands::history::init(handle); // before the controller reads the sinks
-                                             // Before the background tasks so the overlay sees their first status events.
-            if !overlay_enabled() {
+                                             // Subscribed before the background tasks so the overlay sees their first
+                                             // status events, although its window is created later (below).
+            let overlay_rx =
+                overlay_enabled().then(|| handle.state::<AppState>().status.subscribe());
+            if overlay_rx.is_none() {
                 info!("overlay disabled on Wayland (notifications instead)");
-            } else if let Err(e) = overlay::start(handle, &handle.state::<AppState>().status) {
-                error!(error = %e, "overlay window could not be created");
             }
             if let Err(e) = tray::start(handle) {
                 error!(error = %e, "tray icon could not be created");
             }
             start_background(handle, config_error);
             show_main_unless_autostart(handle);
+            // The overlay webview (~115 ms) is created after the main window is shown, off the
+            // setup path.
+            if let Some(rx) = overlay_rx {
+                let handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = overlay::start(&handle, rx) {
+                        error!(error = %e, "overlay window could not be created");
+                    }
+                });
+            }
             #[cfg(debug_assertions)]
             overlay::start_demo_if_requested(&handle.state::<AppState>().status);
             Ok(())
@@ -272,11 +290,26 @@ fn shutdown(app: &tauri::AppHandle) {
         .clear();
 }
 
+/// Local ASR selection and loading, then the VRAM guard, off the async workers. Started from
+/// `main()` before Tauri is built.
+fn start_asr_thread(engine: &Arc<Engine>) {
+    let engine = Arc::clone(engine);
+    let spawned = std::thread::Builder::new()
+        .name("v2c-asr".into())
+        .spawn(move || {
+            engine.startup_blocking();
+            engine.guard_loop();
+        });
+    if spawned.is_err() {
+        error!("could not spawn the ASR thread");
+    }
+}
+
 fn start_background(app: &tauri::AppHandle, config_error: Option<&'static str>) {
     let state = app.state::<AppState>();
 
     // Forward status events to the webview and remember the latest one.
-    let mut rx = state.status.subscribe();
+    let mut rx = app_state::take_status_receiver(&state.early_status, &state.status);
     let last = Arc::clone(&state.last_status);
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -300,19 +333,6 @@ fn start_background(app: &tauri::AppHandle, config_error: Option<&'static str>) 
         let _ = state.status.send(StatusEvent::Error { code });
     }
 
-    // Local ASR selection and loading, then the VRAM guard, off the async workers.
-    {
-        let engine = Arc::clone(&state.engine);
-        let spawned = std::thread::Builder::new()
-            .name("v2c-asr".into())
-            .spawn(move || {
-                engine.startup_blocking();
-                engine.guard_loop();
-            });
-        if spawned.is_err() {
-            error!("could not spawn the ASR thread");
-        }
-    }
     tauri::async_runtime::spawn(Arc::clone(&state.engine).lm_check_loop());
 
     // Config reload after the tray (or, later, the settings page) saved config.toml.
