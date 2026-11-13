@@ -55,7 +55,38 @@ const ASR_SWITCH_WAIT: Duration = local_asr::RELEASE_WAIT.saturating_add(MODEL_L
 /// After a failed GPU engine load, the guard does not retry for this long.
 const GPU_RETRY_AFTER: Duration = Duration::from_secs(300);
 
+/// A GPU load whose VRAM use is not recorded yet: the background warm-up is still running, and
+/// its first inference grows the CUDA buffers, so the "after" snapshot waits for it.
+struct PendingLoad {
+    estimate: u64,
+    before: Option<GpuSnapshot>,
+    why: &'static str,
+    asr: Option<&'static str>,
+    started: Instant,
+    loaded_at: Instant,
+    warmup: Option<local_asr::WarmupDone>,
+}
+
+/// Waits for the warm-up (if any), then takes the "after" snapshot and records the load.
+/// Returns the VRAM need now assumed for `estimate`.
+fn record_after_warmup(
+    guard: &mut GpuGuard,
+    estimate: u64,
+    before: Option<GpuSnapshot>,
+    warmup: Option<local_asr::WarmupDone>,
+    snapshot: impl FnOnce() -> Option<GpuSnapshot>,
+    now: Instant,
+) -> u64 {
+    if let Some(done) = warmup {
+        // Ends on the signal, or when the warm-up thread is gone.
+        let _ = done.recv();
+    }
+    guard.record_load(estimate, before, snapshot(), now);
+    guard.breeze_need_mb(estimate)
+}
+
 pub struct Engine {
+    pending_load: Mutex<Option<PendingLoad>>,
     paths: Paths,
     config: RwLock<Arc<Config>>,
     config_tx: watch::Sender<Arc<Config>>,
@@ -230,6 +261,7 @@ impl Engine {
             http,
             busy: Arc::new(AtomicUsize::new(0)),
             last_use: Mutex::new(Instant::now()),
+            pending_load: Mutex::new(None),
             gpu_failed_at: Mutex::new(None),
             vocabulary: RwLock::new(Arc::new(vocabulary)),
             poll_now: AtomicBool::new(false),
@@ -356,6 +388,33 @@ impl Engine {
                 }
             }
         }
+        // After "ready": the background warm-up is still running; record its VRAM use.
+        self.settle_load();
+    }
+
+    /// Finishes the VRAM accounting of the last GPU load (blocking until its warm-up ends;
+    /// call it off the hot path). Does nothing when nothing is pending.
+    fn settle_load(&self) {
+        let Some(p) = lock(&self.pending_load).take() else {
+            return;
+        };
+        let mut guard = lock(&self.guard);
+        let need = record_after_warmup(
+            &mut guard,
+            p.estimate,
+            p.before,
+            p.warmup,
+            || self.monitor.snapshot(),
+            p.loaded_at,
+        );
+        info!(
+            why = p.why,
+            asr = p.asr,
+            load_ms = p.started.elapsed().as_millis() as u64,
+            vram_estimate_mb = p.estimate,
+            vram_need_mb = need,
+            "GPU ASR VRAM recorded"
+        );
     }
 
     /// Switches the one local model to `kind` (`None` = unload), blocking: the old model is
@@ -367,15 +426,16 @@ impl Engine {
         let started = Instant::now();
         let gpu = kind.filter(|k| *k != LocalAsrKind::SenseVoice);
         let estimate = gpu_vram_estimate_mb(&cfg);
-        let mut snaps = (None, None);
+        let mut before = None;
+        let mut warmup = None;
         let on_gpu = kind.is_some_and(|k| local_asr::runs_on_gpu(k, &cfg));
         let result = self
             .local
             .switch_model(kind, on_gpu, local_asr::RELEASE_WAIT, || {
                 let kind = kind.expect("load is only called with a model");
-                snaps.0 = gpu.and_then(|_| self.monitor.snapshot());
-                let asr = local_asr::load_model(kind, &cfg, &self.paths)?;
-                snaps.1 = gpu.and_then(|_| self.monitor.snapshot());
+                before = gpu.and_then(|_| self.monitor.snapshot());
+                let (asr, warm) = local_asr::load_model(kind, &cfg, &self.paths)?;
+                warmup = warm;
                 let now = self.config();
                 if gpu.is_some()
                     && (gpu_engine(&now) != kind || !gpu_model_still_current(&cfg, &now))
@@ -390,18 +450,29 @@ impl Engine {
         let from = from.map(|k| k.provider_name());
         match result {
             Ok(()) if gpu.is_some() => {
-                let mut guard = lock(&self.guard);
-                guard.record_load(estimate, snaps.0, snaps.1, Instant::now());
+                // Record the guard's VRAM measurement only after the warm-up (`settle_load`).
+                // A previous pending record is settled first so none is lost.
+                self.settle_load();
+                *lock(&self.pending_load) = Some(PendingLoad {
+                    estimate,
+                    before,
+                    why,
+                    asr,
+                    started,
+                    loaded_at: Instant::now(),
+                    warmup,
+                });
+                // The load time counts at once (restore delay, back-off); the VRAM
+                // measurement follows in `settle_load`.
+                lock(&self.guard).record_load(estimate, None, None, Instant::now());
                 info!(
                     why,
                     asr,
                     from,
                     load_ms = started.elapsed().as_millis() as u64,
                     vram_estimate_mb = estimate,
-                    vram_need_mb = guard.breeze_need_mb(estimate),
                     "GPU ASR active"
                 );
-                drop(guard);
                 *lock(&self.gpu_failed_at) = None;
                 *lock(&self.cpu_reason) = None;
                 if lock(&self.notices).reset() {
@@ -516,6 +587,7 @@ impl Engine {
                 let _ = self.switch_to(None, "guard");
             }
         }
+        self.settle_load();
     }
 
     /// Guard polling until shutdown (blocking; runs on the `v2c-asr` thread).
@@ -572,6 +644,7 @@ impl Engine {
             .name("v2c-asr-load".into())
             .spawn(move || {
                 me.ensure_model(why, upgrade);
+                me.settle_load();
                 me.press_loading.store(false, Ordering::SeqCst);
             });
         if spawned.is_err() {
@@ -1138,6 +1211,60 @@ mod tests {
     use v2c_core::secrets::MemorySecretStore;
 
     use super::*;
+
+    fn snap(free_mb: u64) -> Option<GpuSnapshot> {
+        Some(GpuSnapshot {
+            free_mb,
+            total_mb: 8000,
+            used_by_us_mb: None,
+        })
+    }
+
+    #[test]
+    fn vram_is_recorded_from_the_snapshot_taken_after_the_warmup() {
+        use std::sync::atomic::AtomicBool;
+        const ESTIMATE: u64 = 1500;
+        let mut guard = GpuGuard::default();
+        let warmed = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let flag = Arc::clone(&warmed);
+        let warm = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            // The first inference grows the buffers: 4000 free -> 2200 free.
+            flag.store(true, Ordering::SeqCst);
+            tx.send(()).unwrap();
+        });
+        let flag = Arc::clone(&warmed);
+        let need = record_after_warmup(
+            &mut guard,
+            ESTIMATE,
+            snap(4000),
+            Some(rx),
+            // The snapshot source reports the post-warm-up reading only once the warm-up ran.
+            move || {
+                snap(if flag.load(Ordering::SeqCst) {
+                    2200
+                } else {
+                    3400
+                })
+            },
+            Instant::now(),
+        );
+        warm.join().unwrap();
+        assert_eq!(need, 1800, "the need includes the warm-up's buffers");
+        assert_eq!(guard.breeze_need_mb(ESTIMATE), 1800);
+        // No warm-up (SenseVoice, TEA): the snapshot is taken at once.
+        let mut other = GpuGuard::default();
+        let need = record_after_warmup(
+            &mut other,
+            ESTIMATE,
+            snap(4000),
+            None,
+            || snap(3000),
+            Instant::now(),
+        );
+        assert_eq!(need, 1000);
+    }
 
     #[test]
     fn diff_groups_changes() {

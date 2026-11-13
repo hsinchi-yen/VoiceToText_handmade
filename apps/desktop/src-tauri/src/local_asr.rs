@@ -215,27 +215,41 @@ pub fn sensevoice_model(paths: &Paths) -> Option<PathBuf> {
     paths::find_sensevoice_dir(&paths.model_search_dirs())
 }
 
-/// Loads model `kind` for `cfg` (blocking; run off the async workers).
+/// Signalled once the model's background warm-up has finished (see [`load_model`]).
+pub type WarmupDone = std::sync::mpsc::Receiver<()>;
+
+/// Loads model `kind` for `cfg` (blocking; run off the async workers). For Breeze the warm-up
+/// runs in the background after this returns; the receiver is signalled when it ends (the
+/// sender is dropped if the warm-up thread could not start, which also ends the wait). `None`
+/// for models that are fully warm on return.
 pub fn load_model(
     kind: LocalAsrKind,
     cfg: &Config,
     paths: &Paths,
-) -> Result<Arc<dyn AsrProvider>, &'static str> {
+) -> Result<(Arc<dyn AsrProvider>, Option<WarmupDone>), &'static str> {
+    let ready = |a: Arc<dyn AsrProvider>| (a, None);
     match kind {
         LocalAsrKind::SenseVoice => {
             let dir = sensevoice_model(paths).ok_or("model_missing")?;
-            load_sensevoice(&dir).map(|s| Arc::new(s) as Arc<dyn AsrProvider>)
+            load_sensevoice(&dir).map(|s| ready(Arc::new(s) as Arc<dyn AsrProvider>))
         }
         LocalAsrKind::TeaAsr => {
             let model = tea_model(paths).ok_or("model_missing")?;
-            load_tea(&model).map(|t| Arc::new(t) as Arc<dyn AsrProvider>)
+            load_tea(&model).map(|t| ready(Arc::new(t) as Arc<dyn AsrProvider>))
         }
         LocalAsrKind::Breeze => {
             let model = breeze_model(cfg, paths).ok_or("model_missing")?;
             let breeze = Arc::new(load_breeze(cfg, &model)?);
             breeze.begin_warm_up();
-            start_background_warmup(Arc::clone(&breeze), |b| b.warm_up());
-            Ok(breeze as Arc<dyn AsrProvider>)
+            let (tx, rx) = std::sync::mpsc::channel();
+            start_background_warmup(
+                Arc::clone(&breeze),
+                |b| b.warm_up(),
+                move || {
+                    let _ = tx.send(());
+                },
+            );
+            Ok((breeze as Arc<dyn AsrProvider>, Some(rx)))
         }
     }
 }
@@ -245,9 +259,15 @@ pub fn load_model(
 /// The thread owns a clone of `asr`, so [`LocalEngines::switch_model`] (which waits until the
 /// old model's `Arc` is unique) does not drop the model while the warm-up is still on the GPU.
 /// `warm` holds the model's own lock: an utterance that arrives meanwhile waits for it and then
-/// runs normally (never an error). The caller marks the warm-up pending first
+/// runs normally (never an error). `utterance_waited` can be a false positive: an utterance
+/// that checks the flag just before the warm-up thread takes the lock is counted although it
+/// then runs first. The caller marks the warm-up pending first
 /// (`begin_warm_up`), so "ready" is reported without waiting for it.
-fn start_background_warmup<T, F>(asr: Arc<T>, warm: F) -> Option<std::thread::JoinHandle<()>>
+fn start_background_warmup<T, F>(
+    asr: Arc<T>,
+    warm: F,
+    on_done: impl FnOnce() + Send + 'static,
+) -> Option<std::thread::JoinHandle<()>>
 where
     T: ?Sized + Send + Sync + 'static,
     F: FnOnce(&T) -> (bool, bool) + Send + 'static,
@@ -264,6 +284,8 @@ where
                 background = true,
                 "Breeze warm-up"
             );
+            // After the first inference: its GPU buffers are now part of the VRAM use.
+            on_done();
         })
         .map_err(|e| warn!(error = %e, "could not start the warm-up thread"))
         .ok()
@@ -399,11 +421,15 @@ pub(crate) mod tests {
         let (started_tx, started_rx) = mpsc::channel::<()>();
         let (release_tx, release_rx) = mpsc::channel::<()>();
         // Same shape as `load_model`: the slot gets the model, the warm-up thread a clone.
-        let handle = start_background_warmup(Arc::clone(&asr), move |_| {
-            started_tx.send(()).unwrap();
-            release_rx.recv().unwrap(); // the warm-up is still running
-            (true, true)
-        })
+        let handle = start_background_warmup(
+            Arc::clone(&asr),
+            move |_| {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap(); // the warm-up is still running
+                (true, true)
+            },
+            || {},
+        )
         .unwrap();
         started_rx.recv().unwrap();
         e.switch_model(Some(LocalAsrKind::Breeze), false, Duration::ZERO, || {
