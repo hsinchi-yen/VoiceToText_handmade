@@ -695,7 +695,7 @@ words = ["Breeze-ASR", "台積電", "v2c"]
 
 - **`v2c-core::portable`**（新模組，純邏輯，Android 也能編譯；新增公開介面 → 🧑 合併需你核准）：
   - `parse(text) -> Result<PortableFile, PortableError>`：格式驗證（不需要現有設定）。`PortableError { code, line: Option<u32> }`，`Debug` 不含檔案內容。
-  - `plan_merge(current: &Config, vocab: &Vocab, file: &PortableFile) -> MergePlan`：新增／更新／不變的服務、端點改變要刪的舊金鑰、route 變更、詞庫新增數與被上限擋掉的數、`key_missing`、忽略的區段。純函式，桌面與 Android 共用。
+  - `plan_merge(current: &Config, vocab: &Vocab, file: &PortableFile, has_key: &dyn Fn(&str) -> bool) -> MergePlan`：新增／更新／不變的服務、端點改變要刪的舊金鑰、route 變更、詞庫新增數與被上限擋掉的數、`key_missing`（`needs_key` 中沒有已存金鑰、也沒有預設金鑰的服務；2026-11-13 審查後加入 `has_key`）、名稱衝突（附服務 id）、忽略的區段與未知欄位。純函式，桌面與 Android 共用。
   - `export(cfg: &Config, vocab: Option<&Vocab>, has_key: &dyn Fn(&str) -> bool, from: &str) -> String`。
   - `default_keys` 的值用不印內容的型別（同 `presets.rs` 的 `DefaultKeys`）。
 - **桌面（Windows＋Linux 同一份 Tauri 程式）**：`commands/presets.rs` 的驗證與套用（金鑰選擇順序、主機改變刪金鑰、`CONFIG_LOCK` 原子寫入、失敗還原金鑰、`v2c:config-changed`）改成以 `portable` 為基礎；新增指令 `config_export(path)`、`config_import_preview(path)`、`config_import_apply(path, keys)`。設定頁底部（「重新執行初次設定」上方）加「匯出設定／匯入設定」；匯入沿用 `PresetDialog` 的預覽與貼金鑰畫面；首頁「從檔案載入預設組態」改走同一條路。檔案對話框用 Tauri dialog plugin（【實作前確認】Linux 上的 portal 行為）。
