@@ -226,3 +226,12 @@
   - 2026-11-13 經你核准合併：辨識（bench，GPU 空閒）1939 → 1311 ms（−32%），錯字率 3.6% → 3.3%；啟動到可說話 4.88 → 2.72 秒（背景暖機；量測見 `tasks/spike-results.md`）。審查修正：早期狀態事件不漏、單一實例檢查後才載入、暖機後才量顯示卡記憶體
   - [ ] 🧑 日常使用一天，看日誌 `Timings latency_ms` 與 `xruns`
 - [x] W24 T4.11 潤飾連線重用＋Claude 提示詞快取
+
+## 0.3.0 交付（2026-11-13）
+> 你決定：Windows、Linux、Android 一起用 0.3.0（含 T2.7、T2.8、T4.10、T4.11、T5.1～T5.3）。
+- [x] 版本號 0.3.0（`Cargo.toml`、`tauri.conf.json`、`package.json`、`tools/ibus/v2c.xml`、Android `versionName` 0.3.0／`versionCode` 3）
+- [x] Windows 安裝檔 `releases/v2c_0.3.0_x64-setup.exe`（CUDA 版，458 MiB，SHA-256 `0cc9fce1…c878831`，建置機 Defender 掃描無威脅）
+- [x] `docs/`、README 改寫為 0.3.0，並經獨立 agent 對照程式與介面文字核對
+- [x] `linux_handover.md` 改寫為 0.3.0（含給 Linux agent 的提示詞）
+- [ ] Linux：照 `linux_handover.md` 建置 .deb／AppImage 0.3.0 並驗證（Linux 機器）
+- [ ] 🧑 安裝 0.3.0（Windows、Android、Linux）實機驗收：見 `tasks/human-checklist.md` Phase 5 與 T4.10 項目
