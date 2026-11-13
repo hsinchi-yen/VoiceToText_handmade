@@ -13,11 +13,14 @@ import app.v2c.ime.asr.local.LocalModelDownloader
 import app.v2c.ime.asr.local.LocalModels
 import app.v2c.ime.asr.local.SherpaLocalAsr
 import app.v2c.ime.asr.local.ZhTwConverter
+import app.v2c.ime.cloud.CloudRepository
+import app.v2c.ime.cloud.CloudRuntime
 import app.v2c.ime.ffi.LanSite
 import app.v2c.ime.ffi.UniffiV2cFfi
 import app.v2c.ime.ffi.V2cFfiException
 import app.v2c.ime.keyboard.EditorKeys
 import app.v2c.ime.keyboard.SourceController
+import app.v2c.ime.net.ConnectivityNetworkValidity
 import app.v2c.ime.net.HttpUrlConnectionProber
 import app.v2c.ime.net.LanCatalog
 import app.v2c.ime.net.LanDetector
@@ -63,6 +66,7 @@ class V2cImeService :
     private lateinit var catalog: LanCatalog
     private lateinit var localAsr: SherpaLocalAsr
     private lateinit var networkWatcher: NetworkWatcher
+    private lateinit var cloud: CloudRuntime
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val probeExecutor = Executors.newCachedThreadPool { r ->
         Thread(r, "v2c-lan-probe").apply { isDaemon = true }
@@ -112,6 +116,7 @@ class V2cImeService :
         // Keyboard opened: re-probe the LAN (not on every utterance) and follow network changes.
         networkWatcher.start()
         refreshLan()
+        refreshCloud()
         source.refresh()
     }
 
@@ -157,27 +162,40 @@ class V2cImeService :
                 }
             },
         )
-        val router = RecognitionRouter(ffi, detector, prefs, localAsr, log)
-        val translator = Translator(ffi, detector, catalog, log)
+        cloud = CloudRuntime(CloudRepository.create(this), ffi, ConnectivityNetworkValidity(this), log)
+        val router = RecognitionRouter(ffi, detector, prefs, localAsr, log, cloud = cloud)
+        val translator = Translator(ffi, detector, catalog, log, cloud = cloud)
         session = VoiceSession(
             context = this,
             scope = scope,
             router = router,
             recorder = AudioRecordPcmRecorder(this),
             translator = translator,
+            cloud = cloud,
             onPlanChanged = { source.refresh() },
         ) { text -> currentInputConnection?.commitText(text, 1) }
-        source = SourceController(router, prefs, downloader) { SpeechRecognizer.isRecognitionAvailable(this) }
+        source = SourceController(router, prefs, downloader, { SpeechRecognizer.isRecognitionAvailable(this) }, cloud)
         source.attach()
-        networkWatcher = NetworkWatcher(this) {
-            // System thread, only for a real network change: drop the cached LAN at once, then re-probe.
-            detector.invalidate()
-            scope.launch {
-                session.onLanChanged(LanSite.UNREACHABLE)
-                source.refresh()
-            }
-            refreshLan()
-        }
+        networkWatcher = NetworkWatcher(
+            this,
+            onChanged = {
+                // System thread, only for a real network change: drop the cached LAN at once, then re-probe.
+                detector.invalidate()
+                scope.launch {
+                    session.onLanChanged(LanSite.UNREACHABLE)
+                    session.onCloudChanged()
+                    source.refresh()
+                }
+                refreshLan()
+            },
+            // The system confirmed (or lost) internet access: cloud readiness changed, the LAN did not.
+            onValidatedChanged = {
+                scope.launch {
+                    session.onCloudChanged()
+                    source.refresh()
+                }
+            },
+        )
         // Presets first (needed for the probe URLs), then the first LAN detection.
         scope.launch {
             withContext(Dispatchers.IO) {
@@ -191,6 +209,16 @@ class V2cImeService :
                 }
             }
             refreshLan()
+        }
+        refreshCloud()
+    }
+
+    /** Loads the cloud settings and keys into the FFI off the main thread, then refreshes the UI. */
+    private fun refreshCloud() {
+        scope.launch {
+            withContext(Dispatchers.IO) { cloud.reload() }
+            session.onCloudChanged()
+            source.refresh()
         }
     }
 

@@ -18,13 +18,15 @@ enum class LanSite(val servicePrefix: String) {
 }
 
 /** The user's manual choice (mirror of `AsrPick`). */
-enum class AsrPick { AUTO, TEA, BREEZE, SYSTEM, LOCAL }
+enum class AsrPick { AUTO, TEA, BREEZE, CLOUD, SYSTEM, LOCAL }
 
 /** A recognition source (mirror of `AsrSource`). */
-enum class AsrSource { NONE, LAN_TEA, LAN_BREEZE, SYSTEM, LOCAL }
+enum class AsrSource { NONE, LAN_TEA, LAN_BREEZE, CLOUD, SYSTEM, LOCAL }
 
 /** Why no source is offered (mirror of `AsrHint`). */
-enum class AsrHint { NONE, NO_SOURCE_AVAILABLE, LAN_UNREACHABLE, SYSTEM_UNAVAILABLE, LOCAL_MODEL_NOT_READY }
+enum class AsrHint {
+    NONE, NO_SOURCE_AVAILABLE, LAN_UNREACHABLE, SYSTEM_UNAVAILABLE, LOCAL_MODEL_NOT_READY, CLOUD_NOT_READY,
+}
 
 /** Mirror of `AsrPlan`. */
 data class AsrPlan(
@@ -32,7 +34,29 @@ data class AsrPlan(
     val fallback: AsrSource,
     val retrySpeak: Boolean,
     val hint: AsrHint,
+    /** Second fallback (LAN -> [fallback] = CLOUD -> [fallback2] = LOCAL); NONE otherwise. */
+    val fallback2: AsrSource = AsrSource.NONE,
 )
+
+/** Cloud provider (mirror of `CloudProvider`). */
+enum class CloudProvider { GEMINI, OPENAI, CLAUDE, CUSTOM }
+
+/** What a cloud service is used for (mirror of `CloudUse`). */
+enum class CloudUse { ASR, TRANSLATE }
+
+/** One cloud service (mirror of `CloudServiceConfig`). The API key travels separately. */
+data class CloudServiceConfig(
+    val id: String,
+    val provider: CloudProvider,
+    val model: String,
+    val asrModel: String?,
+    val baseUrl: String?,
+    val uses: List<CloudUse>,
+    val asrTimeoutMs: Long? = null,
+)
+
+/** Mirror of `TestResult`: [error] is null on success. */
+data class CloudTestResult(val latencyMs: Long, val error: FfiErrorCode?)
 
 /** One LAN service from the preset files (mirror of `LanService`; no keys). */
 data class LanServiceInfo(
@@ -56,7 +80,22 @@ interface V2cFfi {
     fun loadLanServices(tnToml: String, rdToml: String): List<LanServiceInfo>
 
     /** Pure routing decision for one utterance (plan section 8.1). */
-    fun chooseAsr(lan: LanSite, systemAvailable: Boolean, localModelReady: Boolean, pick: AsrPick): AsrPlan
+    fun chooseAsr(
+        lan: LanSite,
+        cloudReady: Boolean,
+        systemAvailable: Boolean,
+        localModelReady: Boolean,
+        pick: AsrPick,
+    ): AsrPlan
+
+    /**
+     * Replaces the cloud service set (never the LAN services). [keys] maps service id to API key
+     * and lives in Rust memory only. Throws [V2cFfiException] (CONFIG) on an invalid set.
+     */
+    fun setCloudServices(services: List<CloudServiceConfig>, keys: Map<String, String>)
+
+    /** Test call for a configured cloud service; errors are returned, not thrown. */
+    fun testConnection(serviceId: String, use: CloudUse): CloudTestResult
 
     /** Service id for a LAN source, or null when [source] is not a LAN source or [lan] is unreachable. */
     fun lanServiceId(lan: LanSite, source: AsrSource): String?

@@ -107,6 +107,7 @@
 - [x] 2026-11-13 Phase 2 範圍擴充（文件）：手機也要串接雲端服務做語音辨識與中翻英；自動順序 區網 → 雲端 → 手機本地（`v2cplan.md` Android 各列、`tasks/plan.md` 第 8.1／8.3 節、卡片 T2.7、T2.8）
 - [x] W10c T2.7 FFI 雲端服務（`set_cloud_services`、`test_connection`、`choose_asr` 加雲端）（2026-11-13 經使用者核准合併進 main；另加：服務代號前後有空白直接拒絕、每個服務可設 `asr_timeout_ms`）
 - [ ] W10d T2.8 Android 雲端設定（Keystore 金鑰）＋路由接線＋中翻英走雲端
+  - [x] 2026-11-13 實作完成待審查／你核准合併（分支 `t2.8-android-cloud`）：設定頁「雲端服務」區塊、Keystore AES-GCM 金鑰保存（備份排除）、啟動載入 `set_cloud_services`、路由 區網 → 雲端 → 本地、來源選單「雲端」、中翻英區網 Qwen → 雲端
   - [ ] 🧑 合併後你自己手機實測（不列入 agent 驗收，見 human-checklist）
 - [x] 2026-11-13 Linux 建置與模擬器驗證（工具裝在 `tests/tmp/`，你同意）：`assembleDebug lint testDebugUnitTest` 通過（單元測試 146 項）；APK 的 `.so` 16 KB 對齊；`tools/build-android.sh` 用拋棄式金鑰完整跑通（APK 已刪）；Android 16 模擬器上鍵盤、來源選單、區網 TEA／Breeze、中翻英、本機模型下載與辨識（CER 7.7%）都正常，沒有當機。詳見 `android_handover.md` 第 2 節
   - [x] 修正：TEA `:8001` 也要金鑰，共用預設檔 `needs_key`／`default_keys` 加上 `*-tea-asr`（你決定；桌面套用對話框 TEA 也會出現金鑰欄）

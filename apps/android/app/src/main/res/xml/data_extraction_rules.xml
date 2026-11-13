@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ backup / device-transfer rules. Cloud service settings and the encrypted API keys
+     never leave this phone (plan section 8.3). The Keystore key itself is not backed up either. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="v2c_cloud.xml" />
+        <exclude domain="sharedpref" path="v2c_cloud_keys.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="v2c_cloud.xml" />
+        <exclude domain="sharedpref" path="v2c_cloud_keys.xml" />
+    </device-transfer>
+</data-extraction-rules>

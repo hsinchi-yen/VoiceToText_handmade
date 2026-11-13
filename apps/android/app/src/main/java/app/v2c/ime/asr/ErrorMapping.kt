@@ -25,11 +25,13 @@ object ErrorMapping {
         AsrHint.LAN_UNREACHABLE -> ErrorKind.LAN_UNREACHABLE
         AsrHint.SYSTEM_UNAVAILABLE -> ErrorKind.UNAVAILABLE
         AsrHint.LOCAL_MODEL_NOT_READY -> ErrorKind.LOCAL_NOT_READY
+        AsrHint.CLOUD_NOT_READY -> ErrorKind.CLOUD_NOT_READY
     }
 
     fun forFailure(reason: RouteFailure): ErrorKind = when (reason) {
         RouteFailure.NO_SPEECH -> ErrorKind.NO_SPEECH
         RouteFailure.LAN_FAILED_SAY_AGAIN -> ErrorKind.LAN_FAILED
+        RouteFailure.CLOUD_FAILED_SAY_AGAIN -> ErrorKind.CLOUD_FAILED
         RouteFailure.FAILED -> ErrorKind.GENERIC
     }
 
