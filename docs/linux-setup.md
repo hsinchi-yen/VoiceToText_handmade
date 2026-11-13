@@ -291,7 +291,7 @@ IBus 只會把文字送進「輸入來源是 v2c、有焦點、而且焦點後�
 
 ### 6.4 狀態通知
 
-Wayland 下不顯示浮動指示條，也比照 0.2.0 的浮動指示條「不顯示狀態文字」：正常說一句話（錄音、辨識、潤飾、完成）**不跳任何通知**，文字直接出現在游標處。只有需要你注意時才跳通知：
+Wayland 下不顯示浮動指示條，也比照 Windows 版的浮動指示條「不顯示狀態文字」：正常說一句話（錄音、辨識、潤飾、完成）**不跳任何通知**，文字直接出現在游標處。只有需要你注意時才跳通知：
 
 - 錯誤（麥克風、辨識失敗、熱鍵）；下一次開始錄音時自動關閉。
 - 進入免持模式（快速按兩下右 Ctrl）時跳出「免持模式：按右 Ctrl 結束」，錄音結束時自動關閉。
@@ -315,7 +315,7 @@ Wayland 下不顯示浮動指示條，也比照 0.2.0 的浮動指示條「不�
 
 ```sh
 sha256sum -c --ignore-missing SHA256SUMS.txt     # 在 releases/linux/ 資料夾裡執行，確認檔案沒有損壞
-sudo apt install ./v2c_0.2.0_amd64.deb            # 會一併安裝相依套件（ibus、libwebkit2gtk-4.1-0、libayatana-appindicator3-1…）
+sudo apt install ./v2c_0.3.0_amd64.deb            # 會一併安裝相依套件（ibus、libwebkit2gtk-4.1-0、libayatana-appindicator3-1…）
 ibus restart                                      # 讓 ibus-daemon 讀到新的 v2c 元件（或登出再登入）
 ```
 
@@ -408,6 +408,8 @@ EOF
 
 **方法二：手動改設定檔**（和方法一等效，下面是原本的步驟）：
 
+（設定檔的欄位與手寫規則見 [config-file.md](config-file.md)；設好的服務也可以用「設定 → 匯出設定」存成檔案，在另一台「匯入設定」。）
+
 1. 先啟動一次 v2c，讓它建立 `~/.config/v2c/config.toml`（Linux 預設 `[gpu] enabled = false`）。
 2. 結束 v2c（系統匣圖示 → 結束），用文字編輯器打開 `~/.config/v2c/config.toml`，照第 4 節的範例加入 `[route]`、`[timeouts]`、`[local]` 與兩個 `[[cloud]]`（語音辨識 `:8001` 的 `tea-asr-1`、文字模型 `:8000`），把 IP 換成你的伺服器。並照第 3 節「放入 SenseVoice 模型」放好本機備援模型。
    也可以在主視窗「服務」頁用「新增服務 → 自訂相容端點」分別設定文字與語音端點。
@@ -417,10 +419,10 @@ EOF
 ### 7.4 AppImage
 
 ```sh
-chmod +x v2c_0.2.0_amd64.AppImage
-./v2c_0.2.0_amd64.AppImage
+chmod +x v2c_0.3.0_amd64.AppImage
+./v2c_0.3.0_amd64.AppImage
 ```
 
-- 需要 FUSE 2（Ubuntu 22.04：`sudo apt install libfuse2`；Ubuntu 24.04：`libfuse2t64`）。沒有 FUSE 時可改用 `./v2c_0.2.0_amd64.AppImage --appimage-extract-and-run`。
+- 需要 FUSE 2（Ubuntu 22.04：`sudo apt install libfuse2`；Ubuntu 24.04：`libfuse2t64`）。沒有 FUSE 時可改用 `./v2c_0.3.0_amd64.AppImage --appimage-extract-and-run`。
 - AppImage 已內含 WebKit、系統匣（ayatana-appindicator）與 D-Bus 函式庫；系統只需要有 ibus（輸入法服務）與 gnome-keyring（金鑰庫）。
 - AppImage **不能安裝 IBus 元件**，所以預設走備援熱鍵／輸出（第 6.2 節；GNOME 42 上文字只會保留在紀錄裡）。要用 IBus 請改裝 .deb。若一定要用 AppImage：把 AppImage 放到固定位置（例如 `~/Applications/v2c.AppImage`），複製 repo 的 `tools/ibus/v2c.xml` 到 `/usr/share/ibus/component/v2c.xml`（需要 sudo），把其中的 `<exec>` 改成 `/home/你的帳號/Applications/v2c.AppImage --ibus`，然後 `ibus restart`。這個做法未經測試。

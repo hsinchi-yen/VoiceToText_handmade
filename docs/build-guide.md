@@ -22,7 +22,7 @@
 
 ## 2. 一鍵建置安裝檔（建議）
 
-安裝檔約 460 MB，超過 GitHub 的檔案大小上限，**不放在 GitHub 上**；請用下面的腳本在自己的電腦產生。
+安裝檔約 480 MB（458 MiB），超過 GitHub 的檔案大小上限，**不放在 GitHub 上**；請用下面的腳本在自己的電腦產生。
 
 ### 2.1 自動偵測環境（一般使用者用這個）
 
@@ -76,7 +76,7 @@ powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1 -CpuOnly  # �
 
 | 檔案 | 位置 |
 |------|------|
-| 安裝檔 | repo 的 `releases\v2c_<版本>_x64-setup.exe`（約 439 MiB；腳本建好後從 `.v2ct\release\bundle\nsis\` 搬過來） |
+| 安裝檔 | repo 的 `releases\v2c_<版本>_x64-setup.exe`（約 458 MiB；腳本建好後從 `.v2ct\release\bundle\nsis\` 搬過來） |
 | 雜湊清單 | `releases\SHA256SUMS.txt`（每個版本一行，給別人核對下載的檔案） |
 | 主程式 | `%USERPROFILE%\.v2ct\release\v2c.exe` |
 | 開發工具 | `%USERPROFILE%\.v2ct\release\v2c-cli.exe`（用 `cargo build --release -p v2c-cli` 產生） |
@@ -85,13 +85,17 @@ powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1 -CpuOnly  # �
 
 ## 4. 改版本號
 
-版本號要同時改這三個地方，安裝檔檔名與 App 顯示的版本才會一致（0.2.0 的安裝檔是 `releases\v2c_0.2.0_x64-setup.exe`）：
+版本號要同時改這幾個地方，安裝檔檔名與 App 顯示的版本才會一致（0.3.0 的 Windows 安裝檔是 `releases\v2c_0.3.0_x64-setup.exe`）：
 
 | 檔案 | 欄位 |
 |------|------|
 | `Cargo.toml`（workspace 根目錄） | `[workspace.package] version` |
 | `apps/desktop/src-tauri/tauri.conf.json` | `"version"` |
 | `apps/desktop/package.json` | `"version"`（再到 `apps/desktop` 跑一次 `npm install`，同步 `package-lock.json`） |
+| `tools/ibus/v2c.xml` | `<version>`（Linux；`tools/build-linux.sh` 會檢查它和上面一致） |
+| `apps/android/app/build.gradle.kts` | `versionName`，並把 `versionCode` 加 1（Android） |
+
+改完 `Cargo.toml` 後跑一次 `cargo update -w`，同步 `Cargo.lock`。
 
 ## 5. 手動建置（了解細節或除錯用）
 
