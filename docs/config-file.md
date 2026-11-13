@@ -199,7 +199,7 @@ format = 1
 words = ["Breeze-ASR", "台積電", "v2c"]
 ```
 
-可以直接複製範例檔 `docs/examples/v2c-config.example.toml` 來改。安裝版也附了這份範例檔：Windows 在 `%LOCALAPPDATA%\v2c\docs\examples\`，Linux 在 v2c 安裝資料夾的 `docs/examples/`（.deb 通常是 `/usr/lib/v2c/docs/examples/`）。
+可以直接複製範例檔 `docs/examples/v2c-config.example.toml` 來改。公司區網有現成的檔案可以直接匯入：TN 用 `docs/examples/v2c-config.tn-lan.toml`、RD 用 `docs/examples/v2c-config.rd-lan.toml`（內容和 App 內建的區網預設相同，已附共用金鑰）。安裝版也附了這份範例檔：Windows 在 `%LOCALAPPDATA%\v2c\docs\examples\`，Linux 在 v2c 安裝資料夾的 `docs/examples/`（.deb 通常是 `/usr/lib/v2c/docs/examples/`）。
 
 ## 常見錯誤訊息與修正方法
 

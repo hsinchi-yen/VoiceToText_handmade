@@ -1199,6 +1199,32 @@ mod tests {
     }
 
     #[test]
+    fn doc_lan_examples_match_builtin_presets() {
+        const DOC_TN: &str = include_str!("../../../docs/examples/v2c-config.tn-lan.toml");
+        const DOC_RD: &str = include_str!("../../../docs/examples/v2c-config.rd-lan.toml");
+        for (doc, builtin) in [(DOC_TN, TN), (DOC_RD, RD)] {
+            let d = parse(doc).unwrap();
+            let b = parse(builtin).unwrap();
+            assert_eq!(d.services, b.services);
+            assert_eq!(d.id_prefix, b.id_prefix);
+            assert_eq!(d.asr_choices, b.asr_choices);
+            assert_eq!(d.needs_key, b.needs_key);
+            for id in &b.needs_key {
+                assert_eq!(d.default_keys.get(id), b.default_keys.get(id));
+            }
+            assert_eq!(d.detect_llm_model, b.detect_llm_model);
+            assert_eq!(d.route.asr, b.route.asr);
+            assert_eq!(d.route.polish, b.route.polish);
+            assert_eq!(d.route.translate, b.route.translate);
+            assert_eq!(
+                d.route.cloud_fallback_to_local,
+                b.route.cloud_fallback_to_local
+            );
+            assert!(d.ignored.is_empty());
+        }
+    }
+
+    #[test]
     fn builtin_preset_merge_matches_what_preset_apply_writes() {
         let f = parse(TN).unwrap();
         let cur = Config::default();
