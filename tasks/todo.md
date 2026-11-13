@@ -215,9 +215,10 @@
 ## Phase 5 — 組態檔匯出／匯入（2026-11-13）
 > 計畫：`tasks/plan.md` 第 14 節；`v2cplan.md` 第 2 節。金鑰不匯出；範圍＝服務＋用途＋詞庫；匯入＝合併並先預覽。
 - [x] W22 T5.1 core `portable`（解析、驗證、合併計畫、匯出）＋`docs/config-file.md` 手寫規則＋範例檔（2026-11-13 經你核准合併；審查後介面：`plan_merge(..., has_key)`、`export -> Exported`、錯誤碼沿用 presets.rs、未知欄位列在預覽、檔案上限 256 KB；`portable::` 25 個測試、fixture 在 `tests/fixtures/config/`）
-- [x] W23 T5.2 桌面匯出／匯入（Windows＋Linux 同一份 Tauri 程式；分支 `t5.2-desktop-config-io`，待你核准合併）：`commands/config_io.rs`（`config_export`／`config_import_preview`／`config_import_apply`＋兩個檔案對話框指令）、設定頁「匯出與匯入設定」、`ConfigImportDialog`、`docs/cloud-setup.md` 新增一節；桌面測試 231 個（新增 18）
+- [x] W23 T5.2 桌面匯出／匯入（Windows＋Linux 同一份 Tauri 程式；2026-11-13 經你核准合併）：`commands/config_io.rs`（`config_export`／`config_import_preview`／`config_import_apply`＋兩個檔案對話框指令）、設定頁「匯出與匯入設定」、`ConfigImportDialog`、`docs/cloud-setup.md` 新增一節；桌面測試 231 個（新增 18）
 - [ ] 🧑 T5.2 實機驗收（Windows 安裝版、Linux GNOME Wayland，見 human-checklist）
-- [ ] W23 T5.3 FFI＋Android 匯出／匯入（需 T2.8）
+- [x] W23 T5.3 FFI＋Android 匯出／匯入（需 T2.8）（2026-11-13 經你核准合併：FFI 新增 `parse_config_file`、`export_config_file`；`v2c-ffi` 49 個測試、Kotlin `ConfigFileIoTest` 15 個；🧑 實機驗收見 human-checklist）
+- [ ] 🧑 T5.3 實機驗收（Windows 匯出 → 手機匯入、手機匯出 → Windows 匯入，見 human-checklist）
 
 ## 桌面加速（2026-11-13）
 > 基準：啟動到可說話約 7.4 秒；放開到出字 1.7～2.3 秒。你決定：不改輸出、不改 `v2c-core` 公開介面（不做 q5_0、短句跳過潤飾、串流輸出、effort、prewarm）。

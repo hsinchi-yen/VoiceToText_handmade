@@ -7,6 +7,8 @@ import uniffi.v2c_ffi.CloudProvider as FCloudProvider
 import uniffi.v2c_ffi.CloudServiceConfig as FCloudServiceConfig
 import uniffi.v2c_ffi.CloudUse as FCloudUse
 import uniffi.v2c_ffi.FfiException
+import uniffi.v2c_ffi.ImportStatus as FImportStatus
+import uniffi.v2c_ffi.SkipReason as FSkipReason
 import uniffi.v2c_ffi.Lan as FLan
 
 /**
@@ -40,17 +42,7 @@ class UniffiV2cFfi : V2cFfi {
 
     override fun setCloudServices(services: List<CloudServiceConfig>, keys: Map<String, String>) = guard {
         uniffi.v2c_ffi.setCloudServices(
-            services.map {
-                FCloudServiceConfig(
-                    id = it.id,
-                    provider = it.provider.toFfi(),
-                    model = it.model,
-                    asrModel = it.asrModel,
-                    baseUrl = it.baseUrl,
-                    uses = it.uses.map { u -> u.toFfi() },
-                    asrTimeoutMs = it.asrTimeoutMs?.toULong(),
-                )
-            },
+            services.map { it.toFfi() },
             keys,
         )
     }
@@ -58,6 +50,57 @@ class UniffiV2cFfi : V2cFfi {
     override fun testConnection(serviceId: String, use: CloudUse): CloudTestResult = guard {
         val r = uniffi.v2c_ffi.testConnection(serviceId, use.toFfi())
         CloudTestResult(r.latencyMs.toLong(), r.error?.toCode())
+    }
+
+    override fun parseConfigFile(
+        text: String,
+        current: List<CloudServiceConfig>,
+        storedKeys: List<String>,
+    ): ConfigFilePreview = guard {
+        val p = uniffi.v2c_ffi.parseConfigFile(text, current.map { it.toFfi() }, storedKeys)
+        ConfigFilePreview(
+            errorCode = p.errorCode,
+            errorLine = p.errorLine?.toInt(),
+            title = p.title,
+            exportedFrom = p.exportedFrom,
+            services = p.services.map {
+                ImportedService(
+                    sourceId = it.sourceId,
+                    config = it.config.toApp(),
+                    status = when (it.status) {
+                        FImportStatus.ADDED -> ImportStatus.ADDED
+                        FImportStatus.UPDATED -> ImportStatus.UPDATED
+                        FImportStatus.UNCHANGED -> ImportStatus.UNCHANGED
+                    },
+                    needsKey = it.needsKey,
+                    dropOldKey = it.dropOldKey,
+                )
+            },
+            skipped = p.skipped.map {
+                SkippedService(
+                    it.id,
+                    when (it.reason) {
+                        FSkipReason.BUILTIN -> SkipReason.BUILTIN
+                        FSkipReason.HTTP_ENDPOINT -> SkipReason.HTTP_ENDPOINT
+                        FSkipReason.OFFICIAL_BASE_URL -> SkipReason.OFFICIAL_BASE_URL
+                        FSkipReason.DUPLICATE_PROVIDER -> SkipReason.DUPLICATE_PROVIDER
+                    },
+                )
+            },
+            asrService = p.asrService,
+            translateService = p.translateService,
+            ignored = p.ignored,
+        )
+    }
+
+    override fun exportConfigFile(
+        services: List<CloudServiceConfig>,
+        asrId: String?,
+        translateId: String?,
+        storedKeys: List<String>,
+    ): ConfigFileExport = guard {
+        val e = uniffi.v2c_ffi.exportConfigFile(services.map { it.toFfi() }, asrId, translateId, storedKeys)
+        ConfigFileExport(e.text, e.skipped)
     }
 
     override fun lanServiceId(lan: LanSite, source: AsrSource): String? = guard {
@@ -143,6 +186,31 @@ class UniffiV2cFfi : V2cFfi {
         FAsrHint.LOCAL_MODEL_NOT_READY -> AsrHint.LOCAL_MODEL_NOT_READY
         FAsrHint.CLOUD_NOT_READY -> AsrHint.CLOUD_NOT_READY
     }
+
+    private fun CloudServiceConfig.toFfi() = FCloudServiceConfig(
+        id = id,
+        provider = provider.toFfi(),
+        model = model,
+        asrModel = asrModel,
+        baseUrl = baseUrl,
+        uses = uses.map { it.toFfi() },
+        asrTimeoutMs = asrTimeoutMs?.toULong(),
+    )
+
+    private fun FCloudServiceConfig.toApp() = CloudServiceConfig(
+        id = id,
+        provider = when (provider) {
+            FCloudProvider.GEMINI -> CloudProvider.GEMINI
+            FCloudProvider.OPENAI -> CloudProvider.OPENAI
+            FCloudProvider.CLAUDE -> CloudProvider.CLAUDE
+            FCloudProvider.CUSTOM -> CloudProvider.CUSTOM
+        },
+        model = model,
+        asrModel = asrModel,
+        baseUrl = baseUrl,
+        uses = uses.map { if (it == FCloudUse.ASR) CloudUse.ASR else CloudUse.TRANSLATE },
+        asrTimeoutMs = asrTimeoutMs?.toLong(),
+    )
 
     private fun CloudProvider.toFfi(): FCloudProvider = when (this) {
         CloudProvider.GEMINI -> FCloudProvider.GEMINI

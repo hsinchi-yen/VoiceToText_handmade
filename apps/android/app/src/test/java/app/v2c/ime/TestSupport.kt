@@ -7,6 +7,8 @@ import app.v2c.ime.ffi.AsrPick
 import app.v2c.ime.ffi.AsrPlan
 import app.v2c.ime.ffi.AsrSource
 import app.v2c.ime.ffi.CloudServiceConfig
+import app.v2c.ime.ffi.ConfigFileExport
+import app.v2c.ime.ffi.ConfigFilePreview
 import app.v2c.ime.ffi.CloudTestResult
 import app.v2c.ime.ffi.CloudUse
 import app.v2c.ime.ffi.FfiErrorCode
@@ -50,6 +52,30 @@ class FakeFfi : V2cFfi {
     }
 
     override fun testConnection(serviceId: String, use: CloudUse): CloudTestResult = testResult(serviceId, use)
+
+    var previewResult = ConfigFilePreview(null, null, null, null, emptyList(), emptyList(), null, null, emptyList())
+    val parseCalls = CopyOnWriteArrayList<Triple<String, List<CloudServiceConfig>, List<String>>>()
+    val exportCalls = CopyOnWriteArrayList<List<Any?>>()
+
+    override fun parseConfigFile(
+        text: String,
+        current: List<CloudServiceConfig>,
+        storedKeys: List<String>,
+    ): ConfigFilePreview {
+        parseCalls += Triple(text, current, storedKeys)
+        return previewResult
+    }
+
+    override fun exportConfigFile(
+        services: List<CloudServiceConfig>,
+        asrId: String?,
+        translateId: String?,
+        storedKeys: List<String>,
+    ): ConfigFileExport {
+        exportCalls += listOf(services, asrId, translateId, storedKeys)
+        val body = services.joinToString("\n") { "id=${it.id} model=${it.model}" }
+        return ConfigFileExport("asr=$asrId translate=$translateId keys=$storedKeys\n$body", emptyList())
+    }
 
     /** Mirrors the routing table of plan section 8.1 (cloud column included). */
     override fun chooseAsr(

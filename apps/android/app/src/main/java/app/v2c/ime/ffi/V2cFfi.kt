@@ -55,6 +55,42 @@ data class CloudServiceConfig(
     val asrTimeoutMs: Long? = null,
 )
 
+/** Why a service of an imported file is not taken (mirror of `SkipReason`). */
+enum class SkipReason { BUILTIN, HTTP_ENDPOINT, OFFICIAL_BASE_URL, DUPLICATE_PROVIDER }
+
+/** Mirror of `ImportStatus`. */
+enum class ImportStatus { ADDED, UPDATED, UNCHANGED }
+
+/**
+ * A file service the phone can take (mirror of `ImportedService`). [config] already uses the
+ * phone's id; its `uses` are only what the file's route asks for.
+ */
+data class ImportedService(
+    val sourceId: String,
+    val config: CloudServiceConfig,
+    val status: ImportStatus,
+    val needsKey: Boolean,
+    val dropOldKey: Boolean,
+)
+
+data class SkippedService(val id: String, val reason: SkipReason)
+
+/** Mirror of `ConfigFilePreview`; when [errorCode] is set nothing else is filled. */
+data class ConfigFilePreview(
+    val errorCode: String?,
+    val errorLine: Int?,
+    val title: String?,
+    val exportedFrom: String?,
+    val services: List<ImportedService>,
+    val skipped: List<SkippedService>,
+    val asrService: String?,
+    val translateService: String?,
+    val ignored: List<String>,
+)
+
+/** Mirror of `ConfigFileExport`. */
+data class ConfigFileExport(val text: String, val skipped: List<String>)
+
 /** Mirror of `TestResult`: [error] is null on success. */
 data class CloudTestResult(val latencyMs: Long, val error: FfiErrorCode?)
 
@@ -96,6 +132,21 @@ interface V2cFfi {
 
     /** Test call for a configured cloud service; errors are returned, not thrown. */
     fun testConnection(serviceId: String, use: CloudUse): CloudTestResult
+
+    /**
+     * Reads a portable configuration file and plans the merge into [current] (the phone's cloud
+     * services; [storedKeys] are the ids that have a stored key). Pure. Problems come back in
+     * [ConfigFilePreview.errorCode], not as an exception.
+     */
+    fun parseConfigFile(text: String, current: List<CloudServiceConfig>, storedKeys: List<String>): ConfigFilePreview
+
+    /** The phone's cloud services as portable file text (no keys, no vocabulary, no polish). */
+    fun exportConfigFile(
+        services: List<CloudServiceConfig>,
+        asrId: String?,
+        translateId: String?,
+        storedKeys: List<String>,
+    ): ConfigFileExport
 
     /** Service id for a LAN source, or null when [source] is not a LAN source or [lan] is unreachable. */
     fun lanServiceId(lan: LanSite, source: AsrSource): String?

@@ -1,0 +1,57 @@
+# Fixture: what the desktop exports (cloud, LAN over HTTP, two services of one provider,
+# built-in id, vocabulary). No real keys.
+[v2c]
+format = 1
+exported_from = "windows"
+
+[preset]
+needs_key = ["my-gemini", "my-openai", "lan-asr", "tn-qwen"]
+
+[route]
+asr = "my-gemini"
+polish = "lan-llm"
+translate = "my-gemini2"
+cloud_fallback_to_local = true
+
+[[cloud]]
+id = "my-gemini"
+kind = "gemini"
+asr_model = "gemini-3.6-flash"
+
+[[cloud]]
+id = "my-gemini2"
+kind = "gemini"
+
+[[cloud]]
+id = "my-openai"
+kind = "open_ai"
+
+[[cloud]]
+id = "lan-asr"
+name = "LAN ASR"
+kind = "open_ai_compat"
+base_url = "http://192.168.1.10:8002/v1"
+asr_model = "breeze-asr-25"
+
+[[cloud]]
+id = "lan-llm"
+kind = "open_ai_compat"
+base_url = "http://192.168.1.10:8000/v1"
+llm_model = "my-model"
+
+[[cloud]]
+id = "tn-qwen"
+kind = "open_ai_compat"
+base_url = "http://10.0.0.5:8000/v1"
+llm_model = "qwen"
+
+[[cloud]]
+id = "relay"
+name = "Relay"
+kind = "open_ai_compat"
+base_url = "https://relay.example.com/v1"
+asr_model = "whisper-x"
+llm_model = "chat-x"
+
+[vocabulary]
+words = ["Breeze-ASR", "v2c"]
