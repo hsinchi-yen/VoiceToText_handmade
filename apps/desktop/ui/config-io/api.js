@@ -11,5 +11,5 @@ export const pickSave = (defaultName) => invoke("config_pick_save", { defaultNam
 
 export const exportTo = (path) => invoke("config_export", { path });
 export const preview = (path) => invoke("config_import_preview", { path });
-export const apply = (path, asrChoice, keys) =>
-  invoke("config_import_apply", { path, asrChoice: asrChoice || null, keys });
+export const apply = (path, fileHash, asrChoice, keys) =>
+  invoke("config_import_apply", { path, fileHash, asrChoice: asrChoice || null, keys });

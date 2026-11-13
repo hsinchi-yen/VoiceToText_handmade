@@ -114,7 +114,6 @@ fn main() {
             commands::presets::presets_list,
             commands::presets::presets_preview,
             commands::presets::presets_apply,
-            commands::presets::presets_pick_file,
             commands::config_io::config_pick_open,
             commands::config_io::config_pick_save,
             commands::config_io::config_export,

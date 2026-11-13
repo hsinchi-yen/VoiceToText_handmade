@@ -52,12 +52,8 @@
     try {
       const path = await configIo.pickOpen();
       if (!path) return;
-      if (onfile) {
-        finish();
-        onfile(path);
-      } else {
-        await choose({ file: path });
-      }
+      finish();
+      onfile?.(path);
     } catch (err) {
       error = configIo.describe(err);
     }

@@ -4,16 +4,14 @@
 //! which speech recognition endpoints the user may choose, which need an API key), `[[cloud]]`
 //! (the services) and `[route]` (polish / translate targets). Two presets are built in
 //! (`TN_CUSTOM_LLM_ADDR.toml`, `RD_CUSTOM_LLM_ADDR.toml`, embedded with `include_str!`); the
-//! user may also load one from a `.toml` file (at most [`MAX_FILE_BYTES`]). Any other
-//! top-level section is ignored, never written, and listed in the preview.
+//! user's own files go through `config_io.rs` (`v2c_core::portable`). Any other top-level
+//! section is ignored, never written, and listed in the preview.
 //!
 //! Commands (main window only):
 //! - `presets_list`: the built-ins with a short summary.
 //! - `presets_preview(source)`: what applying would do (after model detection).
 //! - `presets_apply(source, asr_choice, keys)`: writes the services and routes, then emits
 //!   `v2c:config-changed`.
-//! - `presets_pick_file`: native file dialog (kept; the UI now picks files via `config_io`, which
-//!   previews and applies any file through `v2c_core::portable`; see `config_io.rs`).
 //!
 //! Applying reuses `cloud.rs`: the same `CONFIG_LOCK`, the comment-preserving `update_config`,
 //! `upsert_service`, name rules and timeout range. It only adds or updates the preset's own
@@ -56,8 +54,6 @@ use super::cloud::{
 };
 use crate::tray::CONFIG_CHANGED_EVENT;
 
-/// Largest preset file accepted.
-pub const MAX_FILE_BYTES: u64 = 64 * 1024;
 /// Model-list query timeout during detection.
 const DETECT_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -77,12 +73,11 @@ const WHITELIST: &[&str] = &["preset", "cloud", "route"];
 // Payloads
 // ---------------------------------------------------------------------------------------
 
-/// Where a preset comes from: `{ "builtin": "TN" }` or `{ "file": "C:\\...\\x.toml" }`.
+/// Where a preset comes from: `{ "builtin": "TN" }`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PresetSource {
     Builtin(String),
-    File(String),
 }
 
 /// Pasted keys by service id. Zeroized on drop; `Debug` shows ids only.
@@ -384,47 +379,13 @@ fn validate(preset: &mut Preset, cfg: &Config) -> Result<(), &'static str> {
     }
 }
 
-fn read_preset_file(path: &str) -> Result<String, &'static str> {
-    use std::io::Read;
-
-    // No network shares: a slow or hostile server must not stall the app.
-    if path.starts_with("\\\\") || path.starts_with("//") {
-        return Err("preset_unreadable");
-    }
-    let p = Path::new(path);
-    let is_toml = p
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("toml"));
-    if !is_toml {
-        return Err("preset_not_toml");
-    }
-    let file = std::fs::File::open(p).map_err(|_| "preset_unreadable")?;
-    if !file.metadata().map_err(|_| "preset_unreadable")?.is_file() {
-        return Err("preset_unreadable");
-    }
-    // Read at most one byte past the limit, whatever the metadata claims.
-    let mut bytes = Vec::new();
-    file.take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "preset_unreadable")?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err("preset_too_large");
-    }
-    String::from_utf8(bytes).map_err(|_| "preset_unreadable")
-}
-
 fn load_source(source: &PresetSource) -> Result<Resolved, &'static str> {
-    let (label, text) = match source {
-        PresetSource::Builtin(name) => {
-            let (n, t) = BUILTINS
-                .iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case(name))
-                .ok_or("preset_unknown")?;
-            ((*n).to_owned(), (*t).to_owned())
-        }
-        PresetSource::File(path) => ("file".to_owned(), read_preset_file(path)?),
-    };
+    let PresetSource::Builtin(name) = source;
+    let (n, t) = BUILTINS
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        .ok_or("preset_unknown")?;
+    let (label, text) = ((*n).to_owned(), (*t).to_owned());
     let preset = parse_preset(&text)?;
     Ok(Resolved {
         label,
@@ -615,7 +576,7 @@ pub(crate) fn restore_keys(stored: &dyn SecretStore, changes: &[KeyChange]) {
             None => stored.delete(&c.id),
         };
         if let Err(e) = restored {
-            warn!(service = %c.id, error = %e, "preset: could not restore key");
+            warn!(error = %e, "preset: could not restore key");
         }
     }
 }
@@ -652,7 +613,7 @@ pub(crate) fn update_keys(
         let old = match stored.get(&svc.id) {
             Ok(old) => old,
             Err(_) if best_effort => {
-                warn!(service = %svc.id, "preset: keyring unavailable, default key skipped");
+                warn!("preset: keyring unavailable, default key skipped");
                 continue;
             }
             Err(_) => {
@@ -669,7 +630,7 @@ pub(crate) fn update_keys(
             (None, None) => continue,
         };
         if done.is_err() {
-            warn!(service = %svc.id, "preset: could not update key");
+            warn!("preset: could not update key");
             if best_effort {
                 continue;
             }
@@ -857,31 +818,6 @@ pub async fn presets_apply(
         Err(code) => warn!(preset = %label, code, "preset apply refused"),
     }
     result
-}
-
-/// Native file dialog for 「從檔案載入」. `Ok(None)` when the user closed it.
-#[tauri::command]
-pub async fn presets_pick_file(
-    window: tauri::WebviewWindow,
-    app: tauri::AppHandle,
-) -> Result<Option<String>, &'static str> {
-    use tauri_plugin_dialog::DialogExt;
-
-    check_caller(window.label())?;
-    let picker = app.clone();
-    let picked = tauri::async_runtime::spawn_blocking(move || {
-        picker
-            .dialog()
-            .file()
-            .set_title("選擇預設組態檔")
-            .add_filter("TOML 組態檔", &["toml"])
-            .blocking_pick_file()
-    })
-    .await
-    .map_err(|_| "internal_error")?;
-    Ok(picked
-        .and_then(|p| p.into_path().ok())
-        .map(|p| p.to_string_lossy().into_owned()))
 }
 
 #[cfg(test)]
@@ -1773,35 +1709,35 @@ llm_model = "t"
         assert!(!dir.config().exists(), "preview must not write");
     }
 
-    // ---- file source ----
+    // ---- parity with portable ----
 
     #[test]
-    fn file_source_limits() {
-        let dir = TempDir::new("file");
-        let ok = dir.0.join("p.toml");
-        std::fs::write(&ok, TN).unwrap();
-        let src = |p: &Path| PresetSource::File(p.to_string_lossy().into_owned());
-        assert_eq!(load_source(&src(&ok)).unwrap().label, "file");
-        let txt = dir.0.join("p.txt");
-        std::fs::write(&txt, TN).unwrap();
-        assert_eq!(load_source(&src(&txt)).unwrap_err(), "preset_not_toml");
-        let big = dir.0.join("big.toml");
-        std::fs::write(&big, vec![b'#'; MAX_FILE_BYTES as usize + 1]).unwrap();
-        assert_eq!(load_source(&src(&big)).unwrap_err(), "preset_too_large");
-        assert_eq!(
-            load_source(&src(&dir.0.join("none.toml"))).unwrap_err(),
-            "preset_unreadable"
-        );
-        for unc in ["\\\\host\\share\\p.toml", "//host/share/p.toml"] {
+    fn builtins_match_the_portable_parse() {
+        for (name, text) in BUILTINS {
+            let mut old = parse_preset(text).unwrap();
+            validate(&mut old, &Config::with_defaults()).unwrap();
+            let new = v2c_core::portable::parse(text).unwrap();
+            assert_eq!(new.id_prefix.as_deref(), Some(old.meta.id_prefix.as_str()));
+            assert_eq!(new.asr_choices, old.meta.asr_choices, "{name}");
+            assert_eq!(new.needs_key, old.meta.needs_key, "{name}");
+            assert_eq!(new.default_keys.len(), old.meta.default_keys.0.len());
+            assert_eq!(new.route.polish.as_deref(), Some(old.route.polish.as_str()));
             assert_eq!(
-                load_source(&PresetSource::File(unc.into())).unwrap_err(),
-                "preset_unreadable"
+                new.route.translate.as_deref(),
+                Some(old.route.translate.as_str())
             );
+            assert_eq!(new.services.len(), old.services.len(), "{name}");
+            for (a, b) in new.services.iter().zip(&old.services) {
+                assert_eq!(
+                    (&a.id, a.kind, &a.name, &a.base_url),
+                    (&b.id, b.kind, &b.name, &b.base_url)
+                );
+                assert_eq!(
+                    (&a.asr_model, &a.llm_model, a.asr_timeout_ms),
+                    (&b.asr_model, &b.llm_model, b.asr_timeout_ms)
+                );
+            }
         }
-        assert_eq!(
-            load_source(&PresetSource::Builtin("XX".into())).unwrap_err(),
-            "preset_unknown"
-        );
     }
 
     // ---- logs ----

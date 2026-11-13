@@ -38,7 +38,7 @@
     busy = true;
     error = "";
     try {
-      applied = await api.apply(path, asrChoice, logic.typedKeys(preview, keys));
+      applied = await api.apply(path, preview.file_hash, asrChoice, logic.typedKeys(preview, keys));
       keys = {};
       step = 3;
     } catch (err) {
@@ -53,6 +53,7 @@
   const counts = $derived(logic.statusCounts(preview));
   const rows = $derived(logic.routeRows(preview));
   const vocab = $derived(logic.vocabText(preview));
+  const hasTypedKeys = $derived(Object.keys(logic.typedKeys(preview, keys)).length > 0);
   const keyServices = $derived((preview?.services ?? []).filter((s) => s.needs_key));
   const detail = (s) =>
     [
@@ -83,7 +84,7 @@
       </p>
     {/if}
     {#if preview.nothing_to_do}
-      <Banner variant="info">這個檔案的內容和目前的設定相同，不需要匯入。</Banner>
+      <Banner variant="info">這個檔案的內容和目前的設定相同，不需要匯入（仍可在下方補上金鑰後套用）。</Banner>
     {/if}
 
     {#if preview.services.length}
@@ -92,7 +93,7 @@
         {#each preview.services as s (s.id)}
           <ListItem
             headline="{nameOf(s)}（{logic.statusLabel[s.status]}）"
-            supporting="{detail(s)}{purposeText(s) ? `　用途：${purposeText(s)}` : ''}"
+            supporting="{detail(s)}{purposeText(s) ? `　用途：${purposeText(s)}` : ''}{s.drops_old_key ? '　舊金鑰會被刪除' : ''}"
           >
             {#snippet leading()}<Icon name={s.status === "unchanged" ? "check" : "cloud"} />{/snippet}
           </ListItem>
@@ -152,7 +153,7 @@
   {#snippet actions()}
     {#if step === 2}
       <Button variant="text" disabled={busy} onclick={finish}>取消</Button>
-      <Button disabled={busy || (asrOptions.length > 0 && !asrChoice) || preview?.nothing_to_do} onclick={apply}>套用</Button>
+      <Button disabled={busy || (asrOptions.length > 0 && !asrChoice) || preview?.nothing_to_do && !hasTypedKeys} onclick={apply}>套用</Button>
     {:else}
       <Button onclick={finish}>{step === 3 ? "完成" : "關閉"}</Button>
     {/if}

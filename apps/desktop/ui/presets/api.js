@@ -5,9 +5,6 @@ import * as cloud from "../cloud-setup/api.js";
 const errorText = {
   forbidden: "只能在主視窗套用預設組態",
   preset_unknown: "找不到這個預設組態",
-  preset_not_toml: "請選擇 .toml 檔案",
-  preset_unreadable: "無法讀取這個檔案",
-  preset_too_large: "檔案太大（上限 64 KB）",
   preset_invalid: "預設組態檔格式不正確（缺少 [preset]、服務代號，或不是有效的 TOML）",
   preset_id_prefix: "服務代號必須以 id_prefix 開頭，且 id_prefix 不可為空或以 openai／gemini／claude／custom／local 開頭",
   preset_id_conflict: "預設組態的服務代號與你現有的其他類型服務重複，已拒絕以免覆蓋它",
@@ -28,6 +25,7 @@ const errorText = {
   // Configuration files (T5.2): codes from v2c_core::portable and config_io.rs.
   file_not_toml: "請選擇 .toml 檔案",
   file_unreadable: "無法讀取這個檔案（不能是網路位置，且要是 UTF-8 文字檔）",
+  file_changed: "檔案在預覽後被改過，請重新匯入",
   too_large: "檔案太大（上限 256 KB）",
   syntax: "檔案不是有效的 TOML，請檢查括號與引號",
   invalid_value: "有欄位的值型別不對或不被允許",
@@ -55,13 +53,11 @@ export function describe(code) {
   return errorText[code] ?? cloud.describe(code);
 }
 
-/** `source` is `{ builtin: "TN" | "RD" }` or `{ file: path }`. */
+/** `source` is `{ builtin: "TN" | "RD" }`. */
 export const list = () => invoke("presets_list");
 export const preview = (source) => invoke("presets_preview", { source });
 export const apply = (source, asrChoice, keys) =>
   invoke("presets_apply", { source, asrChoice, keys });
-/** Native file dialog; resolves to a path or null. */
-export const pickFile = () => invoke("presets_pick_file");
 
 /** Runs the existing connection test against one applied service (its stored key is used). */
 export function testService(s) {

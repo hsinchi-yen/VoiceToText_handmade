@@ -283,7 +283,6 @@ export const commands = {
     await emit("v2c:config-changed", null);
     return { title: pv.title, asr_choice: asrChoice, services: pv.services, key_missing: [] };
   },
-  presets_pick_file: () => null,
 
   // configuration file export / import (T5.2)
   config_pick_open: () => null,

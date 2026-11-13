@@ -8,13 +8,15 @@
 //! - `config_pick_open` / `config_pick_save(default_name)`: native file dialogs (path or `None`).
 //! - `config_export(path)`: writes the current settings; the text is re-parsed before writing.
 //! - `config_import_preview(path)`: what importing would do; writes nothing.
-//! - `config_import_apply(path, asr_choice, keys)`: merges the file, then emits
+//! - `config_import_apply(path, file_hash, asr_choice, keys)`: merges the file, then emits
 //!   `v2c:config-changed` (and `v2c:vocab-changed` when words were added).
 //!
 //! Apply order, so a failure at any step puts everything back: keys (via
 //! `presets::update_keys`), then `vocab.txt`, then `config.toml` (atomic, comment preserving,
 //! under `CONFIG_LOCK`). If a later step fails the earlier ones are restored. The file is read
-//! again at apply time; what was previewed is not cached.
+//! again at apply time and must hash (SHA-256) like the preview did, else `file_changed`. The
+//! merged route is checked against the merged services (`check_routes`) before anything is
+//! written.
 //!
 //! A file with `[preset] id_prefix` (the built-in TN / RD style) keeps the preset rule: it may
 //! not replace an existing service of another kind (`preset_id_conflict`). For a plain file a
@@ -28,12 +30,13 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
 use toml_edit::Value;
 use tracing::{info, warn};
-use v2c_core::config::{CloudKind, Config, TimeoutConfig};
+use v2c_core::config::{CloudKind, Config, TimeoutConfig, LOCAL};
 use v2c_core::portable::{self, MergePlan, PortableError, PortableFile};
-use v2c_core::route::{self, CloudHttp};
+use v2c_core::route::{self, suggested_models, CloudHttp};
 use v2c_core::secrets::{ApiKey, SecretStore};
 use v2c_core::vocab::Vocab;
 
@@ -136,6 +139,8 @@ pub struct ConfigPreview {
     pub needs_key: Vec<String>,
     /// Nothing would change.
     pub nothing_to_do: bool,
+    /// SHA-256 (hex) of the file bytes; `config_import_apply` refuses a file that differs.
+    pub file_hash: String,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -145,6 +150,8 @@ pub struct ConfigApplied {
     pub unchanged: usize,
     pub route_changed: usize,
     pub vocab_added: usize,
+    /// Vocabulary size after the import (payload of `v2c:vocab-changed`).
+    pub vocab_total: usize,
     /// `needs_key` services that have no key stored now.
     pub key_missing: Vec<String>,
 }
@@ -233,19 +240,20 @@ fn kind_label(kind: CloudKind) -> &'static str {
 // Export
 // ---------------------------------------------------------------------------------------
 
-/// Writes the current settings to `out` (a `.toml` path; one without extension gets `.toml`).
+/// Writes the current settings to `out` (`.toml` is appended unless the name already ends so).
 pub fn export_to(
     config_path: &Path,
     vocab_path: &Path,
     stored: &dyn SecretStore,
     out: &Path,
 ) -> Result<ConfigExported, IoError> {
-    let out: PathBuf = if out.extension().is_none() {
-        out.with_extension("toml")
-    } else if is_toml(out) {
+    // `mine` -> `mine.toml`, `my.config` -> `my.config.toml`.
+    let out: PathBuf = if is_toml(out) {
         out.to_path_buf()
     } else {
-        return Err("file_not_toml".into());
+        let mut name = out.as_os_str().to_os_string();
+        name.push(".toml");
+        PathBuf::from(name)
     };
     let cfg = load_config(config_path)?;
     let vocab = Vocab::load(vocab_path).map_err(|_| "vocab_failed")?;
@@ -269,7 +277,12 @@ pub fn export_to(
 // ---------------------------------------------------------------------------------------
 
 /// Rules that need the current config on top of `plan_merge`.
-fn check_plan(file: &PortableFile, cfg: &Config, plan: &MergePlan) -> Result<(), IoError> {
+fn check_plan(
+    file: &PortableFile,
+    cfg: &Config,
+    plan: &MergePlan,
+    asr: Option<&str>,
+) -> Result<(), IoError> {
     if !plan.is_applicable() {
         return Err("name_taken".into());
     }
@@ -281,6 +294,48 @@ fn check_plan(file: &PortableFile, cfg: &Config, plan: &MergePlan) -> Result<(),
             .any(|s| cfg.cloud_service(&s.id).is_some_and(|e| e.kind != s.kind))
     {
         return Err("preset_id_conflict".into());
+    }
+    check_routes(file, cfg, asr)
+}
+
+/// The merged route must still work with the merged services (same capability rules as
+/// `portable::parse`): an updated service may lose the kind or model a route needs. A route
+/// the file does not touch and that points at a service the file does not touch is left alone,
+/// even if it was already broken.
+fn check_routes(file: &PortableFile, cfg: &Config, asr: Option<&str>) -> Result<(), IoError> {
+    let r = &cfg.route;
+    let wanted = [
+        ("asr", asr, &r.asr),
+        ("polish", file.route.polish.as_deref(), &r.polish),
+        ("translate", file.route.translate.as_deref(), &r.translate),
+    ];
+    for (field, new, old) in wanted {
+        let target = new.unwrap_or(old.as_str()).trim();
+        if target == LOCAL {
+            continue;
+        }
+        let in_file = file.services.iter().find(|s| s.id == target);
+        if new.is_none() && in_file.is_none() {
+            continue;
+        }
+        let Some(svc) = in_file.or_else(|| cfg.cloud_service(target)) else {
+            return Err("route_unknown_service".into());
+        };
+        let suggested = suggested_models(svc.kind);
+        let (can_do, has_model) = if field == "asr" {
+            (
+                svc.kind.supports_asr(),
+                svc.asr_model.is_some() || suggested.asr.is_some(),
+            )
+        } else {
+            (true, svc.llm_model.is_some() || suggested.llm.is_some())
+        };
+        if !can_do {
+            return Err("route_no_asr".into());
+        }
+        if !has_model {
+            return Err("route_no_model".into());
+        }
     }
     Ok(())
 }
@@ -332,10 +387,11 @@ fn build_preview(
     stored: &dyn SecretStore,
     file: &PortableFile,
     sources: &HashMap<String, &'static str>,
+    file_hash: &str,
 ) -> Result<ConfigPreview, IoError> {
     let has_key = has_key_fn(stored);
     let plan = portable::plan_merge(cfg, vocab, file, &has_key);
-    check_plan(file, cfg, &plan)?;
+    check_plan(file, cfg, &plan, None)?;
     let preset = !file.asr_choices.is_empty();
     let services = file
         .services
@@ -419,6 +475,7 @@ fn build_preview(
         key_missing: plan.key_missing.clone(),
         needs_key: file.needs_key.clone(),
         nothing_to_do: plan.is_empty() && !preset,
+        file_hash: file_hash.to_owned(),
     })
 }
 
@@ -431,7 +488,14 @@ pub fn preview_text(
     text: &str,
 ) -> Result<ConfigPreview, IoError> {
     let file = portable::parse(text)?;
-    preview_file(config_path, vocab_path, stored, &file, &HashMap::new())
+    preview_file(
+        config_path,
+        vocab_path,
+        stored,
+        &file,
+        &HashMap::new(),
+        &hash_hex(text.as_bytes()),
+    )
 }
 
 fn preview_file(
@@ -440,10 +504,11 @@ fn preview_file(
     stored: &dyn SecretStore,
     file: &PortableFile,
     sources: &HashMap<String, &'static str>,
+    file_hash: &str,
 ) -> Result<ConfigPreview, IoError> {
     let cfg = load_config(config_path)?;
     let vocab = Vocab::load(vocab_path).map_err(|_| "vocab_failed")?;
-    build_preview(&cfg, &vocab, stored, file, sources)
+    build_preview(&cfg, &vocab, stored, file, sources, file_hash)
 }
 
 fn restore_vocab(path: &Path, backup: &Option<(bool, Vocab)>) {
@@ -472,8 +537,8 @@ pub fn apply_file(
     let cfg = load_config(config_path)?;
     let vocab = Vocab::load(vocab_path).map_err(|_| "vocab_failed")?;
     let plan = portable::plan_merge(&cfg, &vocab, file, &has_key_fn(stored));
-    check_plan(file, &cfg, &plan)?;
     let asr = resolve_asr(file, asr_choice)?;
+    check_plan(file, &cfg, &plan, asr.as_deref())?;
 
     let mut new_keys: Vec<(&str, ApiKey)> = Vec::new();
     for (id, raw) in keys.entries() {
@@ -562,6 +627,7 @@ pub fn apply_file(
         unchanged: plan.unchanged.len(),
         route_changed,
         vocab_added: plan.vocab_new.len(),
+        vocab_total: vocab.len() + plan.vocab_new.len(),
         key_missing: file
             .needs_key
             .iter()
@@ -678,9 +744,30 @@ pub async fn config_export(
     result
 }
 
-/// Reads and parses the user-chosen file off the async workers.
-async fn load_file(path: String) -> Result<PortableFile, IoError> {
-    tauri::async_runtime::spawn_blocking(move || Ok(portable::parse(&read_text(&path)?)?))
+fn hash_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Reads and parses the file; with `expected` (the preview's hash) a file whose bytes changed
+/// since is refused with `file_changed`. Returns the file and its hash.
+fn read_file(path: &str, expected: Option<&str>) -> Result<(PortableFile, String), IoError> {
+    let text = read_text(path)?;
+    let hash = hash_hex(text.as_bytes());
+    if expected.is_some_and(|e| e != hash) {
+        return Err("file_changed".into());
+    }
+    Ok((portable::parse(&text)?, hash))
+}
+
+/// [`read_file`] off the async workers.
+async fn load_file(
+    path: String,
+    expected: Option<String>,
+) -> Result<(PortableFile, String), IoError> {
+    tauri::async_runtime::spawn_blocking(move || read_file(&path, expected.as_deref()))
         .await
         .map_err(|_| IoError::from("internal_error"))?
 }
@@ -693,13 +780,13 @@ pub async fn config_import_preview(
 ) -> Result<ConfigPreview, IoError> {
     check_caller(window.label())?;
     let started = Instant::now();
-    let mut file = load_file(path)
+    let (mut file, hash) = load_file(path, None)
         .await
         .inspect_err(|e| warn!(code = e.code, "config import preview refused"))?;
     let sources = detect_models(&mut file, &http_client()?).await;
     let (cfg_path, vocab) = (config_path(&app), vocab_path(&app));
     let result = tauri::async_runtime::spawn_blocking(move || {
-        preview_file(&cfg_path, &vocab, &secret_store()?, &file, &sources)
+        preview_file(&cfg_path, &vocab, &secret_store()?, &file, &sources, &hash)
     })
     .await
     .map_err(|_| IoError::from("internal_error"))?;
@@ -720,12 +807,13 @@ pub async fn config_import_apply(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     path: String,
+    file_hash: String,
     asr_choice: Option<String>,
     keys: Keys,
 ) -> Result<ConfigApplied, IoError> {
     check_caller(window.label())?;
     let started = Instant::now();
-    let mut file = load_file(path)
+    let (mut file, _) = load_file(path, Some(file_hash))
         .await
         .inspect_err(|e| warn!(code = e.code, "config import refused"))?;
     detect_models(&mut file, &http_client()?).await;
@@ -754,7 +842,7 @@ pub async fn config_import_apply(
             );
             let _ = app.emit(CONFIG_CHANGED_EVENT, ());
             if a.vocab_added > 0 {
-                let _ = app.emit(super::vocab::VOCAB_CHANGED_EVENT, a.vocab_added);
+                let _ = app.emit(super::vocab::VOCAB_CHANGED_EVENT, a.vocab_total);
             }
         }
         Err(e) => warn!(code = e.code, "config import refused"),
@@ -970,13 +1058,13 @@ mod tests {
     }
 
     #[test]
-    fn export_adds_toml_extension_and_refuses_other_ones() {
+    fn export_adds_toml_extension() {
         let d = TempDir::new("ext");
         let store = MemorySecretStore::new();
         export_to(&d.config(), &d.vocab(), &store, &d.0.join("mine")).unwrap();
         assert!(d.0.join("mine.toml").exists());
-        let err = export_to(&d.config(), &d.vocab(), &store, &d.0.join("x.txt")).unwrap_err();
-        assert_eq!(err.code, "file_not_toml");
+        export_to(&d.config(), &d.vocab(), &store, &d.0.join("my.config")).unwrap();
+        assert!(d.0.join("my.config.toml").exists());
     }
 
     #[test]
@@ -1176,19 +1264,99 @@ mod tests {
     }
 
     #[test]
-    fn builtin_presets_match_the_portable_parse() {
-        // The built-in files stay valid portable files with the same services.
-        let file = portable::parse(TN).unwrap();
-        assert_eq!(file.services.len(), 3);
-        assert!(file.id_prefix.is_some());
-    }
-
-    #[test]
     fn errors_never_carry_file_content() {
         let d = TempDir::new("priv");
         let store = MemorySecretStore::new();
         let bad = "[v2c]\nformat = 1\n[[cloud]]\nid = \"secret-id\"\nkind = \"gemni\"\n";
         let e = preview(&d, &store, bad).unwrap_err();
         assert!(!format!("{e:?}").contains("secret-id") && !format!("{e:?}").contains("gemni"));
+    }
+
+    const COMPAT_X: &str = "[v2c]\nformat = 1\n[route]\nasr = \"x\"\n[[cloud]]\nid = \"x\"\nkind = \"open_ai_compat\"\nbase_url = \"http://10.0.0.1:1/v1\"\nasr_model = \"m\"\n";
+
+    #[test]
+    fn update_that_breaks_a_routed_service_is_refused() {
+        let d = TempDir::new("route1");
+        let store = MemorySecretStore::new();
+        apply(&d, &store, COMPAT_X, None, &keys(&[])).unwrap();
+        assert_eq!(load_config(&d.config()).unwrap().route.asr, "x");
+        let before = std::fs::read(d.config()).unwrap();
+
+        // Same id as a Claude service, no [route] in the file: asr would point at Claude.
+        let to_claude = "[v2c]\nformat = 1\n[[cloud]]\nid = \"x\"\nkind = \"claude\"\n";
+        assert_eq!(
+            preview(&d, &store, to_claude).unwrap_err().code,
+            "route_no_asr"
+        );
+        assert_eq!(
+            apply(&d, &store, to_claude, None, &keys(&[]))
+                .unwrap_err()
+                .code,
+            "route_no_asr"
+        );
+
+        // Same kind, but the asr model is dropped.
+        let no_model = "[v2c]\nformat = 1\n[[cloud]]\nid = \"x\"\nkind = \"open_ai_compat\"\nbase_url = \"http://10.0.0.1:1/v1\"\nllm_model = \"t\"\n";
+        assert_eq!(
+            preview(&d, &store, no_model).unwrap_err().code,
+            "route_no_model"
+        );
+        assert_eq!(
+            apply(&d, &store, no_model, None, &keys(&[]))
+                .unwrap_err()
+                .code,
+            "route_no_model"
+        );
+
+        assert_eq!(
+            std::fs::read(d.config()).unwrap(),
+            before,
+            "config.toml untouched"
+        );
+        // A file that also moves the route away is fine.
+        let ok = format!("{no_model}[route]\nasr = \"local\"\n");
+        apply(&d, &store, &ok, None, &keys(&[])).unwrap();
+    }
+
+    #[test]
+    fn preexisting_broken_route_to_untouched_service_does_not_block() {
+        let d = TempDir::new("route2");
+        let store = MemorySecretStore::new();
+        std::fs::write(d.config(), "[route]\nasr = \"gone\"\n").unwrap();
+        apply(&d, &store, VOCAB_ONLY, None, &keys(&[])).unwrap();
+    }
+
+    #[test]
+    fn changed_file_is_refused_by_hash() {
+        let d = TempDir::new("hash");
+        let p = d.0.join("a.toml");
+        std::fs::write(&p, VOCAB_ONLY).unwrap();
+        let path = p.to_str().unwrap();
+        let (_, hash) = read_file(path, None).unwrap();
+        assert_eq!(hash.len(), 64);
+        assert!(read_file(path, Some(&hash)).is_ok());
+        std::fs::write(&p, format!("{VOCAB_ONLY}\n# edited\n")).unwrap();
+        assert_eq!(
+            read_file(path, Some(&hash)).unwrap_err().code,
+            "file_changed"
+        );
+    }
+
+    #[test]
+    fn key_only_import_is_possible() {
+        let d = TempDir::new("keyonly");
+        let store = MemorySecretStore::new();
+        apply(&d, &store, GEMINI_CLAUDE, None, &keys(&[])).unwrap();
+        assert!(preview(&d, &store, GEMINI_CLAUDE).unwrap().nothing_to_do);
+        let a = apply(
+            &d,
+            &store,
+            GEMINI_CLAUDE,
+            None,
+            &keys(&[("my-claude", KEY)]),
+        )
+        .unwrap();
+        assert_eq!(a.key_missing, ["my-gemini"]);
+        assert_eq!(store.get("my-claude").unwrap().unwrap().expose(), KEY);
     }
 }

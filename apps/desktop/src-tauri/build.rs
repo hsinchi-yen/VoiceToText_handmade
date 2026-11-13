@@ -56,7 +56,6 @@ const COMMANDS: &[&str] = &[
     "presets_list",
     "presets_preview",
     "presets_apply",
-    "presets_pick_file",
     "config_pick_open",
     "config_pick_save",
     "config_export",

@@ -277,7 +277,7 @@ Claude 只能用於潤飾與中翻英；語音辨識請維持地端或交給另�
 
 ### Linux 的檔案對話框
 
-Linux 版用 GTK 檔案對話框（GNOME Wayland 可用）。如果對話框打不開，請確認桌面環境有安裝 `xdg-desktop-portal` 與 `xdg-desktop-portal-gnome`；仍然打不開時，可以把檔案放到家目錄再試一次，並回報。
+Linux 版的檔案對話框是 v2c 行程內的 GTK3 對話框，不經過 xdg-desktop-portal（除非設定環境變數 `GTK_USE_PORTAL=1`，或在 Flatpak 內執行）。GNOME Wayland 上應該能開，但尚未實機驗證，驗收時請特別用 **AppImage** 版本測試（`.deb` 版另外確認一次也可以）。如果對話框打不開，請回報，我們會改用 portal 版本。
 
 ## 金鑰存在哪裡
 
