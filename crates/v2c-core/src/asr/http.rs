@@ -34,9 +34,10 @@ pub fn cloud_http_client() -> Result<CloudHttp> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         // Keep connections warm between utterances so a follow-up request skips the TLS
-        // handshake. Idle timeout stays below common server/NAT idle cut-offs.
+        // handshake. reqwest's defaults are already 90 s idle / 15 s keepalive; pinned here
+        // so a dependency change cannot silently alter them.
         .pool_idle_timeout(Duration::from_secs(90))
-        .tcp_keepalive(Duration::from_secs(30))
+        .tcp_keepalive(Duration::from_secs(15))
         .build()
         .map(CloudHttp)
         .map_err(|_| V2cError::Config("could not initialise the HTTP client".into()))

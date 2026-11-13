@@ -133,27 +133,17 @@ impl LlmProvider for ClaudeLlm {
     }
 }
 
-/// Where the per-user vocabulary section starts in the prompts built by `prompts::polish` /
-/// `prompts::translate`. Everything before it is the fixed rules.
-const VOCAB_MARKERS: [&str; 2] = [
-    "
-
-詞庫（",
-    "
-
-Vocabulary (",
-];
-
 /// The `system` field as text blocks: the fixed rules carry a prompt-caching breakpoint and
 /// the vocabulary (if any) follows it, so editing the vocabulary does not invalidate the
 /// cached rules. The concatenated text is identical to `system`. Prompts shorter than the
 /// model's minimum cacheable length are simply processed uncached (no error).
 fn system_blocks(system: &str) -> Value {
-    let split = VOCAB_MARKERS.iter().filter_map(|m| system.find(m)).min();
-    let (rules, rest) = match split {
-        Some(i) => system.split_at(i),
-        None => (system, ""),
-    };
+    // The rules are the vocabulary-free prompt; a vocabulary is appended after them.
+    let rules_len = [crate::prompts::polish(&[]), crate::prompts::translate(&[])]
+        .iter()
+        .find(|r| system.starts_with(r.as_str()))
+        .map_or(system.len(), |r| r.len());
+    let (rules, rest) = system.split_at(rules_len);
     let mut blocks = vec![json!({
         "type": "text", "text": rules, "cache_control": { "type": "ephemeral" }
     })];
@@ -268,7 +258,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connections_are_reused_across_requests() {
+    async fn client_serves_consecutive_requests() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(ok_body()))
