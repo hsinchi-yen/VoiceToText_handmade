@@ -68,6 +68,8 @@ fn main() {
     // `setup` hands them to the forwarder, overlay and notification bridge.
     let early = EarlyStatus::subscribe(&status);
     let asr_engine = Arc::clone(&engine);
+    #[cfg(target_os = "linux")]
+    install_linux_keyring(Arc::clone(&engine));
     let state = AppState {
         paths,
         config: Arc::new(config),
@@ -259,8 +261,8 @@ fn overlay_enabled() -> bool {
     }
 }
 
-/// Windows Credential Manager (Linux: Secret Service) as the keyring-core default store, for
-/// cloud API keys.
+/// Windows Credential Manager as the keyring-core default store, for cloud API keys (Linux:
+/// [`install_linux_keyring`], after the engine exists).
 fn install_keyring() -> Arc<dyn SecretStore> {
     #[cfg(windows)]
     match windows_native_keyring_store::Store::new() {
@@ -271,24 +273,29 @@ fn install_keyring() -> Arc<dyn SecretStore> {
         // Cloud services then report a key error; local use is unaffected.
         Err(e) => warn!(error = %e, "keyring store unavailable"),
     }
-    // T3.6: freedesktop Secret Service (GNOME Keyring / KWallet) over zbus. Connecting can
-    // wait for D-Bus activation of the keyring daemon (up to ~25 s), so it runs in the
-    // background; a cloud call before it finishes reports a key error once.
-    #[cfg(target_os = "linux")]
-    {
-        let spawned = std::thread::Builder::new()
-            .name("v2c-keyring".into())
-            .spawn(
-                || match v2c_platform::linux::secret::install_default_store() {
-                    Ok(()) => info!("keyring: Secret Service"),
-                    Err(e) => warn!(error = %e, "keyring store unavailable"),
-                },
-            );
-        if spawned.is_err() {
-            warn!("could not start the keyring thread");
-        }
-    }
     Arc::new(v2c_core::secrets::KeyringSecretStore::new())
+}
+
+/// T3.6: freedesktop Secret Service (GNOME Keyring / KWallet) over zbus. Connecting can wait
+/// for D-Bus activation of the keyring daemon (up to ~25 s), so it runs in the background.
+/// `Engine::new` has already built the providers by then, without a store, so every cloud
+/// service failed with "no credential store": rebuild them once the store is in.
+#[cfg(target_os = "linux")]
+fn install_linux_keyring(engine: Arc<Engine>) {
+    let spawned = std::thread::Builder::new()
+        .name("v2c-keyring".into())
+        .spawn(
+            move || match v2c_platform::linux::secret::install_default_store() {
+                Ok(()) => {
+                    info!("keyring: Secret Service");
+                    engine.rebuild_providers();
+                }
+                Err(e) => warn!(error = %e, "keyring store unavailable"),
+            },
+        );
+    if spawned.is_err() {
+        warn!("could not start the keyring thread");
+    }
 }
 
 fn shutdown(app: &tauri::AppHandle) {
