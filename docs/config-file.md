@@ -120,6 +120,10 @@
 
 被略過的項目都會在預覽中列出原因。
 
+## 未知欄位會被忽略
+
+已知區段裡認不得的欄位（例如把 `asr_model` 打成 `asr_modle`，或手寫了 `api_key`）不會讓檔案被拒絕，但**不會被使用**，匯入預覽會列在「已忽略」裡，格式像 `cloud[2].asr_modle`（第 2 個 `[[cloud]]` 的欄位；數字從 1 開始）、`route.asr_x`。預覽只顯示欄位名稱，不會顯示它的值；寫在 `api_key` 之類欄位的金鑰**不會被讀取或儲存**，要提供金鑰請用 `[preset] default_keys`，或匯入時在畫面上貼。看到預覽有「已忽略」項目時，先檢查是不是拼錯了。
+
 ## 完整範例
 
 ### 範例一：Gemini 辨識，Claude 中翻英
@@ -199,7 +203,7 @@ words = ["Breeze-ASR", "台積電", "v2c"]
 
 ## 常見錯誤訊息與修正方法
 
-錯誤訊息的格式是「第幾行：錯誤代碼」，為了保護金鑰與詞庫，訊息裡不會出現檔案內容。
+錯誤訊息的格式是 `line 12: unknown_kind (unknown service kind)`，也就是「第幾行：錯誤代碼（簡短英文說明）」；找不到確切行號時只顯示代碼。為了保護金鑰與詞庫，訊息裡不會出現檔案的內容（網址、金鑰、詞彙都不會出現）。
 
 | 錯誤代碼 | 意思 | 怎麼修 |
 |----------|------|--------|
@@ -207,23 +211,21 @@ words = ["Breeze-ASR", "台積電", "v2c"]
 | `invalid_value` | 欄位的型別不對 | 例如 `format = "1"` 要改成 `format = 1`。 |
 | `missing_field` | 少了必填欄位 | `[[cloud]]` 一定要有 `id` 與 `kind`。 |
 | `unknown_kind` | `kind` 拼錯了 | 只能是 `gemini`、`open_ai`、`claude`、`open_ai_compat`。 |
+| `format_invalid` | `format` 不是 1 以上的整數 | 改成 `format = 1`。 |
 | `format_missing` | 沒有格式版本 | 在檔案開頭加上 `[v2c]` 與 `format = 1`。 |
 | `format_too_new` | 檔案由較新版本產生 | 更新 v2c，或請對方用舊版匯出。 |
 | `id_invalid` | id 含空白或不允許的字元 | 只用英文字母、數字、`-`、`_`，前後不留空白。 |
 | `id_reserved` | id 是 `local` | 換一個 id。 |
-| `id_duplicate` | id 重複 | 每個 `[[cloud]]` 的 id 不可相同。 |
-| `id_prefix` | id 不是以 `id_prefix` 開頭 | 讓 id 以 `id_prefix` 開頭，或拿掉 `id_prefix`。 |
-| `prefix_invalid` | `id_prefix` 是空的，或和內建服務 id 開頭相同 | 換一個前綴，例如 `team-`。 |
+| `preset_duplicate_id` | id 重複 | 每個 `[[cloud]]` 的 id 不可相同。 |
+| `preset_id_prefix` | id 不是以 `id_prefix` 開頭，或 `id_prefix` 是空的、和內建服務 id 開頭相同 | 讓 id 以 `id_prefix` 開頭、換一個前綴（例如 `team-`），或拿掉 `id_prefix`。 |
 | `base_url_required` | `open_ai_compat` 沒有 `base_url` | 補上服務網址，例如 `http://192.168.1.10:8002/v1`。 |
-| `base_url_invalid` | 網址不被允許 | 官方服務的網址必須是 `https://`；網址格式要正確。 |
-| `name_too_long`／`name_invalid`／`name_reserved` | 名稱太長、含控制字元，或是 `local` | 名稱最長 32 字元，換一個。 |
-| `name_taken` | 名稱和別的服務名稱或 id 重複 | 換一個名稱。匯入時如果是和你現有的服務重複，也是同樣處理。 |
+| `invalid_base_url` | 網址不被允許 | 官方服務的網址必須是 `https://`；網址格式要正確。 |
+| `name_too_long`／`invalid_name`／`name_reserved` | 名稱太長、含控制字元，或是 `local` | 名稱最長 32 字元，換一個。 |
+| `name_taken` | 名稱和別的服務名稱或 id 重複（不分大小寫），或服務 id 和你現有某個服務的名稱相同 | 換一個名稱或 id。匯入預覽會指出是哪個服務；有這個問題時不能套用。 |
 | `asr_timeout_range` | 逾時不在 1000 到 60000 之間 | 改成範圍內的毫秒數。 |
 | `route_unknown_service` | `[route]` 指向檔案裡沒有的服務 | 把服務也寫進這個檔案，或改成 `"local"`。 |
 | `route_no_asr` | 把 Claude 當成語音辨識 | `route.asr` 改成其他服務或 `"local"`。 |
-| `route_no_model` | 指定的服務沒有對應的模型 | 補上 `asr_model` 或 `llm_model`。 |
-| `needs_key_unknown` | `needs_key` 列了檔案裡沒有的服務 | 補上該服務，或從 `needs_key` 移除。 |
-| `default_key_not_listed` | `default_keys` 的 id 不在 `needs_key` 內 | 把這個 id 加進 `needs_key`。 |
-| `default_key_invalid` | 共用金鑰是空的、太長或含控制字元 | 重新貼上正確的金鑰（最長 256 字元）。 |
-| `asr_choice_invalid` | `asr_choices` 列了不能辨識語音的服務 | 只列 `local` 或能辨識語音的服務。 |
+| `route_no_model` | 指定的服務沒有對應的模型（`open_ai_compat` 沒有建議值，所以 `route.asr` 指向它時一定要寫 `asr_model`，`polish`／`translate` 要寫 `llm_model`） | 補上 `asr_model` 或 `llm_model`。 |
+| `preset_bad_reference` | `needs_key` 列了檔案裡沒有的服務、`default_keys` 的 id 不在 `needs_key` 內，或 `asr_choices` 列了不能辨識語音的服務 | 補上該服務、把 id 加進 `needs_key`，或只在 `asr_choices` 列 `local` 與能辨識語音的服務。 |
+| `invalid_key` | 共用金鑰是空的、太長或含控制字元 | 重新貼上正確的金鑰（最長 256 字元）。 |
 | `too_large` | 檔案超過 64 KB | 拆成較小的檔案。 |

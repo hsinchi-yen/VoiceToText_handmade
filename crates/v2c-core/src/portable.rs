@@ -80,23 +80,24 @@ impl PortableError {
             "format_too_new" => "file was produced by a newer version",
             "id_invalid" => "service id must be letters, digits, - or _ with no spaces",
             "id_reserved" => "service id is reserved",
-            "id_duplicate" => "service id appears more than once",
-            "id_prefix" => "service id does not start with id_prefix",
-            "prefix_invalid" => "id_prefix is empty or starts like a built-in service id",
+            "preset_duplicate_id" => "service id appears more than once",
+            "preset_id_prefix" => {
+                "id_prefix is empty or starts like a built-in id, or a service id lacks it"
+            }
             "base_url_required" => "this kind needs base_url",
-            "base_url_invalid" => "base_url is not allowed (official services need https)",
+            "invalid_base_url" => "base_url is not allowed (official services need https)",
             "name_too_long" => "name is too long",
-            "name_invalid" => "name has control characters",
+            "invalid_name" => "name has control characters",
             "name_reserved" => "name is reserved",
             "name_taken" => "name clashes with another service",
             "asr_timeout_range" => "asr_timeout_ms must be 1000-60000",
             "route_unknown_service" => "route points to a service that is not in the file",
             "route_no_asr" => "this service cannot do speech recognition",
             "route_no_model" => "this service has no model for that purpose",
-            "needs_key_unknown" => "needs_key lists a service that is not in the file",
-            "default_key_not_listed" => "default_keys id is not in needs_key",
-            "default_key_invalid" => "default key is empty, too long or has control characters",
-            "asr_choice_invalid" => "asr_choices lists an unusable service",
+            "preset_bad_reference" => {
+                "needs_key, default_keys or asr_choices names a service that does not fit"
+            }
+            "invalid_key" => "default key is empty, too long or has control characters",
             _ => "invalid file",
         }
     }
@@ -238,9 +239,9 @@ pub struct MergePlan {
     /// Updated services whose kind or endpoint changed: their old key must be deleted unless a
     /// new one is given (the key must not be sent to a new host).
     pub drop_old_key: Vec<String>,
-    /// `needs_key` services that start without a usable key and have no default key: new ones,
-    /// and updated ones with a changed endpoint. The caller also checks its key store for the
-    /// rest.
+    /// `needs_key` services that would have no key after the import: no default key, and no
+    /// stored key that survives (new services, a changed endpoint, or `has_key` says none).
+    /// A key typed in the preview can still fill them.
     pub key_missing: Vec<String>,
     pub route: Vec<RouteChange>,
     /// Vocabulary entries that would be appended, in file order.
@@ -248,11 +249,12 @@ pub struct MergePlan {
     /// Entries that do not fit: over `vocab::MAX_ENTRIES` in total, plus those the file rules
     /// dropped.
     pub vocab_blocked: usize,
-    /// Top-level sections of the file that are not used.
+    /// Parts of the file that are not used: top-level sections (`hotkey`) and unknown fields
+    /// (`cloud[2].asr_modle`, 1-based). Names only, never values.
     pub ignored: Vec<String>,
-    /// Problems that depend on the current config (for example `name_taken`); the import must
-    /// not be applied when this is not empty.
-    pub problems: Vec<PortableError>,
+    /// Services of the file whose id or name clashes (ignoring case) with the id or name of a
+    /// service the import does not touch. The import must not be applied when not empty.
+    pub name_taken: Vec<String>,
 }
 
 impl MergePlan {
@@ -264,9 +266,9 @@ impl MergePlan {
             && self.vocab_new.is_empty()
     }
 
-    /// True when the plan can be applied (no problems against the current config).
+    /// True when the plan can be applied (no name clashes with the current config).
     pub fn is_applicable(&self) -> bool {
-        self.problems.is_empty()
+        self.name_taken.is_empty()
     }
 }
 
@@ -282,7 +284,7 @@ impl fmt::Debug for MergePlan {
             .field("vocab_new_len", &self.vocab_new.len())
             .field("vocab_blocked", &self.vocab_blocked)
             .field("ignored", &self.ignored)
-            .field("problems", &self.problems)
+            .field("name_taken", &self.name_taken)
             .finish()
     }
 }
@@ -450,7 +452,7 @@ fn check_name(name: &str) -> Result<(), &'static str> {
         return Err("name_too_long");
     }
     if name.chars().any(char::is_control) {
-        return Err("name_invalid");
+        return Err("invalid_name");
     }
     if name.to_lowercase() == LOCAL {
         return Err("name_reserved");
@@ -458,12 +460,60 @@ fn check_name(name: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// A shown name (compatible endpoints only) or the id clashes with `name`, ignoring case.
-fn name_clash(name: &str, id: &str, others: &[CloudService]) -> bool {
-    let same = |other: &str| other.trim().to_lowercase() == name.to_lowercase();
-    others.iter().filter(|s| s.id != id).any(|s| {
-        same(&s.id) || (s.kind == CloudKind::OpenAiCompat && s.name.as_deref().is_some_and(same))
+fn eq_ci(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase() == b.trim().to_lowercase()
+}
+
+/// The shown name of a normalised service (compatible endpoints only).
+fn shown(s: &CloudService) -> Option<&str> {
+    s.name
+        .as_deref()
+        .filter(|_| s.kind == CloudKind::OpenAiCompat)
+}
+
+/// The service's name equals (ignoring case) the id or name of one of `others`, or the id of
+/// the service equals the name of one of them. `others` must be normalised.
+fn clashes(s: &CloudService, others: &[CloudService]) -> bool {
+    others.iter().filter(|o| o.id != s.id).any(|o| {
+        shown(s).is_some_and(|n| eq_ci(n, &o.id) || shown(o).is_some_and(|on| eq_ci(n, on)))
+            || shown(o).is_some_and(|on| eq_ci(on, &s.id))
     })
+}
+
+/// Validates and normalises one service against the ones accepted before it. On failure:
+/// the error code and the field to point the line number at.
+fn validate_service(
+    svc: &CloudService,
+    accepted: &[CloudService],
+) -> Result<CloudService, (&'static str, &'static str)> {
+    if !valid_id(&svc.id) {
+        return Err(("id_invalid", "id"));
+    }
+    if svc.id.to_lowercase() == LOCAL {
+        return Err(("id_reserved", "id"));
+    }
+    if accepted.iter().any(|a| a.id == svc.id) {
+        return Err(("preset_duplicate_id", "id"));
+    }
+    let s = normalize_service(svc);
+    if s.kind == CloudKind::OpenAiCompat && s.base_url.is_none() {
+        return Err(("base_url_required", "base_url"));
+    }
+    if effective_base_url(&s).is_err() {
+        return Err(("invalid_base_url", "base_url"));
+    }
+    if let Some(name) = &s.name {
+        check_name(name).map_err(|c| (c, "name"))?;
+    }
+    if clashes(&s, accepted) {
+        return Err(("name_taken", "name"));
+    }
+    if let Some(ms) = s.asr_timeout_ms {
+        if !(ASR_TIMEOUT_MIN_MS..=ASR_TIMEOUT_MAX_MS).contains(&ms) {
+            return Err(("asr_timeout_range", "asr_timeout_ms"));
+        }
+    }
+    Ok(s)
 }
 
 fn has_asr(svc: &CloudService) -> bool {
@@ -472,6 +522,75 @@ fn has_asr(svc: &CloudService) -> bool {
 
 fn has_llm(svc: &CloudService) -> bool {
     svc.llm_model.is_some() || suggested_models(svc.kind).llm.is_some()
+}
+
+const KNOWN_FIELDS: &[(&str, &[&str])] = &[
+    ("v2c", &["format", "exported_from", "exported_at"]),
+    (
+        "preset",
+        &[
+            "title",
+            "id_prefix",
+            "asr_choices",
+            "needs_key",
+            "default_keys",
+            "detect_llm_model",
+        ],
+    ),
+    (
+        "route",
+        &["asr", "polish", "translate", "cloud_fallback_to_local"],
+    ),
+    ("vocabulary", &["words"]),
+];
+const KNOWN_CLOUD_FIELDS: &[&str] = &[
+    "id",
+    "name",
+    "kind",
+    "base_url",
+    "asr_model",
+    "llm_model",
+    "asr_timeout_ms",
+];
+/// At most this many unknown fields are listed.
+const MAX_IGNORED_FIELDS: usize = 50;
+
+/// A field name safe to show: only the name, never a value; odd names become `?`.
+fn field_label(k: &str) -> String {
+    if k.len() <= 32
+        && k.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        k.to_owned()
+    } else {
+        "?".to_owned()
+    }
+}
+
+/// Fields inside the known sections that nothing reads (typos, a hand-written `api_key`), as
+/// `section.field` / `cloud[N].field` (N is 1-based). Values are never looked at.
+fn unknown_fields(table: &toml::Table) -> Vec<String> {
+    let mut out = Vec::new();
+    for (section, known) in KNOWN_FIELDS {
+        if let Some(t) = table.get(*section).and_then(toml::Value::as_table) {
+            for k in t.keys().filter(|k| !known.contains(&k.as_str())) {
+                out.push(format!("{section}.{}", field_label(k)));
+            }
+        }
+    }
+    if let Some(list) = table.get("cloud").and_then(toml::Value::as_array) {
+        for (i, entry) in list.iter().enumerate() {
+            let Some(t) = entry.as_table() else { continue };
+            for k in t
+                .keys()
+                .filter(|k| !KNOWN_CLOUD_FIELDS.contains(&k.as_str()))
+            {
+                out.push(format!("cloud[{}].{}", i + 1, field_label(k)));
+            }
+        }
+    }
+    out.truncate(MAX_IGNORED_FIELDS);
+    out
 }
 
 /// Parses and validates a portable configuration file.
@@ -506,6 +625,7 @@ pub fn parse(text: &str) -> Result<PortableFile, PortableError> {
         .cloned()
         .collect();
     ignored.sort();
+    ignored.extend(unknown_fields(&table));
 
     let lines = Lines::new(text);
     let err = |code, line| PortableError::new(code, line);
@@ -528,46 +648,10 @@ pub fn parse(text: &str) -> Result<PortableFile, PortableError> {
 
     // Services.
     let mut services: Vec<CloudService> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
     for (n, svc) in raw.cloud.iter().enumerate() {
-        let line = |key: &str| lines.cloud_key(n, key);
-        if !valid_id(&svc.id) {
-            return Err(err("id_invalid", line("id")));
-        }
-        if svc.id.to_lowercase() == LOCAL {
-            return Err(err("id_reserved", line("id")));
-        }
-        if !seen.insert(svc.id.clone()) {
-            return Err(err("id_duplicate", line("id")));
-        }
-        let s = normalize_service(svc);
-        if s.kind == CloudKind::OpenAiCompat && s.base_url.is_none() {
-            return Err(err("base_url_required", line("base_url")));
-        }
-        if effective_base_url(&s).is_err() {
-            return Err(err("base_url_invalid", line("base_url")));
-        }
-        if let Some(name) = &s.name {
-            check_name(name).map_err(|c| err(c, line("name")))?;
-            if name_clash(name, &s.id, &services) {
-                return Err(err("name_taken", line("name")));
-            }
-        }
-        if let Some(ms) = s.asr_timeout_ms {
-            if !(ASR_TIMEOUT_MIN_MS..=ASR_TIMEOUT_MAX_MS).contains(&ms) {
-                return Err(err("asr_timeout_range", line("asr_timeout_ms")));
-            }
-        }
+        let s = validate_service(svc, &services)
+            .map_err(|(code, field)| err(code, lines.cloud_key(n, field)))?;
         services.push(s);
-    }
-    // A name must also not equal the id of a service that comes later in the file.
-    for s in &services {
-        if let Some(name) = &s.name {
-            if name_clash(name, &s.id, &services) {
-                let n = raw.cloud.iter().position(|c| c.id == s.id).unwrap_or(0);
-                return Err(err("name_taken", lines.cloud_key(n, "name")));
-            }
-        }
     }
     let by_id = |id: &str| services.iter().find(|s| s.id == id);
     let is_ref = |id: &str| id == LOCAL || by_id(id).is_some();
@@ -586,13 +670,13 @@ pub fn parse(text: &str) -> Result<PortableFile, PortableError> {
             let lower = prefix.to_lowercase();
             if prefix.is_empty() || RESERVED_BASES.iter().any(|b| lower.starts_with(b)) {
                 return Err(err(
-                    "prefix_invalid",
+                    "preset_id_prefix",
                     lines.section_key("preset", "id_prefix"),
                 ));
             }
             for (n, s) in services.iter().enumerate() {
                 if !s.id.starts_with(&prefix) {
-                    return Err(err("id_prefix", lines.cloud_key(n, "id")));
+                    return Err(err("preset_id_prefix", lines.cloud_key(n, "id")));
                 }
             }
             id_prefix = Some(prefix);
@@ -601,7 +685,7 @@ pub fn parse(text: &str) -> Result<PortableFile, PortableError> {
             let ok = choice == LOCAL || by_id(choice).is_some_and(has_asr);
             if !ok {
                 return Err(err(
-                    "asr_choice_invalid",
+                    "preset_bad_reference",
                     lines.section_key("preset", "asr_choices"),
                 ));
             }
@@ -609,7 +693,7 @@ pub fn parse(text: &str) -> Result<PortableFile, PortableError> {
         for id in &p.needs_key {
             if by_id(id).is_none() {
                 return Err(err(
-                    "needs_key_unknown",
+                    "preset_bad_reference",
                     lines.section_key("preset", "needs_key"),
                 ));
             }
@@ -618,7 +702,7 @@ pub fn parse(text: &str) -> Result<PortableFile, PortableError> {
         for (id, raw_key) in &mut keys.0 {
             if !p.needs_key.contains(id) {
                 return Err(err(
-                    "default_key_not_listed",
+                    "preset_bad_reference",
                     lines.section_key("preset", "default_keys"),
                 ));
             }
@@ -628,7 +712,7 @@ pub fn parse(text: &str) -> Result<PortableFile, PortableError> {
                 || k.chars().any(char::is_control)
             {
                 return Err(err(
-                    "default_key_invalid",
+                    "invalid_key",
                     lines.section_key("preset", "default_keys"),
                 ));
             }
@@ -729,8 +813,14 @@ fn same_endpoint(a: &CloudService, b: &CloudService) -> bool {
 }
 
 /// What importing `file` into `current` (and `vocab`) would do. Pure; the caller shows it as a
-/// preview and applies it only after the user confirms.
-pub fn plan_merge(current: &Config, vocab: &Vocab, file: &PortableFile) -> MergePlan {
+/// preview and applies it only after the user confirms. `has_key(id)` tells whether a key is
+/// stored for a current service (used for `key_missing`).
+pub fn plan_merge(
+    current: &Config,
+    vocab: &Vocab,
+    file: &PortableFile,
+    has_key: &dyn Fn(&str) -> bool,
+) -> MergePlan {
     let mut plan = MergePlan {
         ignored: file.ignored.clone(),
         ..MergePlan::default()
@@ -738,43 +828,38 @@ pub fn plan_merge(current: &Config, vocab: &Vocab, file: &PortableFile) -> Merge
 
     // Services, by id.
     for svc in &file.services {
-        let needs_key = file.needs_key.contains(&svc.id);
-        let no_default = !file.default_keys.contains(&svc.id);
+        // Does a key exist after the import (before the user types one)?
+        let mut key_kept = file.default_keys.contains(&svc.id);
         match current.cloud_service(&svc.id) {
-            None => {
-                plan.added.push(svc.id.clone());
-                if needs_key && no_default {
-                    plan.key_missing.push(svc.id.clone());
-                }
-            }
+            None => plan.added.push(svc.id.clone()),
             Some(existing) => {
+                let endpoint_kept = same_endpoint(existing, svc);
                 if normalize_service(existing) == *svc {
                     plan.unchanged.push(svc.id.clone());
-                    continue;
-                }
-                plan.updated.push(svc.id.clone());
-                if !same_endpoint(existing, svc) {
-                    plan.drop_old_key.push(svc.id.clone());
-                    if needs_key && no_default {
-                        plan.key_missing.push(svc.id.clone());
+                } else {
+                    plan.updated.push(svc.id.clone());
+                    if !endpoint_kept {
+                        plan.drop_old_key.push(svc.id.clone());
                     }
                 }
+                key_kept |= endpoint_kept && has_key(&svc.id);
             }
+        }
+        if file.needs_key.contains(&svc.id) && !key_kept {
+            plan.key_missing.push(svc.id.clone());
         }
     }
 
-    // A shown name must not clash with a service outside the file or an earlier file service.
+    // A file service must not take the id or name of a service the import leaves alone.
     let mut others: Vec<CloudService> = current
         .cloud
         .iter()
         .filter(|s| !file.services.iter().any(|f| f.id == s.id))
-        .cloned()
+        .map(normalize_service)
         .collect();
     for svc in &file.services {
-        if let Some(name) = &svc.name {
-            if name_clash(name, &svc.id, &others) {
-                plan.problems.push(PortableError::new("name_taken", None));
-            }
+        if clashes(svc, &others) {
+            plan.name_taken.push(svc.id.clone());
         }
         others.push(svc.clone());
     }
@@ -869,6 +954,18 @@ fn kind_name(kind: CloudKind) -> &'static str {
     }
 }
 
+/// Result of [`export`]: the file text and what had to be left out of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exported {
+    pub text: String,
+    /// Ids of services left out because they would not pass [`parse`] (bad id, name or timeout
+    /// out of range, missing or disallowed URL, name clash, ...). Empty for a consistent config.
+    pub skipped: Vec<String>,
+    /// `[route]` fields written as `local` because their service was skipped, is missing, or
+    /// cannot do that purpose (`asr`, `polish`, `translate`).
+    pub route_reset: Vec<&'static str>,
+}
+
 /// The current settings as portable file text.
 ///
 /// Writes `[v2c]`, `[preset] needs_key`, `[route]`, every `[[cloud]]` and `[vocabulary]` (when
@@ -876,13 +973,25 @@ fn kind_name(kind: CloudKind) -> &'static str {
 /// is stored for a service; the official kinds are always listed in `needs_key`. `from` is the
 /// platform label (`windows` / `linux` / `android`). Field order is fixed and each section has
 /// a one-line comment before it.
+///
+/// The text always passes [`parse`], even for a hand-edited config: services that would fail
+/// validation are left out (listed in `skipped`) and routes that would fail the capability check
+/// become `local` (listed in `route_reset`).
 pub fn export(
     cfg: &Config,
     vocab: Option<&Vocab>,
     has_key: &dyn Fn(&str) -> bool,
     from: &str,
-) -> String {
-    let services: Vec<CloudService> = cfg.cloud.iter().map(normalize_service).collect();
+) -> Exported {
+    let mut services: Vec<CloudService> = Vec::new();
+    let mut skipped = Vec::new();
+    for svc in &cfg.cloud {
+        match validate_service(svc, &services) {
+            Ok(s) => services.push(s),
+            Err(_) => skipped.push(svc.id.clone()),
+        }
+    }
+    let mut route_reset = Vec::new();
     let mut out = String::new();
 
     out.push_str(
@@ -907,25 +1016,25 @@ pub fn export(
         out.push_str(&format!("needs_key = {}\n", string_array(&needs_key)));
     }
 
-    // A route that points to a service that does not exist is written as `local`.
-    let target = |id: &str| {
-        if id == LOCAL || services.iter().any(|s| s.id == id) {
+    // A route that cannot be imported again (missing service, no such capability) is `local`.
+    let mut target = |field: &'static str, id: &str, ok: fn(&CloudService) -> bool| {
+        if id == LOCAL || services.iter().any(|s| s.id == id && ok(s)) {
             id.to_owned()
         } else {
+            route_reset.push(field);
             LOCAL.to_owned()
         }
     };
+    let (asr, polish, translate) = (
+        target("asr", &cfg.route.asr, has_asr),
+        target("polish", &cfg.route.polish, has_llm),
+        target("translate", &cfg.route.translate, has_llm),
+    );
     out.push_str("\n# Who handles each purpose: \"local\" or a service id below.\n");
     out.push_str("[route]\n");
-    out.push_str(&format!("asr = {}\n", quoted(&target(&cfg.route.asr))));
-    out.push_str(&format!(
-        "polish = {}\n",
-        quoted(&target(&cfg.route.polish))
-    ));
-    out.push_str(&format!(
-        "translate = {}\n",
-        quoted(&target(&cfg.route.translate))
-    ));
+    out.push_str(&format!("asr = {}\n", quoted(&asr)));
+    out.push_str(&format!("polish = {}\n", quoted(&polish)));
+    out.push_str(&format!("translate = {}\n", quoted(&translate)));
     out.push_str(&format!(
         "cloud_fallback_to_local = {}\n",
         cfg.route.cloud_fallback_to_local
@@ -958,7 +1067,11 @@ pub fn export(
         out.push_str("[vocabulary]\n");
         out.push_str(&format!("words = {}\n", string_array(v.words())));
     }
-    out
+    Exported {
+        text: out,
+        skipped,
+        route_reset,
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1089,7 +1202,7 @@ mod tests {
     fn builtin_preset_merge_matches_what_preset_apply_writes() {
         let f = parse(TN).unwrap();
         let cur = Config::default();
-        let plan = plan_merge(&cur, &Vocab::default(), &f);
+        let plan = plan_merge(&cur, &Vocab::default(), &f, &|_| false);
         assert_eq!(plan.added, ["tn-tea-asr", "tn-breeze-asr", "tn-qwen"]);
         assert!(plan.updated.is_empty() && plan.unchanged.is_empty());
         // Both ASR services have a default key, so nothing is missing.
@@ -1106,11 +1219,11 @@ mod tests {
         applied.cloud = f.services.clone();
         applied.route.polish = "tn-qwen".into();
         applied.route.translate = "tn-qwen".into();
-        let again = plan_merge(&applied, &Vocab::default(), &f);
+        let again = plan_merge(&applied, &Vocab::default(), &f, &|_| false);
         assert!(again.is_empty());
         assert_eq!(again.unchanged.len(), 3);
         let rd = parse(RD).unwrap();
-        let both = plan_merge(&applied, &Vocab::default(), &rd);
+        let both = plan_merge(&applied, &Vocab::default(), &rd, &|_| false);
         assert_eq!(both.added.len(), 3);
         assert!(both.drop_old_key.is_empty());
     }
@@ -1140,7 +1253,8 @@ mod tests {
     fn example_and_doc_snippets_parse() {
         parse(EXAMPLE).unwrap();
         let mut n = 0;
-        let mut rest = DOC;
+        let doc = DOC.replace("\r\n", "\n");
+        let mut rest = doc.as_str();
         while let Some(i) = rest.find("```toml\n") {
             let body = &rest[i + 8..];
             let end = body.find("```").expect("unclosed code block");
@@ -1155,7 +1269,7 @@ mod tests {
     fn extra_sections_are_ignored_and_listed() {
         let f = parse(fixture("valid-extra-sections")).unwrap();
         assert_eq!(f.ignored, ["audio", "hotkey"]);
-        let plan = plan_merge(&Config::default(), &Vocab::default(), &f);
+        let plan = plan_merge(&Config::default(), &Vocab::default(), &f, &|_| false);
         assert_eq!(plan.ignored, ["audio", "hotkey"]);
     }
 
@@ -1175,12 +1289,12 @@ mod tests {
             ("reject-unknown-kind", "unknown_kind"),
             ("reject-format-2", "format_too_new"),
             ("reject-id-space", "id_invalid"),
-            ("reject-duplicate-id", "id_duplicate"),
+            ("reject-duplicate-id", "preset_duplicate_id"),
             ("reject-route-unknown", "route_unknown_service"),
             ("reject-claude-asr", "route_no_asr"),
             ("reject-compat-no-url", "base_url_required"),
-            ("reject-official-http", "base_url_invalid"),
-            ("reject-default-key-unlisted", "default_key_not_listed"),
+            ("reject-official-http", "invalid_base_url"),
+            ("reject-default-key-unlisted", "preset_bad_reference"),
         ];
         for (name, want) in cases {
             let (got, line) = code(fixture(name));
@@ -1225,7 +1339,7 @@ mod tests {
             "name_too_long"
         );
         assert_eq!(code(&svc("name = \"LOCAL\"\n")).0, "name_reserved");
-        assert_eq!(code(&svc("name = \"a\\u0007b\"\n")).0, "name_invalid");
+        assert_eq!(code(&svc("name = \"a\\u0007b\"\n")).0, "invalid_name");
         // Ids.
         for bad in ["", " a", "a ", "a b", "a/b", "a.b", "é"] {
             let t = format!("[v2c]\nformat = 1\n[[cloud]]\nid = \"{bad}\"\nkind = \"gemini\"\n");
@@ -1242,21 +1356,21 @@ mod tests {
         // Unlisted needs_key, bad choices, bad default keys.
         assert_eq!(
             code("[v2c]\nformat = 1\n[preset]\nneeds_key = [\"zz\"]\n").0,
-            "needs_key_unknown"
+            "preset_bad_reference"
         );
         assert_eq!(
             code("[v2c]\nformat = 1\n[preset]\nasr_choices = [\"zz\"]\n").0,
-            "asr_choice_invalid"
+            "preset_bad_reference"
         );
         let dk = |v: &str| {
             format!("[v2c]\nformat = 1\n[preset]\nneeds_key = [\"g\"]\ndefault_keys = {{ g = {v} }}\n[[cloud]]\nid = \"g\"\nkind = \"gemini\"\n")
         };
-        assert_eq!(code(&dk("\"  \"")).0, "default_key_invalid");
+        assert_eq!(code(&dk("\"  \"")).0, "invalid_key");
         assert_eq!(
             code(&dk(&format!("\"{}\"", "k".repeat(257)))).0,
-            "default_key_invalid"
+            "invalid_key"
         );
-        assert_eq!(code(&dk("\"a\\u0007\"")).0, "default_key_invalid");
+        assert_eq!(code(&dk("\"a\\u0007\"")).0, "invalid_key");
         assert_eq!(
             parse(&dk("\"  ok  \"")).unwrap().default_keys.get("g"),
             Some("ok")
@@ -1265,9 +1379,9 @@ mod tests {
         let pre = |p: &str, id: &str| {
             format!("[preset]\nid_prefix = \"{p}\"\n[[cloud]]\nid = \"{id}\"\nkind = \"gemini\"\n")
         };
-        assert_eq!(code(&pre("gemini-", "gemini-x")).0, "prefix_invalid");
-        assert_eq!(code(&pre("", "x")).0, "prefix_invalid");
-        assert_eq!(code(&pre("tn-", "rd-x")).0, "id_prefix");
+        assert_eq!(code(&pre("gemini-", "gemini-x")).0, "preset_id_prefix");
+        assert_eq!(code(&pre("", "x")).0, "preset_id_prefix");
+        assert_eq!(code(&pre("tn-", "rd-x")).0, "preset_id_prefix");
         parse(&pre("tn-", "tn-x")).unwrap();
         // Route capability: a compat endpoint with no text model cannot polish.
         let r = "[v2c]\nformat = 1\n[route]\npolish = \"a\"\n[[cloud]]\nid = \"a\"\nkind = \"open_ai_compat\"\nbase_url = \"http://h/v1\"\nasr_model = \"m\"\n";
@@ -1310,7 +1424,7 @@ mod tests {
         // Accepted files: Debug of the parsed file and of the plan hide keys, URLs and words.
         let ok = format!("[v2c]\nformat = 1\n[preset]\nneeds_key = [\"g\"]\ndefault_keys = {{ g = \"{SECRET_KEY}\" }}\n[[cloud]]\nid = \"g\"\nkind = \"open_ai_compat\"\nbase_url = \"http://{SECRET_HOST}/v1\"\n[vocabulary]\nwords = [\"{SECRET_WORD}\"]\n");
         let f = parse(&ok).unwrap();
-        let plan = plan_merge(&Config::default(), &Vocab::default(), &f);
+        let plan = plan_merge(&Config::default(), &Vocab::default(), &f, &|_| false);
         for shown in [
             format!("{f:?}"),
             format!("{plan:?}"),
@@ -1340,7 +1454,7 @@ mod tests {
              [[cloud]]\nid = \"fresh\"\nkind = \"gemini\"\n",
         )
         .unwrap();
-        let plan = plan_merge(&cur, &Vocab::default(), &file);
+        let plan = plan_merge(&cur, &Vocab::default(), &file, &|_| false);
         assert_eq!(plan.added, ["fresh"]);
         assert_eq!(plan.updated, ["moved", "edited"]);
         assert_eq!(plan.unchanged, ["same"]);
@@ -1354,7 +1468,7 @@ mod tests {
     #[test]
     fn default_key_means_not_missing() {
         let file = parse(fixture("valid-lan")).unwrap();
-        let plan = plan_merge(&Config::default(), &Vocab::default(), &file);
+        let plan = plan_merge(&Config::default(), &Vocab::default(), &file, &|_| false);
         assert!(plan.key_missing.is_empty());
         assert!(file.default_keys.contains("lan-asr"));
     }
@@ -1370,7 +1484,7 @@ mod tests {
             "[v2c]\nformat = 1\n[route]\nasr = \"g\"\ntranslate = \"g\"\ncloud_fallback_to_local = false\n[[cloud]]\nid = \"g\"\nkind = \"gemini\"\n",
         )
         .unwrap();
-        let plan = plan_merge(&cur, &Vocab::default(), &file);
+        let plan = plan_merge(&cur, &Vocab::default(), &file, &|_| false);
         let got: Vec<_> = plan
             .route
             .iter()
@@ -1391,16 +1505,24 @@ mod tests {
         other.name = Some("Mine".into());
         let cur = cfg_with(vec![other]);
         let file = parse("[v2c]\nformat = 1\n[[cloud]]\nid = \"new\"\nkind = \"open_ai_compat\"\nbase_url = \"http://x/v1\"\nname = \"mine\"\n").unwrap();
-        let plan = plan_merge(&cur, &Vocab::default(), &file);
+        let plan = plan_merge(&cur, &Vocab::default(), &file, &|_| false);
         assert!(!plan.is_applicable());
-        assert_eq!(plan.problems[0].code, "name_taken");
+        assert_eq!(plan.name_taken, ["new"]);
+        // An id that equals an outside service's name is refused too (see cloud.rs new_id).
+        let file =
+            parse("[v2c]\nformat = 1\n[[cloud]]\nid = \"MINE\"\nkind = \"gemini\"\n").unwrap();
+        let plan = plan_merge(&cur, &Vocab::default(), &file, &|_| false);
+        assert_eq!(plan.name_taken, ["MINE"]);
+        // The service that owns the name may be updated by the file itself.
+        let file = parse("[v2c]\nformat = 1\n[[cloud]]\nid = \"other\"\nkind = \"open_ai_compat\"\nbase_url = \"http://h/v1\"\nname = \"Mine\"\n").unwrap();
+        assert!(plan_merge(&cur, &Vocab::default(), &file, &|_| false).is_applicable());
     }
 
     #[test]
     fn vocabulary_merges_as_union_with_limit() {
         let cur_vocab = Vocab::from_words(&["Alpha", "beta"]);
         let file = parse("[v2c]\nformat = 1\n[vocabulary]\nwords = [\"ALPHA\", \"Gamma\", \"  Del  ta \", \"gamma\", \"\", \"# x\"]\n").unwrap();
-        let plan = plan_merge(&Config::default(), &cur_vocab, &file);
+        let plan = plan_merge(&Config::default(), &cur_vocab, &file, &|_| false);
         assert_eq!(plan.vocab_new, ["Gamma", "Del ta"]);
         assert_eq!(plan.vocab_blocked, 1); // the comment-like entry
                                            // Limit: current list nearly full.
@@ -1410,7 +1532,7 @@ mod tests {
         let full = Vocab::from_words(&words);
         let file =
             parse("[v2c]\nformat = 1\n[vocabulary]\nwords = [\"n1\", \"n2\", \"n3\"]\n").unwrap();
-        let plan = plan_merge(&Config::default(), &full, &file);
+        let plan = plan_merge(&Config::default(), &full, &file, &|_| false);
         assert_eq!(plan.vocab_new, ["n1"]);
         assert_eq!(plan.vocab_blocked, 2);
         // Too long entries are dropped and counted.
@@ -1455,19 +1577,19 @@ mod tests {
     fn export_round_trips_to_all_unchanged() {
         let cfg = rich_config();
         let vocab = Vocab::from_words(&["Breeze-ASR", "台積電", "He said \"hi\""]);
-        let text = export(&cfg, Some(&vocab), &|id| id == "lan", "windows");
+        let text = export(&cfg, Some(&vocab), &|id| id == "lan", "windows").text;
         let file = parse(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
         assert_eq!(file.format, 1);
         assert_eq!(file.exported_from.as_deref(), Some("windows"));
         assert!(file.exported_at.is_some());
         assert_eq!(file.needs_key, ["my-gemini", "lan", "my-claude"]);
         assert!(file.default_keys.is_empty());
-        let plan = plan_merge(&cfg, &vocab, &file);
+        let plan = plan_merge(&cfg, &vocab, &file, &|_| false);
         assert!(plan.is_empty(), "{plan:?}");
         assert_eq!(plan.unchanged, ["my-gemini", "lan", "my-claude"]);
-        assert!(plan.vocab_new.is_empty() && plan.vocab_blocked == 0 && plan.problems.is_empty());
+        assert!(plan.vocab_new.is_empty() && plan.vocab_blocked == 0 && plan.name_taken.is_empty());
         // Importing into an empty config reproduces it.
-        let fresh = plan_merge(&Config::default(), &Vocab::default(), &file);
+        let fresh = plan_merge(&Config::default(), &Vocab::default(), &file, &|_| false);
         assert_eq!(fresh.added.len(), 3);
         assert_eq!(fresh.vocab_new.len(), 3);
         assert_eq!(file.services, cfg.cloud);
@@ -1476,11 +1598,11 @@ mod tests {
     #[test]
     fn export_never_writes_keys_and_lists_needs_key_by_rule() {
         let cfg = rich_config();
-        let text = export(&cfg, None, &|_| true, "linux");
+        let text = export(&cfg, None, &|_| true, "linux").text;
         assert!(!text.contains("default_keys"));
         assert!(!text.contains("[vocabulary]"));
         // No stored key for the compat service: only the official kinds need one.
-        let text = export(&cfg, None, &|_| false, "linux");
+        let text = export(&cfg, None, &|_| false, "linux").text;
         let f = parse(&text).unwrap();
         assert_eq!(f.needs_key, ["my-gemini", "my-claude"]);
         // Nothing needs a key: no [preset] section at all.
@@ -1489,7 +1611,8 @@ mod tests {
             None,
             &|_| false,
             "android",
-        );
+        )
+        .text;
         assert!(!none.contains("[preset]"));
         parse(&none).unwrap();
     }
@@ -1498,7 +1621,7 @@ mod tests {
     fn export_layout_is_fixed_with_a_comment_before_each_section() {
         let cfg = rich_config();
         let vocab = Vocab::from_words(&["x"]);
-        let text = export(&cfg, Some(&vocab), &|_| false, "windows");
+        let text = export(&cfg, Some(&vocab), &|_| false, "windows").text;
         let lines: Vec<&str> = text.lines().collect();
         for (i, l) in lines.iter().enumerate() {
             if l.starts_with('[') && *l != "[v2c]" {
@@ -1546,7 +1669,7 @@ mod tests {
     fn export_writes_dangling_route_as_local() {
         let mut cfg = cfg_with(vec![gemini("g")]);
         cfg.route.asr = "gone".into();
-        let f = parse(&export(&cfg, None, &|_| false, "windows")).unwrap();
+        let f = parse(&export(&cfg, None, &|_| false, "windows").text).unwrap();
         assert_eq!(f.route.asr.as_deref(), Some("local"));
     }
 
@@ -1555,5 +1678,135 @@ mod tests {
         let t = utc_now();
         assert_eq!(t.len(), 20);
         assert!(t.ends_with('Z') && t.as_bytes()[10] == b'T');
+    }
+
+    // --- review fixes ----------------------------------------------------------------------
+
+    #[test]
+    fn crlf_input_parses_like_lf_with_the_same_lines() {
+        for name in ["valid-gemini-claude", "valid-lan", "valid-vocab-only"] {
+            let lf = fixture(name).replace("\r\n", "\n");
+            let crlf = lf.replace('\n', "\r\n");
+            assert_eq!(parse(&crlf).unwrap(), parse(&lf).unwrap(), "{name}");
+        }
+        for name in [
+            "reject-unknown-kind",
+            "reject-duplicate-id",
+            "reject-id-space",
+        ] {
+            let lf = fixture(name).replace("\r\n", "\n");
+            let crlf = lf.replace('\n', "\r\n");
+            assert_eq!(code(&crlf), code(&lf), "{name}");
+        }
+        parse(&EXAMPLE.replace("\r\n", "\n").replace('\n', "\r\n")).unwrap();
+    }
+
+    #[test]
+    fn key_missing_covers_every_needs_key_service_without_a_surviving_key() {
+        let text = "[v2c]\nformat = 1\n[preset]\nneeds_key = [\"kept\", \"nokey\", \"moved\", \"dflt\", \"new\"]\ndefault_keys = { dflt = \"k\" }\n\
+            [[cloud]]\nid = \"kept\"\nkind = \"gemini\"\n\
+            [[cloud]]\nid = \"nokey\"\nkind = \"claude\"\n\
+            [[cloud]]\nid = \"moved\"\nkind = \"open_ai_compat\"\nbase_url = \"http://new/v1\"\n\
+            [[cloud]]\nid = \"dflt\"\nkind = \"gemini\"\n\
+            [[cloud]]\nid = \"new\"\nkind = \"open_ai\"\n";
+        let file = parse(text).unwrap();
+        let cur = cfg_with(vec![
+            gemini("kept"),
+            CloudService {
+                kind: CloudKind::Claude,
+                ..gemini("nokey")
+            },
+            compat("moved", "http://old/v1"),
+        ]);
+        let plan = plan_merge(&cur, &Vocab::default(), &file, &|id| {
+            id == "kept" || id == "moved"
+        });
+        // kept: stored key survives. nokey: none stored. moved: old key dropped. dflt: default.
+        assert_eq!(plan.key_missing, ["nokey", "moved", "new"]);
+    }
+
+    #[test]
+    fn unknown_fields_are_listed_by_name_and_never_echoed() {
+        let text = format!(
+            "[v2c]\nformat = 1\nnote = \"{SECRET_WORD}\"\n[route]\nasr_x = \"local\"\n\
+             [[cloud]]\nid = \"a\"\nkind = \"gemini\"\n\
+             [[cloud]]\nid = \"b\"\nkind = \"gemini\"\nasr_modle = \"m\"\napi_key = \"{SECRET_KEY}\"\n\
+             [hotkey]\ndictate = \"x\"\n"
+        );
+        let f = parse(&text).unwrap();
+        assert_eq!(
+            f.ignored,
+            [
+                "hotkey",
+                "v2c.note",
+                "route.asr_x",
+                "cloud[2].api_key",
+                "cloud[2].asr_modle"
+            ]
+        );
+        let plan = plan_merge(&Config::default(), &Vocab::default(), &f, &|_| false);
+        let shown = format!("{f:?}{plan:?}");
+        assert!(!shown.contains(SECRET_KEY) && !shown.contains(SECRET_WORD));
+        // The key is not stored anywhere in the parsed services.
+        assert!(!format!("{:?}", f.services).contains(SECRET_KEY));
+        // Odd field names are not echoed.
+        let odd = format!("[v2c]\nformat = 1\n[route]\n\"{SECRET_KEY} with space\" = 1\n");
+        assert_eq!(parse(&odd).unwrap().ignored, ["route.?"]);
+    }
+
+    #[test]
+    fn export_of_an_inconsistent_config_still_parses() {
+        let mut long = compat("long-name", "http://h/v1");
+        long.name = Some("x".repeat(NAME_MAX_CHARS + 1));
+        let mut slow = compat("slow", "http://h/v1");
+        slow.asr_timeout_ms = Some(5);
+        let mut bad_id = gemini("bad id é");
+        bad_id.asr_model = Some("m".into());
+        let mut no_url = compat("no-url", "");
+        no_url.base_url = None;
+        let mut dup = gemini("dup");
+        dup.llm_model = Some("m".into());
+        let mut named = compat("named", "http://h/v1");
+        named.name = Some("Dup".into()); // clashes with the id `dup`
+        let mut lan = compat("lan-asr", "http://h/v1");
+        lan.asr_model = Some("m".into()); // no text model
+        let mut cfg = cfg_with(vec![
+            long,
+            slow,
+            bad_id,
+            no_url,
+            dup.clone(),
+            dup,
+            named,
+            lan,
+            CloudService {
+                kind: CloudKind::Claude,
+                ..gemini("claude")
+            },
+        ]);
+        cfg.route = RouteConfig {
+            asr: "claude".into(),     // Claude cannot do speech recognition
+            polish: "lan-asr".into(), // no text model
+            translate: "slow".into(), // skipped service
+            cloud_fallback_to_local: true,
+        };
+        let out = export(&cfg, None, &|_| false, "windows");
+        let file = parse(&out.text).unwrap_or_else(|e| panic!("{e}\n{}", out.text));
+        assert_eq!(
+            out.skipped,
+            ["long-name", "slow", "bad id é", "no-url", "dup", "named"].map(String::from)
+        );
+        assert_eq!(out.route_reset, ["asr", "polish", "translate"]);
+        assert_eq!(file.route.asr.as_deref(), Some("local"));
+        assert_eq!(
+            file.services
+                .iter()
+                .map(|s| s.id.as_str())
+                .collect::<Vec<_>>(),
+            ["dup", "lan-asr", "claude"]
+        );
+        // A consistent config skips nothing.
+        let ok = export(&rich_config(), None, &|_| false, "linux");
+        assert!(ok.skipped.is_empty() && ok.route_reset.is_empty());
     }
 }
