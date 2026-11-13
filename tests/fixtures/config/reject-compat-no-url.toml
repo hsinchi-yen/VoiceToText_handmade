@@ -1,0 +1,7 @@
+[v2c]
+format = 1
+
+[[cloud]]
+id = "lan"
+kind = "open_ai_compat"
+asr_model = "m"

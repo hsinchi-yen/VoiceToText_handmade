@@ -14,6 +14,7 @@ pub mod history;
 pub mod inject_plan;
 pub mod llm;
 pub mod pipeline;
+pub mod portable;
 pub mod postprocess;
 pub mod prompts;
 pub mod redact;

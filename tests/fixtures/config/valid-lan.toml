@@ -1,0 +1,27 @@
+# Fixture: LAN compatible endpoint with a shared key. The key is a placeholder.
+[v2c]
+format = 1
+
+[preset]
+title = "Team LAN"
+needs_key = ["lan-asr"]
+default_keys = { "lan-asr" = "shared-key" }
+
+[route]
+asr = "lan-asr"
+polish = "lan-llm"
+
+[[cloud]]
+id = "lan-asr"
+name = "LAN ASR"
+kind = "open_ai_compat"
+base_url = "http://192.168.1.10:8002/v1"
+asr_model = "breeze-asr-25"
+asr_timeout_ms = 8000
+
+[[cloud]]
+id = "lan-llm"
+name = "LAN LLM"
+kind = "open_ai_compat"
+base_url = "http://192.168.1.10:8000/v1"
+llm_model = "my-model"

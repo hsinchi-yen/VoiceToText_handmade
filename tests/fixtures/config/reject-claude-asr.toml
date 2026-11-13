@@ -1,0 +1,9 @@
+[v2c]
+format = 1
+
+[route]
+asr = "my-claude"
+
+[[cloud]]
+id = "my-claude"
+kind = "claude"

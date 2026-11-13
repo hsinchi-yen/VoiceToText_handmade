@@ -1,0 +1,9 @@
+[v2c]
+format = 1
+
+[route]
+translate = "missing"
+
+[[cloud]]
+id = "a"
+kind = "gemini"

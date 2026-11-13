@@ -1,0 +1,6 @@
+[v2c]
+format = 1
+
+[[cloud]]
+id = " my-gemini"
+kind = "gemini"
