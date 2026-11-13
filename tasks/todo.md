@@ -232,7 +232,7 @@
 ## 0.3.0 交付（2026-11-13）
 > 你決定：Windows、Linux、Android 一起用 0.3.0（含 T2.7、T2.8、T4.10、T4.11、T5.1～T5.3）。
 - [x] 版本號 0.3.0（`Cargo.toml`、`tauri.conf.json`、`package.json`、`tools/ibus/v2c.xml`、Android `versionName` 0.3.0／`versionCode` 3）
-- [x] Windows 安裝檔 `releases/v2c_0.3.0_x64-setup.exe`（2026-11-13 22:05 重建，含預設組態／匯入對話框修正 `f953eff`、`7d08ed0`、`cf66fbf`；CUDA 版，458 MiB，SHA-256 `77991fb3…133eda0`，建置機 Defender 掃描無威脅；取代 18:39 的 `4f6506b8…`）
+- [x] Windows 安裝檔 `releases/v2c_0.3.0_x64-setup.exe`（2026-11-14 00:05 重建，main `0f4ba8d`：含對話框修正 `f953eff`、`7d08ed0`、`cf66fbf` 及 origin 的「套用不再詢問區網」`9ab0dce`、`c99d4a1`、「立即使用已存金鑰」`008bf57`；CUDA 版，458.2 MiB，SHA-256 `e3c4412b…8be8ff8d`，建置機 Defender 掃描無威脅；取代 22:05 的 `77991fb3…`）
 - [x] Android APK `releases/v2c_0.3.0_android.apk`（versionCode 3，55 MiB，SHA-256 `c1967708…74c1351b`，與 0.1.0／0.2.0 同一把簽署金鑰，可覆蓋安裝；16 KB 對齊通過）
 - [x] `docs/`、README 改寫為 0.3.0，並經獨立 agent 對照程式與介面文字核對
 - [x] `linux_handover.md` 改寫為 0.3.0（含給 Linux agent 的提示詞）
