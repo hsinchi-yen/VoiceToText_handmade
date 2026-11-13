@@ -3,9 +3,11 @@
   // apply, then test each endpoint. Built from ui/lib components.
   import { onMount } from "svelte";
   import * as api from "./api.js";
+  import * as configIo from "../config-io/api.js";
   import { Banner, Button, Dialog, Icon, LinearProgress, ListItem, SegmentedButton, Select, TextField } from "../lib/index.js";
 
-  let { onclose = () => {} } = $props();
+  // `onfile(path)`: the user picked a configuration file; the caller opens the import dialog.
+  let { onclose = () => {}, onfile = undefined } = $props();
 
   let open = $state(true);
   let step = $state(1);
@@ -48,10 +50,12 @@
   async function chooseFile() {
     error = "";
     try {
-      const path = await api.pickFile();
-      if (path) await choose({ file: path });
-    } catch (code) {
-      error = api.describe(code);
+      const path = await configIo.pickOpen();
+      if (!path) return;
+      finish();
+      onfile?.(path);
+    } catch (err) {
+      error = configIo.describe(err);
     }
   }
 
@@ -140,7 +144,7 @@
           {#snippet trailing()}<Icon name="chevron" size={20} />{/snippet}
         </ListItem>
       {/each}
-      <ListItem headline="從檔案載入" supporting="選擇 .toml 預設組態檔" onclick={() => !busy && chooseFile()}>
+      <ListItem headline="從檔案載入" supporting="選擇 .toml 組態檔，預覽後再套用" onclick={() => !busy && chooseFile()}>
         {#snippet leading()}<Icon name="upload" />{/snippet}
         {#snippet trailing()}<Icon name="chevron" size={20} />{/snippet}
       </ListItem>

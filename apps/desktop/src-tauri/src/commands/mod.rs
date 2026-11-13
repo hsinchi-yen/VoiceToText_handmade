@@ -1,6 +1,7 @@
 //! Tauri commands, one file per feature. Register new commands in `main.rs`.
 
 pub mod cloud; // T1.7b
+pub mod config_io; // T5.2
 pub mod gpu; // T1.10b / T1.11 (settings VRAM bar)
 pub mod history; // T1.9
 pub mod models; // T1.11

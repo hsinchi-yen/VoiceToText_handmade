@@ -4,15 +4,14 @@
 //! which speech recognition endpoints the user may choose, which need an API key), `[[cloud]]`
 //! (the services) and `[route]` (polish / translate targets). Two presets are built in
 //! (`TN_CUSTOM_LLM_ADDR.toml`, `RD_CUSTOM_LLM_ADDR.toml`, embedded with `include_str!`); the
-//! user may also load one from a `.toml` file (at most [`MAX_FILE_BYTES`]). Any other
-//! top-level section is ignored, never written, and listed in the preview.
+//! user's own files go through `config_io.rs` (`v2c_core::portable`). Any other top-level
+//! section is ignored, never written, and listed in the preview.
 //!
 //! Commands (main window only):
 //! - `presets_list`: the built-ins with a short summary.
 //! - `presets_preview(source)`: what applying would do (after model detection).
 //! - `presets_apply(source, asr_choice, keys)`: writes the services and routes, then emits
 //!   `v2c:config-changed`.
-//! - `presets_pick_file`: native file dialog for 「從檔案載入」; returns the path.
 //!
 //! Applying reuses `cloud.rs`: the same `CONFIG_LOCK`, the comment-preserving `update_config`,
 //! `upsert_service`, name rules and timeout range. It only adds or updates the preset's own
@@ -55,8 +54,6 @@ use super::cloud::{
 };
 use crate::tray::CONFIG_CHANGED_EVENT;
 
-/// Largest preset file accepted.
-pub const MAX_FILE_BYTES: u64 = 64 * 1024;
 /// Model-list query timeout during detection.
 const DETECT_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -76,18 +73,34 @@ const WHITELIST: &[&str] = &["preset", "cloud", "route"];
 // Payloads
 // ---------------------------------------------------------------------------------------
 
-/// Where a preset comes from: `{ "builtin": "TN" }` or `{ "file": "C:\\...\\x.toml" }`.
+/// Where a preset comes from: `{ "builtin": "TN" }`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PresetSource {
     Builtin(String),
-    File(String),
 }
 
 /// Pasted keys by service id. Zeroized on drop; `Debug` shows ids only.
 #[derive(Deserialize, Default)]
 #[serde(transparent)]
 pub struct Keys(HashMap<String, String>);
+
+impl Keys {
+    /// Pasted `(service id, key)` pairs.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.0.iter()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn of(pairs: &[(&str, &str)]) -> Keys {
+        Keys(
+            pairs
+                .iter()
+                .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+                .collect(),
+        )
+    }
+}
 
 impl Drop for Keys {
     fn drop(&mut self) {
@@ -366,47 +379,13 @@ fn validate(preset: &mut Preset, cfg: &Config) -> Result<(), &'static str> {
     }
 }
 
-fn read_preset_file(path: &str) -> Result<String, &'static str> {
-    use std::io::Read;
-
-    // No network shares: a slow or hostile server must not stall the app.
-    if path.starts_with("\\\\") || path.starts_with("//") {
-        return Err("preset_unreadable");
-    }
-    let p = Path::new(path);
-    let is_toml = p
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("toml"));
-    if !is_toml {
-        return Err("preset_not_toml");
-    }
-    let file = std::fs::File::open(p).map_err(|_| "preset_unreadable")?;
-    if !file.metadata().map_err(|_| "preset_unreadable")?.is_file() {
-        return Err("preset_unreadable");
-    }
-    // Read at most one byte past the limit, whatever the metadata claims.
-    let mut bytes = Vec::new();
-    file.take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "preset_unreadable")?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err("preset_too_large");
-    }
-    String::from_utf8(bytes).map_err(|_| "preset_unreadable")
-}
-
 fn load_source(source: &PresetSource) -> Result<Resolved, &'static str> {
-    let (label, text) = match source {
-        PresetSource::Builtin(name) => {
-            let (n, t) = BUILTINS
-                .iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case(name))
-                .ok_or("preset_unknown")?;
-            ((*n).to_owned(), (*t).to_owned())
-        }
-        PresetSource::File(path) => ("file".to_owned(), read_preset_file(path)?),
-    };
+    let PresetSource::Builtin(name) = source;
+    let (n, t) = BUILTINS
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        .ok_or("preset_unknown")?;
+    let (label, text) = ((*n).to_owned(), (*t).to_owned());
     let preset = parse_preset(&text)?;
     Ok(Resolved {
         label,
@@ -449,7 +428,11 @@ async fn detect_models(r: &mut Resolved, http: &CloudHttp) {
     }
 }
 
-async fn detect_one(svc: &CloudService, http: &CloudHttp, t: &TimeoutConfig) -> Option<String> {
+pub(crate) async fn detect_one(
+    svc: &CloudService,
+    http: &CloudHttp,
+    t: &TimeoutConfig,
+) -> Option<String> {
     let url = svc.base_url.clone()?;
     // The id only labels the log line of the probe; it matches no saved service.
     let draft = CloudDraft {
@@ -581,21 +564,85 @@ fn build_preview(
 }
 
 /// A key entry that was changed, so it can be put back.
-struct KeyChange {
+pub(crate) struct KeyChange {
     id: String,
     old: Option<ApiKey>,
 }
 
-fn restore_keys(stored: &dyn SecretStore, changes: &[KeyChange]) {
+pub(crate) fn restore_keys(stored: &dyn SecretStore, changes: &[KeyChange]) {
     for c in changes.iter().rev() {
         let restored = match &c.old {
             Some(k) => stored.set(&c.id, k),
             None => stored.delete(&c.id),
         };
         if let Err(e) = restored {
-            warn!(service = %c.id, error = %e, "preset: could not restore key");
+            warn!(error = %e, "preset: could not restore key");
         }
     }
+}
+
+/// Stores the keys for `services` before `config.toml` is written; returns what changed so the
+/// caller can [`restore_keys`] if a later step fails (this function restores its own partial
+/// work on error). Per service: a typed key wins; else an existing key on an unchanged endpoint
+/// stays; else the default key (`default_for`); else a key on a changed endpoint is dropped.
+pub(crate) fn update_keys(
+    stored: &dyn SecretStore,
+    cfg: &Config,
+    services: &[CloudService],
+    default_for: &dyn Fn(&str) -> Option<ApiKey>,
+    new_keys: &[(&str, ApiKey)],
+) -> Result<Vec<KeyChange>, &'static str> {
+    let mut changes: Vec<KeyChange> = Vec::new();
+    for svc in services {
+        let typed = new_keys
+            .iter()
+            .find(|(id, _)| *id == svc.id)
+            .map(|(_, k)| k);
+        // Same rule as the wizard: a changed kind or endpoint (scheme, host, port, path)
+        // drops the old key; an identical endpoint keeps it.
+        let endpoint_changed = cfg
+            .cloud_service(&svc.id)
+            .is_some_and(|prev| !same_endpoint(prev, svc));
+        let default = default_for(&svc.id);
+        if typed.is_none() && !endpoint_changed && default.is_none() {
+            continue;
+        }
+        // Storing only the preset default (nothing typed, endpoint unchanged) is best effort:
+        // a broken or locked keyring must not block applying the preset.
+        let best_effort = typed.is_none() && !endpoint_changed;
+        let old = match stored.get(&svc.id) {
+            Ok(old) => old,
+            Err(_) if best_effort => {
+                warn!("preset: keyring unavailable, default key skipped");
+                continue;
+            }
+            Err(_) => {
+                restore_keys(stored, &changes);
+                return Err("keyring_failed");
+            }
+        };
+        let has_old = old.as_ref().is_some_and(|k| !k.is_empty());
+        let done = match (typed, &default) {
+            (Some(k), _) => stored.set(&svc.id, k),
+            (None, _) if has_old && !endpoint_changed => continue,
+            (None, Some(k)) => stored.set(&svc.id, k),
+            (None, None) if old.is_some() => stored.delete(&svc.id),
+            (None, None) => continue,
+        };
+        if done.is_err() {
+            warn!("preset: could not update key");
+            if best_effort {
+                continue;
+            }
+            restore_keys(stored, &changes);
+            return Err("keyring_failed");
+        }
+        changes.push(KeyChange {
+            id: svc.id.clone(),
+            old,
+        });
+    }
+    Ok(changes)
 }
 
 fn apply_resolved(
@@ -627,64 +674,20 @@ fn apply_resolved(
         new_keys.push((id, ApiKey::new(k)));
     }
 
-    // Keys first (restored if the config write fails). Per service: a typed key wins; else an
-    // existing key on an unchanged endpoint stays; else the preset's default key; else a key on
-    // a changed endpoint is dropped.
-    let mut changes: Vec<KeyChange> = Vec::new();
-    for svc in &p.services {
-        let typed = new_keys
-            .iter()
-            .find(|(id, _)| *id == svc.id)
-            .map(|(_, k)| k);
-        // Same rule as the wizard: a changed kind or endpoint (scheme, host, port, path)
-        // drops the old key; an identical endpoint keeps it.
-        let endpoint_changed = cfg
-            .cloud_service(&svc.id)
-            .is_some_and(|prev| !same_endpoint(prev, svc));
-        let default = p
-            .meta
-            .default_keys
-            .0
-            .get(&svc.id)
-            .map(|k| ApiKey::new(k.as_str()));
-        if typed.is_none() && !endpoint_changed && default.is_none() {
-            continue;
-        }
-        // Storing only the preset default (nothing typed, endpoint unchanged) is best effort:
-        // a broken or locked keyring must not block applying the preset.
-        let best_effort = typed.is_none() && !endpoint_changed;
-        let old = match stored.get(&svc.id) {
-            Ok(old) => old,
-            Err(_) if best_effort => {
-                warn!(service = %svc.id, "preset: keyring unavailable, default key skipped");
-                continue;
-            }
-            Err(_) => {
-                restore_keys(stored, &changes);
-                return Err("keyring_failed");
-            }
-        };
-        let has_old = old.as_ref().is_some_and(|k| !k.is_empty());
-        let done = match (typed, &default) {
-            (Some(k), _) => stored.set(&svc.id, k),
-            (None, _) if has_old && !endpoint_changed => continue,
-            (None, Some(k)) => stored.set(&svc.id, k),
-            (None, None) if old.is_some() => stored.delete(&svc.id),
-            (None, None) => continue,
-        };
-        if done.is_err() {
-            warn!(service = %svc.id, "preset: could not update key");
-            if best_effort {
-                continue;
-            }
-            restore_keys(stored, &changes);
-            return Err("keyring_failed");
-        }
-        changes.push(KeyChange {
-            id: svc.id.clone(),
-            old,
-        });
-    }
+    // Keys first (restored if the config write fails).
+    let changes = update_keys(
+        stored,
+        &cfg,
+        &p.services,
+        &|id| {
+            p.meta
+                .default_keys
+                .0
+                .get(id)
+                .map(|k| ApiKey::new(k.as_str()))
+        },
+        &new_keys,
+    )?;
     drop(new_keys);
 
     let written = update_config(config_path, |doc, _current| {
@@ -817,31 +820,6 @@ pub async fn presets_apply(
     result
 }
 
-/// Native file dialog for 「從檔案載入」. `Ok(None)` when the user closed it.
-#[tauri::command]
-pub async fn presets_pick_file(
-    window: tauri::WebviewWindow,
-    app: tauri::AppHandle,
-) -> Result<Option<String>, &'static str> {
-    use tauri_plugin_dialog::DialogExt;
-
-    check_caller(window.label())?;
-    let picker = app.clone();
-    let picked = tauri::async_runtime::spawn_blocking(move || {
-        picker
-            .dialog()
-            .file()
-            .set_title("選擇預設組態檔")
-            .add_filter("TOML 組態檔", &["toml"])
-            .blocking_pick_file()
-    })
-    .await
-    .map_err(|_| "internal_error")?;
-    Ok(picked
-        .and_then(|p| p.into_path().ok())
-        .map(|p| p.to_string_lossy().into_owned()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -854,17 +832,6 @@ mod tests {
     const RD: &str = BUILTINS[1].1;
     const KEY: &str = "sk-TESTSECRET-abcdefgh-WXYZ";
     const DEFAULT: &str = "tn8227";
-
-    impl Keys {
-        fn of(pairs: &[(&str, &str)]) -> Keys {
-            Keys(
-                pairs
-                    .iter()
-                    .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
-                    .collect(),
-            )
-        }
-    }
 
     struct TempDir(std::path::PathBuf);
     impl TempDir {
@@ -1742,35 +1709,35 @@ llm_model = "t"
         assert!(!dir.config().exists(), "preview must not write");
     }
 
-    // ---- file source ----
+    // ---- parity with portable ----
 
     #[test]
-    fn file_source_limits() {
-        let dir = TempDir::new("file");
-        let ok = dir.0.join("p.toml");
-        std::fs::write(&ok, TN).unwrap();
-        let src = |p: &Path| PresetSource::File(p.to_string_lossy().into_owned());
-        assert_eq!(load_source(&src(&ok)).unwrap().label, "file");
-        let txt = dir.0.join("p.txt");
-        std::fs::write(&txt, TN).unwrap();
-        assert_eq!(load_source(&src(&txt)).unwrap_err(), "preset_not_toml");
-        let big = dir.0.join("big.toml");
-        std::fs::write(&big, vec![b'#'; MAX_FILE_BYTES as usize + 1]).unwrap();
-        assert_eq!(load_source(&src(&big)).unwrap_err(), "preset_too_large");
-        assert_eq!(
-            load_source(&src(&dir.0.join("none.toml"))).unwrap_err(),
-            "preset_unreadable"
-        );
-        for unc in ["\\\\host\\share\\p.toml", "//host/share/p.toml"] {
+    fn builtins_match_the_portable_parse() {
+        for (name, text) in BUILTINS {
+            let mut old = parse_preset(text).unwrap();
+            validate(&mut old, &Config::with_defaults()).unwrap();
+            let new = v2c_core::portable::parse(text).unwrap();
+            assert_eq!(new.id_prefix.as_deref(), Some(old.meta.id_prefix.as_str()));
+            assert_eq!(new.asr_choices, old.meta.asr_choices, "{name}");
+            assert_eq!(new.needs_key, old.meta.needs_key, "{name}");
+            assert_eq!(new.default_keys.len(), old.meta.default_keys.0.len());
+            assert_eq!(new.route.polish.as_deref(), Some(old.route.polish.as_str()));
             assert_eq!(
-                load_source(&PresetSource::File(unc.into())).unwrap_err(),
-                "preset_unreadable"
+                new.route.translate.as_deref(),
+                Some(old.route.translate.as_str())
             );
+            assert_eq!(new.services.len(), old.services.len(), "{name}");
+            for (a, b) in new.services.iter().zip(&old.services) {
+                assert_eq!(
+                    (&a.id, a.kind, &a.name, &a.base_url),
+                    (&b.id, b.kind, &b.name, &b.base_url)
+                );
+                assert_eq!(
+                    (&a.asr_model, &a.llm_model, a.asr_timeout_ms),
+                    (&b.asr_model, &b.llm_model, b.asr_timeout_ms)
+                );
+            }
         }
-        assert_eq!(
-            load_source(&PresetSource::Builtin("XX".into())).unwrap_err(),
-            "preset_unknown"
-        );
     }
 
     // ---- logs ----
