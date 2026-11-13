@@ -5,8 +5,13 @@
 //! here logs or returns transcribed text in an error, and API keys never leave the crate.
 //! `v2c-core`'s public interface is untouched (see `tasks/plan.md` sections 8.1 and 8.2).
 
+mod config_file;
 mod route;
 mod services;
+
+pub use config_file::{
+    ConfigFileExport, ConfigFilePreview, ImportStatus, ImportedService, SkipReason, SkippedService,
+};
 
 pub use route::{choose_asr, lan_service_id, AsrHint, AsrPick, AsrPlan, AsrSource, Lan};
 pub use services::{
@@ -69,6 +74,36 @@ pub fn set_cloud_services(
     }
     services::set_cloud(services::Registry::from_cloud(services, keys)?);
     Ok(())
+}
+
+/// Reads a portable configuration file (`docs/config-file.md`) for the phone and plans the merge
+/// into `current` (the phone's cloud services; `stored_keys` are the ids that have a stored key).
+/// Pure: nothing is applied and no state changes. A bad file comes back as `error_code` (and
+/// `error_line`) in the preview, never as an exception, and never carries file content.
+#[uniffi::export]
+pub fn parse_config_file(
+    text: String,
+    current: Vec<CloudServiceConfig>,
+    stored_keys: Vec<String>,
+) -> ConfigFilePreview {
+    config_file::preview(&text, &current, &stored_keys)
+}
+
+/// The phone's cloud services as portable file text (no keys, no vocabulary, no polish).
+/// `asr_id` / `translate_id` name the services used for recognition / translation.
+#[uniffi::export]
+pub fn export_config_file(
+    services: Vec<CloudServiceConfig>,
+    asr_id: Option<String>,
+    translate_id: Option<String>,
+    stored_keys: Vec<String>,
+) -> ConfigFileExport {
+    config_file::export(
+        &services,
+        asr_id.as_deref(),
+        translate_id.as_deref(),
+        &stored_keys,
+    )
 }
 
 /// Checks one configured service: recognition sends a generated 1 s tone, translation a fixed

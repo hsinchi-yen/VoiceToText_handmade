@@ -84,6 +84,15 @@ fun CloudSettingsSection() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                ConfigFileControls(
+                    repo = repo,
+                    ffi = ffi,
+                    onApplied = {
+                        runtime.reload()
+                        resetPickIfCloudGone(context, repo)
+                    },
+                    onChanged = { version++ },
+                )
             }
             CloudKind.entries.forEach { kind ->
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

@@ -187,6 +187,40 @@ if (r.error == null) show("${r.latencyMs} ms") else show(r.error)  // FfiExcepti
 Until T2.8, `UniffiV2cFfi.chooseAsr` passes `cloudReady = false` and maps the new enum values to
 the old ones.
 
+### 5.2 Configuration file import / export (T5.3)
+
+Both calls are pure (nothing is applied or logged by Rust); Kotlin reads the file through the
+Storage Access Framework (max 256 KiB) and writes the result through `CloudRepository`. All file
+rules are `v2c_core::portable` (`docs/config-file.md`); the phone mapping is in
+`crates/v2c-ffi/src/config_file.rs`.
+
+| Kotlin | Notes |
+|--------|-------|
+| `parseConfigFile(text, current, storedKeys)` -> `ConfigFilePreview` | `current` = the phone's `CloudServiceConfig`s, `storedKeys` = ids that have a stored key (for `plan_merge`'s `has_key`; the phone has no vocabulary, so it passes an empty one). A bad file is not an exception: `errorCode` (`portable` code such as `unknown_kind`, `format_too_new`, `too_large`) and `errorLine`, everything else empty. Never contains file content |
+| `exportConfigFile(services, asrId, translateId, storedKeys)` -> `ConfigFileExport(text, skipped)` | `portable::export` with `vocab = None`, `from = "android"`. Never writes keys. `[route]` lines that stay `local` and `polish` / `cloud_fallback_to_local` are removed, so importing a phone file on the desktop does not reset those settings. `skipped` = ids that would not pass `parse` (e.g. Custom without `base_url`) |
+
+`ConfigFilePreview`: `services: List<ImportedService>` (`sourceId` = id in the file, `config` with the
+phone id, `status` ADDED / UPDATED / UNCHANGED, `needsKey`, `dropOldKey`), `skipped: List<SkippedService>`
+(`BUILTIN`, `HTTP_ENDPOINT`, `OFFICIAL_BASE_URL`, `DUPLICATE_PROVIDER`), `asrService` / `translateService`
+(phone ids), `ignored` (names only: unknown sections and fields, `route.polish`, `vocabulary`,
+`preset.default_keys`, `route.asr` / `route.translate` whose service was skipped), `title`, `exportedFrom`.
+
+Mapping from the file onto the phone's fixed ids (`cloud-gemini`, `cloud-openai`, `cloud-claude`,
+`cloud-custom`; one service per provider):
+
+1. Skipped: id equal to a built-in TN / RD LAN id (`BUILTIN`), `open_ai_compat` without an `https://`
+   `base_url` (`HTTP_ENDPOINT`), an official kind with its own `base_url` (`OFFICIAL_BASE_URL`).
+2. Per provider (`gemini` -> `cloud-gemini`, `open_ai` -> `cloud-openai`, `claude` -> `cloud-claude`,
+   `open_ai_compat` -> `cloud-custom`) one file service is kept: the one named by `route.asr`, else by
+   `route.translate`, else the first; the others are `DUPLICATE_PROVIDER`.
+3. Models the file leaves out get `route::suggested_models` before comparing, so an identical service
+   is `UNCHANGED`. Names are dropped (the phone has none). The key rules come from `plan_merge`: official
+   providers always need a key; a Custom endpoint only when `needs_key` lists it; `default_keys` is not
+   used on the phone; a changed endpoint sets `dropOldKey`.
+4. `route.asr` / `route.translate` set `config.uses` (ASR / TRANSLATE) of the kept service; `local` or a
+   skipped service sets nothing. Kotlin adds them to the existing uses (`CloudRepository.save` takes a
+   use away from the other services).
+
 ## 6. Verification checklist
 
 Done on the host: `cargo test -p v2c-ffi`, `cargo clippy --workspace --all-targets -- -D warnings`,

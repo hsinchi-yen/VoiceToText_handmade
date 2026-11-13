@@ -77,6 +77,9 @@ class CloudRepository(
         vault.remove(kind.serviceId)
     }
 
+    /** Deletes only the stored key (the endpoint changed, so it must not go to the new host). */
+    fun removeKey(kind: CloudKind) = vault.remove(kind.serviceId)
+
     fun hasKey(kind: CloudKind): Boolean = vault.has(kind.serviceId)
 
     fun lastFour(kind: CloudKind): String? = vault.lastFour(kind.serviceId)
