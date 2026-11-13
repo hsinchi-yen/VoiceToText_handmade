@@ -12,7 +12,8 @@
 //! - `presets_preview(source)`: what applying would do (after model detection).
 //! - `presets_apply(source, asr_choice, keys)`: writes the services and routes, then emits
 //!   `v2c:config-changed`.
-//! - `presets_pick_file`: native file dialog for 「從檔案載入」; returns the path.
+//! - `presets_pick_file`: native file dialog (kept; the UI now picks files via `config_io`, which
+//!   previews and applies any file through `v2c_core::portable`; see `config_io.rs`).
 //!
 //! Applying reuses `cloud.rs`: the same `CONFIG_LOCK`, the comment-preserving `update_config`,
 //! `upsert_service`, name rules and timeout range. It only adds or updates the preset's own
@@ -88,6 +89,23 @@ pub enum PresetSource {
 #[derive(Deserialize, Default)]
 #[serde(transparent)]
 pub struct Keys(HashMap<String, String>);
+
+impl Keys {
+    /// Pasted `(service id, key)` pairs.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.0.iter()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn of(pairs: &[(&str, &str)]) -> Keys {
+        Keys(
+            pairs
+                .iter()
+                .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+                .collect(),
+        )
+    }
+}
 
 impl Drop for Keys {
     fn drop(&mut self) {
@@ -449,7 +467,11 @@ async fn detect_models(r: &mut Resolved, http: &CloudHttp) {
     }
 }
 
-async fn detect_one(svc: &CloudService, http: &CloudHttp, t: &TimeoutConfig) -> Option<String> {
+pub(crate) async fn detect_one(
+    svc: &CloudService,
+    http: &CloudHttp,
+    t: &TimeoutConfig,
+) -> Option<String> {
     let url = svc.base_url.clone()?;
     // The id only labels the log line of the probe; it matches no saved service.
     let draft = CloudDraft {
@@ -581,12 +603,12 @@ fn build_preview(
 }
 
 /// A key entry that was changed, so it can be put back.
-struct KeyChange {
+pub(crate) struct KeyChange {
     id: String,
     old: Option<ApiKey>,
 }
 
-fn restore_keys(stored: &dyn SecretStore, changes: &[KeyChange]) {
+pub(crate) fn restore_keys(stored: &dyn SecretStore, changes: &[KeyChange]) {
     for c in changes.iter().rev() {
         let restored = match &c.old {
             Some(k) => stored.set(&c.id, k),
@@ -598,40 +620,19 @@ fn restore_keys(stored: &dyn SecretStore, changes: &[KeyChange]) {
     }
 }
 
-fn apply_resolved(
-    config_path: &Path,
+/// Stores the keys for `services` before `config.toml` is written; returns what changed so the
+/// caller can [`restore_keys`] if a later step fails (this function restores its own partial
+/// work on error). Per service: a typed key wins; else an existing key on an unchanged endpoint
+/// stays; else the default key (`default_for`); else a key on a changed endpoint is dropped.
+pub(crate) fn update_keys(
     stored: &dyn SecretStore,
-    r: &mut Resolved,
-    asr_choice: &str,
-    keys: &Keys,
-) -> Result<PresetApplied, &'static str> {
-    let _guard = config_lock();
-    let cfg = load_config(config_path)?;
-    validate(&mut r.preset, &cfg)?;
-    let p = &r.preset;
-    if !p.meta.asr_choices.iter().any(|c| c == asr_choice) {
-        return Err("preset_bad_choice");
-    }
-    let mut new_keys: Vec<(&str, ApiKey)> = Vec::new();
-    for (id, raw) in &keys.0 {
-        if !p.meta.needs_key.contains(id) {
-            return Err("preset_key_not_allowed");
-        }
-        let k = raw.trim();
-        if k.is_empty() {
-            continue;
-        }
-        if k.chars().any(char::is_control) {
-            return Err("invalid_key");
-        }
-        new_keys.push((id, ApiKey::new(k)));
-    }
-
-    // Keys first (restored if the config write fails). Per service: a typed key wins; else an
-    // existing key on an unchanged endpoint stays; else the preset's default key; else a key on
-    // a changed endpoint is dropped.
+    cfg: &Config,
+    services: &[CloudService],
+    default_for: &dyn Fn(&str) -> Option<ApiKey>,
+    new_keys: &[(&str, ApiKey)],
+) -> Result<Vec<KeyChange>, &'static str> {
     let mut changes: Vec<KeyChange> = Vec::new();
-    for svc in &p.services {
+    for svc in services {
         let typed = new_keys
             .iter()
             .find(|(id, _)| *id == svc.id)
@@ -641,12 +642,7 @@ fn apply_resolved(
         let endpoint_changed = cfg
             .cloud_service(&svc.id)
             .is_some_and(|prev| !same_endpoint(prev, svc));
-        let default = p
-            .meta
-            .default_keys
-            .0
-            .get(&svc.id)
-            .map(|k| ApiKey::new(k.as_str()));
+        let default = default_for(&svc.id);
         if typed.is_none() && !endpoint_changed && default.is_none() {
             continue;
         }
@@ -685,6 +681,52 @@ fn apply_resolved(
             old,
         });
     }
+    Ok(changes)
+}
+
+fn apply_resolved(
+    config_path: &Path,
+    stored: &dyn SecretStore,
+    r: &mut Resolved,
+    asr_choice: &str,
+    keys: &Keys,
+) -> Result<PresetApplied, &'static str> {
+    let _guard = config_lock();
+    let cfg = load_config(config_path)?;
+    validate(&mut r.preset, &cfg)?;
+    let p = &r.preset;
+    if !p.meta.asr_choices.iter().any(|c| c == asr_choice) {
+        return Err("preset_bad_choice");
+    }
+    let mut new_keys: Vec<(&str, ApiKey)> = Vec::new();
+    for (id, raw) in &keys.0 {
+        if !p.meta.needs_key.contains(id) {
+            return Err("preset_key_not_allowed");
+        }
+        let k = raw.trim();
+        if k.is_empty() {
+            continue;
+        }
+        if k.chars().any(char::is_control) {
+            return Err("invalid_key");
+        }
+        new_keys.push((id, ApiKey::new(k)));
+    }
+
+    // Keys first (restored if the config write fails).
+    let changes = update_keys(
+        stored,
+        &cfg,
+        &p.services,
+        &|id| {
+            p.meta
+                .default_keys
+                .0
+                .get(id)
+                .map(|k| ApiKey::new(k.as_str()))
+        },
+        &new_keys,
+    )?;
     drop(new_keys);
 
     let written = update_config(config_path, |doc, _current| {
@@ -854,17 +896,6 @@ mod tests {
     const RD: &str = BUILTINS[1].1;
     const KEY: &str = "sk-TESTSECRET-abcdefgh-WXYZ";
     const DEFAULT: &str = "tn8227";
-
-    impl Keys {
-        fn of(pairs: &[(&str, &str)]) -> Keys {
-            Keys(
-                pairs
-                    .iter()
-                    .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
-                    .collect(),
-            )
-        }
-    }
 
     struct TempDir(std::path::PathBuf);
     impl TempDir {

@@ -10,6 +10,7 @@
   import General from "../settings/General.svelte";
   import Microphone from "../settings/Microphone.svelte";
   import Advanced from "../settings/Advanced.svelte";
+  import ConfigIoSection from "../config-io/ConfigIoSection.svelte";
 
   const SELF = "#/settings";
   // Not a config.toml key: applied with `settings_set_autostart` after the rest.
@@ -260,6 +261,7 @@
     <Microphone {view} {save} />
     <General {view} {save} />
     <Advanced {view} {save} />
+    <ConfigIoSection />
     <p class="foot">
       <Button variant="outlined" icon="refresh" href="#/onboarding">重新執行初次設定</Button>
     </p>

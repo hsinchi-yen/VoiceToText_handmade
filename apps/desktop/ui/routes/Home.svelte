@@ -8,6 +8,7 @@
   import * as presets from "../presets/api.js";
   import RuntimeStatus from "../settings/RuntimeStatus.svelte";
   import PresetDialog from "../presets/PresetDialog.svelte";
+  import ConfigImportDialog from "../config-io/ConfigImportDialog.svelte";
   import { Banner, Button, Card, Icon, LinearProgress, Select, Switch } from "../lib/index.js";
   import { activePreset, asrSelectOptions, heroState } from "../home/logic.js";
 
@@ -38,6 +39,7 @@
   let view = $state(null);
   let presetList = $state([]);
   let presetOpen = $state(false);
+  let importPath = $state(null);
   let polish = $state(true);
   let asr = $state("");
   let saving = $state(false);
@@ -194,7 +196,10 @@
 </div>
 
 {#if presetOpen}
-  <PresetDialog onclose={() => (presetOpen = false)} />
+  <PresetDialog onclose={() => (presetOpen = false)} onfile={(p) => (importPath = p)} />
+{/if}
+{#if importPath}
+  <ConfigImportDialog path={importPath} onclose={() => (importPath = null)} />
 {/if}
 
 <style>
