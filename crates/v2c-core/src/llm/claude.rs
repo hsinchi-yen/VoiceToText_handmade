@@ -101,7 +101,7 @@ impl LlmProvider for ClaudeLlm {
         let mut body = json!({
             "model": self.model,
             "max_tokens": self.max_tokens,
-            "system": system,
+            "system": system_blocks(system),
             "messages": [{ "role": "user", "content": user }],
         });
         if let Some(effort) = &self.effort {
@@ -115,8 +115,52 @@ impl LlmProvider for ClaudeLlm {
             .header("anthropic-version", ANTHROPIC_VERSION)
             .json(&body);
         let v = self.call.send_json(req).await?;
+        if let Some(u) = v.get("usage") {
+            // Counts only, never content.
+            let n = |k: &str| u.get(k).and_then(Value::as_u64);
+            let (read, created) = (
+                n("cache_read_input_tokens"),
+                n("cache_creation_input_tokens"),
+            );
+            tracing::debug!(
+                provider = %self.call.provider,
+                cache_read_tokens = read,
+                cache_creation_tokens = created,
+                "llm usage"
+            );
+        }
         message_text(&v).ok_or_else(|| self.call.error(ProviderErrorKind::BadResponse))
     }
+}
+
+/// Where the per-user vocabulary section starts in the prompts built by `prompts::polish` /
+/// `prompts::translate`. Everything before it is the fixed rules.
+const VOCAB_MARKERS: [&str; 2] = [
+    "
+
+詞庫（",
+    "
+
+Vocabulary (",
+];
+
+/// The `system` field as text blocks: the fixed rules carry a prompt-caching breakpoint and
+/// the vocabulary (if any) follows it, so editing the vocabulary does not invalidate the
+/// cached rules. The concatenated text is identical to `system`. Prompts shorter than the
+/// model's minimum cacheable length are simply processed uncached (no error).
+fn system_blocks(system: &str) -> Value {
+    let split = VOCAB_MARKERS.iter().filter_map(|m| system.find(m)).min();
+    let (rules, rest) = match split {
+        Some(i) => system.split_at(i),
+        None => (system, ""),
+    };
+    let mut blocks = vec![json!({
+        "type": "text", "text": rules, "cache_control": { "type": "ephemeral" }
+    })];
+    if !rest.is_empty() {
+        blocks.push(json!({ "type": "text", "text": rest }));
+    }
+    Value::Array(blocks)
 }
 
 /// Joined `text` blocks of a Messages API response; `None` if `content` is missing.
@@ -187,11 +231,54 @@ mod tests {
         assert_eq!(out, "整理好的文字。");
         let body: Value = serde_json::from_slice(&only_request(&server).await.body).unwrap();
         assert_eq!(body["model"], "claude-test-model");
-        assert_eq!(body["system"], "SYSTEM-RULES");
+        assert_eq!(body["system"][0]["text"], "SYSTEM-RULES");
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(body["system"].as_array().unwrap().len(), 1);
         assert_eq!(body["messages"][0]["role"], "user");
         assert_eq!(body["messages"][0]["content"], "USER-TEXT");
         assert!(body["max_tokens"].as_u64().unwrap() > 0);
         assert!(body.get("output_config").is_none());
+    }
+
+    #[test]
+    fn vocabulary_goes_after_the_cached_rules() {
+        for sys in [
+            crate::prompts::polish(&["Typeless".to_string()]),
+            crate::prompts::translate(&["Typeless".to_string()]),
+        ] {
+            let v = system_blocks(&sys);
+            let b = v.as_array().unwrap();
+            assert_eq!(b.len(), 2);
+            assert!(b[0].get("cache_control").is_some());
+            assert!(b[1].get("cache_control").is_none());
+            assert!(!b[0]["text"].as_str().unwrap().contains("Typeless"));
+            assert!(b[1]["text"].as_str().unwrap().contains("Typeless"));
+            let joined = format!(
+                "{}{}",
+                b[0]["text"].as_str().unwrap(),
+                b[1]["text"].as_str().unwrap()
+            );
+            assert_eq!(joined, sys);
+        }
+        // No vocabulary: one cached block, rules unchanged.
+        let sys = crate::prompts::polish(&[]);
+        let v = system_blocks(&sys);
+        assert_eq!(v.as_array().unwrap().len(), 1);
+        assert_eq!(v[0]["text"], sys.as_str());
+    }
+
+    #[tokio::test]
+    async fn connections_are_reused_across_requests() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(ok_body()))
+            .mount(&server)
+            .await;
+        let l = llm(&server);
+        for _ in 0..3 {
+            l.complete("S", "U").await.unwrap();
+        }
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
     }
 
     #[tokio::test]
