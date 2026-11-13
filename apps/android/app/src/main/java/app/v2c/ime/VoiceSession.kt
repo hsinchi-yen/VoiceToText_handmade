@@ -20,6 +20,7 @@ import app.v2c.ime.asr.Finished
 import app.v2c.ime.asr.Prepared
 import app.v2c.ime.asr.RecognitionRouter
 import app.v2c.ime.asr.VoiceMode
+import app.v2c.ime.cloud.CloudRouting
 import app.v2c.ime.ffi.AsrSource
 import app.v2c.ime.ffi.LanSite
 import app.v2c.ime.recorder.PcmRecorder
@@ -42,6 +43,8 @@ enum class ErrorKind(@StringRes val message: Int) {
     LAN_UNREACHABLE(R.string.error_lan_unreachable),
     LOCAL_NOT_READY(R.string.error_local_not_ready),
     LAN_FAILED(R.string.error_lan_failed),
+    CLOUD_NOT_READY(R.string.error_cloud_not_ready),
+    CLOUD_FAILED(R.string.error_cloud_failed),
     NEEDS_LAN(R.string.error_needs_lan),
     TRANSLATE_FAILED(R.string.error_translate_failed),
 }
@@ -65,6 +68,7 @@ class VoiceSession(
     private val router: RecognitionRouter,
     private val recorder: PcmRecorder,
     private val translator: Translator,
+    private val cloud: CloudRouting = CloudRouting.None,
     private val onPlanChanged: () -> Unit = {},
     private val onText: (String) -> Unit,
 ) {
@@ -79,10 +83,22 @@ class VoiceSession(
     var lan: LanSite by mutableStateOf(LanSite.UNREACHABLE)
         private set
 
-    val translateEnabled: Boolean get() = lan != LanSite.UNREACHABLE
+    /** Bumped when cloud readiness may have changed, so the translate key recomposes. */
+    private var cloudVersion by mutableStateOf(0)
+
+    /** The key works on a company LAN (Qwen) or with a ready cloud translation service. */
+    val translateEnabled: Boolean
+        get() {
+            cloudVersion // read for recomposition
+            return lan != LanSite.UNREACHABLE || cloud.translateReady()
+        }
 
     fun onLanChanged(site: LanSite) {
         lan = site
+    }
+
+    fun onCloudChanged() {
+        cloudVersion++
     }
 
     private val detector = TapHoldDetector()

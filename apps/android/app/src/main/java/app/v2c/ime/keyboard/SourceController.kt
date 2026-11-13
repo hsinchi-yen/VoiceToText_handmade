@@ -11,6 +11,7 @@ import app.v2c.ime.asr.SourceMenuState
 import app.v2c.ime.asr.SourcePrefs
 import app.v2c.ime.asr.local.DownloadState
 import app.v2c.ime.asr.local.LocalModelDownloader
+import app.v2c.ime.cloud.CloudRouting
 import app.v2c.ime.ffi.AsrPick
 import app.v2c.ime.ffi.AsrPlan
 
@@ -25,6 +26,7 @@ class SourceController(
     private val prefs: SourcePrefs,
     private val downloader: LocalModelDownloader,
     private val systemAvailable: () -> Boolean,
+    private val cloud: CloudRouting = CloudRouting.None,
 ) {
     private val main = Handler(Looper.getMainLooper())
 
@@ -64,6 +66,12 @@ class SourceController(
     fun refresh() {
         plan = router.preview(systemAvailable())
     }
+
+    /** Menu entries; "cloud" appears only when a recognition service is configured. */
+    fun menuItems(): List<AsrPick> = SourceMenuState.itemsFor(cloud.asrConfigured)
+
+    /** Chip text: the source in use now, with the cloud service's own name (e.g. "Gemini"). */
+    fun chipText(): String = SourceMenuState.chipText(menu.pick, plan, cloud.asrLabel())
 
     fun openMenu() {
         menu = menu.openMenu()

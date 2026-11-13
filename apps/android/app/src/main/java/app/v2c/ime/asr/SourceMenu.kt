@@ -27,7 +27,7 @@ enum class SelectEffect {
 
 /** Short label shown on the chip. */
 enum class SourceLabel(val text: String) {
-    TEA("TEA"), BREEZE("Breeze"), SYSTEM("系統"), LOCAL("本機"), NONE("無來源"), AUTO("自動")
+    TEA("TEA"), BREEZE("Breeze"), CLOUD("雲端"), SYSTEM("系統"), LOCAL("本機"), NONE("無來源"), AUTO("自動")
 }
 
 /**
@@ -64,6 +64,13 @@ data class SourceMenuState(
         /** Menu order (plan section 8.1): auto / TEA / Breeze / system / local. */
         val items: List<AsrPick> = listOf(AsrPick.AUTO, AsrPick.TEA, AsrPick.BREEZE, AsrPick.SYSTEM, AsrPick.LOCAL)
 
+        /**
+         * Menu entries to show: the cloud entry only exists once a cloud recognition service is
+         * configured (plan section 8.1); otherwise exactly [items].
+         */
+        fun itemsFor(cloudConfigured: Boolean): List<AsrPick> =
+            if (cloudConfigured) items.flatMap { if (it == AsrPick.SYSTEM) listOf(AsrPick.CLOUD, it) else listOf(it) } else items
+
         /** Unknown or missing stored values mean AUTO. */
         fun parsePick(name: String?): AsrPick = AsrPick.entries.firstOrNull { it.name == name } ?: AsrPick.AUTO
 
@@ -74,6 +81,7 @@ data class SourceMenuState(
             AsrPick.AUTO -> "自動"
             AsrPick.TEA -> "TEA"
             AsrPick.BREEZE -> "Breeze"
+            AsrPick.CLOUD -> "雲端"
             AsrPick.SYSTEM -> "系統"
             AsrPick.LOCAL -> "本機"
         }
@@ -82,6 +90,7 @@ data class SourceMenuState(
             AsrPick.AUTO -> "自動"
             AsrPick.TEA -> "區網 TEA"
             AsrPick.BREEZE -> "區網 Breeze"
+            AsrPick.CLOUD -> "雲端服務"
             AsrPick.SYSTEM -> "系統辨識"
             AsrPick.LOCAL -> "本機模型"
         }
@@ -93,16 +102,24 @@ data class SourceMenuState(
         fun chipLabel(pick: AsrPick, plan: AsrPlan?): SourceLabel = when (pick) {
             AsrPick.TEA -> SourceLabel.TEA
             AsrPick.BREEZE -> SourceLabel.BREEZE
+            AsrPick.CLOUD -> SourceLabel.CLOUD
             AsrPick.SYSTEM -> SourceLabel.SYSTEM
             AsrPick.LOCAL -> SourceLabel.LOCAL
             AsrPick.AUTO -> when (plan?.primary) {
                 AsrSource.LAN_TEA -> SourceLabel.TEA
                 AsrSource.LAN_BREEZE -> SourceLabel.BREEZE
+                AsrSource.CLOUD -> SourceLabel.CLOUD
                 AsrSource.SYSTEM -> SourceLabel.SYSTEM
                 AsrSource.LOCAL -> SourceLabel.LOCAL
                 AsrSource.NONE -> SourceLabel.NONE
                 null -> SourceLabel.AUTO
             }
+        }
+
+        /** Chip text: the cloud service's name (e.g. "Gemini") instead of the generic "雲端" when known. */
+        fun chipText(pick: AsrPick, plan: AsrPlan?, cloudName: String?): String {
+            val label = chipLabel(pick, plan)
+            return if (label == SourceLabel.CLOUD && cloudName != null) cloudName else label.text
         }
     }
 }

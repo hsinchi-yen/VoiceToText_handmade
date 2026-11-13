@@ -61,6 +61,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import app.v2c.ime.cloud.CloudSettingsSection
 import app.v2c.ime.ui.LocalV2cStatus
 import app.v2c.ime.ui.V2cTheme
 
@@ -182,6 +183,9 @@ private fun SetupScreen() {
                 ) { context.getSystemService(InputMethodManager::class.java).showInputMethodPicker() }
             }
 
+            SectionLabel(stringResource(R.string.cloud_section))
+            CloudSettingsSection()
+
             SectionLabel(stringResource(R.string.setup_section_try))
             TryCard(status.allDone)
 
@@ -192,6 +196,7 @@ private fun SetupScreen() {
                 Tip(R.drawable.ic_swap, stringResource(R.string.setup_tip_source))
                 Tip(R.drawable.ic_wifi, stringResource(R.string.setup_tip_network))
                 Tip(R.drawable.ic_download, stringResource(R.string.setup_tip_local))
+                Tip(R.drawable.ic_wifi, stringResource(R.string.setup_tip_cloud))
             }
 
             Text(

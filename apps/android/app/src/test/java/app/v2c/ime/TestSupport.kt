@@ -6,6 +6,9 @@ import app.v2c.ime.ffi.AsrHint
 import app.v2c.ime.ffi.AsrPick
 import app.v2c.ime.ffi.AsrPlan
 import app.v2c.ime.ffi.AsrSource
+import app.v2c.ime.ffi.CloudServiceConfig
+import app.v2c.ime.ffi.CloudTestResult
+import app.v2c.ime.ffi.CloudUse
 import app.v2c.ime.ffi.FfiErrorCode
 import app.v2c.ime.ffi.LanServiceInfo
 import app.v2c.ime.ffi.LanSite
@@ -37,28 +40,43 @@ class FakeFfi : V2cFfi {
         LanServiceInfo("rd-qwen", "http://10.88.95.2:8000/v1", false, true, 3000),
     )
 
-    override fun chooseAsr(lan: LanSite, systemAvailable: Boolean, localModelReady: Boolean, pick: AsrPick): AsrPlan {
+    val cloudSets = CopyOnWriteArrayList<Pair<List<CloudServiceConfig>, Map<String, String>>>()
+    var setCloudFails = false
+    var testResult: (String, CloudUse) -> CloudTestResult = { _, _ -> CloudTestResult(120, null) }
+
+    override fun setCloudServices(services: List<CloudServiceConfig>, keys: Map<String, String>) {
+        if (setCloudFails) throw V2cFfiException(FfiErrorCode.CONFIG)
+        cloudSets += services to keys
+    }
+
+    override fun testConnection(serviceId: String, use: CloudUse): CloudTestResult = testResult(serviceId, use)
+
+    /** Mirrors the routing table of plan section 8.1 (cloud column included). */
+    override fun chooseAsr(
+        lan: LanSite,
+        cloudReady: Boolean,
+        systemAvailable: Boolean,
+        localModelReady: Boolean,
+        pick: AsrPick,
+    ): AsrPlan {
         val lanUp = lan != LanSite.UNREACHABLE
         fun none(h: AsrHint) = AsrPlan(AsrSource.NONE, AsrSource.NONE, false, h)
+        fun localOrNone() = if (localModelReady) AsrSource.LOCAL else AsrSource.NONE
         return when (pick) {
             AsrPick.AUTO -> when {
-                lanUp -> AsrPlan(
-                    AsrSource.LAN_TEA,
-                    if (localModelReady) AsrSource.LOCAL else AsrSource.NONE,
-                    !localModelReady,
-                    AsrHint.NONE,
-                )
-                systemAvailable -> AsrPlan(
-                    AsrSource.SYSTEM,
-                    if (localModelReady) AsrSource.LOCAL else AsrSource.NONE,
-                    true,
-                    AsrHint.NONE,
-                )
+                lanUp -> {
+                    val fb = if (cloudReady) AsrSource.CLOUD else localOrNone()
+                    val fb2 = if (cloudReady) localOrNone() else AsrSource.NONE
+                    AsrPlan(AsrSource.LAN_TEA, fb, fb == AsrSource.NONE, AsrHint.NONE, fb2)
+                }
+                cloudReady -> AsrPlan(AsrSource.CLOUD, localOrNone(), !localModelReady, AsrHint.NONE)
+                systemAvailable -> AsrPlan(AsrSource.SYSTEM, localOrNone(), true, AsrHint.NONE)
                 localModelReady -> AsrPlan(AsrSource.LOCAL, AsrSource.NONE, true, AsrHint.NONE)
                 else -> none(AsrHint.NO_SOURCE_AVAILABLE)
             }
             AsrPick.TEA -> if (lanUp) AsrPlan(AsrSource.LAN_TEA, AsrSource.NONE, true, AsrHint.NONE) else none(AsrHint.LAN_UNREACHABLE)
             AsrPick.BREEZE -> if (lanUp) AsrPlan(AsrSource.LAN_BREEZE, AsrSource.NONE, true, AsrHint.NONE) else none(AsrHint.LAN_UNREACHABLE)
+            AsrPick.CLOUD -> if (cloudReady) AsrPlan(AsrSource.CLOUD, AsrSource.NONE, true, AsrHint.NONE) else none(AsrHint.CLOUD_NOT_READY)
             AsrPick.SYSTEM -> if (systemAvailable) AsrPlan(AsrSource.SYSTEM, AsrSource.NONE, true, AsrHint.NONE) else none(AsrHint.SYSTEM_UNAVAILABLE)
             AsrPick.LOCAL -> if (localModelReady) AsrPlan(AsrSource.LOCAL, AsrSource.NONE, true, AsrHint.NONE) else none(AsrHint.LOCAL_MODEL_NOT_READY)
         }
@@ -153,4 +171,37 @@ fun detectorAt(site: LanSite, ffi: V2cFfi = FakeFfi()): LanDetector {
         LanSite.UNREACHABLE -> Unit
     }
     return newDetector(prober, ffi).also { it.refresh() }
+}
+
+/** Reversible fake cipher: the token never contains the plaintext. */
+class FakeCipher(var broken: Boolean = false, var throwing: Boolean = false) : app.v2c.ime.cloud.SecretCipher {
+    override fun encrypt(plain: String): String {
+        if (throwing) throw java.security.ProviderException("keystore")
+        return encode(plain)
+    }
+
+    private fun encode(plain: String): String =
+        java.util.Base64.getEncoder().encodeToString(("x" + plain.reversed()).toByteArray()).replace("=", "#")
+
+    override fun decrypt(token: String): String? {
+        if (throwing) throw java.io.IOException("keystore")
+        if (broken) return null
+        val raw = String(java.util.Base64.getDecoder().decode(token.replace("#", "=")))
+        return raw.removePrefix("x").reversed()
+    }
+}
+
+/** Test double for the cloud state the router, translator and UI read. */
+class FakeCloud(
+    var asrId: String? = null,
+    var translateId: String? = null,
+    var network: Boolean = true,
+    var label: String? = "Gemini",
+) : app.v2c.ime.cloud.CloudRouting {
+    override val asrConfigured: Boolean get() = asrId != null
+    override fun asrReady() = asrId != null && network
+    override fun asrServiceId() = asrId
+    override fun asrLabel() = label
+    override fun translateReady() = translateId != null && network
+    override fun translateServiceId() = translateId
 }

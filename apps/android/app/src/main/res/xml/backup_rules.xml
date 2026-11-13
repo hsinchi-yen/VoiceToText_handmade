@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and older Auto Backup rules: keep cloud settings and encrypted keys on this phone. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="v2c_cloud.xml" />
+    <exclude domain="sharedpref" path="v2c_cloud_keys.xml" />
+</full-backup-content>

@@ -1,6 +1,7 @@
 package app.v2c.ime.asr
 
 import app.v2c.ime.ErrorClass
+import app.v2c.ime.cloud.CloudRouting
 import app.v2c.ime.asr.local.LocalAsr
 import app.v2c.ime.ffi.AsrPick
 import app.v2c.ime.ffi.AsrPlan
@@ -26,6 +27,9 @@ enum class RouteFailure {
     /** LAN recognition failed and the local model cannot take over: the user must speak again. */
     LAN_FAILED_SAY_AGAIN,
 
+    /** Cloud recognition failed and nothing else can take over: the user must speak again. */
+    CLOUD_FAILED_SAY_AGAIN,
+
     /** Anything else (local model error, bad service id). */
     FAILED,
 }
@@ -41,8 +45,10 @@ sealed interface RecognizeResult {
  * and [finishSystemText] block and belong on Dispatchers.IO.
  *
  * Fallback rules:
- * - LAN fails -> the same PCM goes to the local model when it is downloaded, else the user is
- *   asked to speak again.
+ * - LAN fails -> the same PCM goes to the cloud service (when ready), then to the local model
+ *   (when downloaded); if neither exists the user is asked to speak again.
+ * - Cloud (primary, LAN unreachable) fails -> the same PCM goes to the local model when it is
+ *   downloaded, else the user is asked to speak again.
  * - System recognition fails -> it recorded the audio itself, so the local model needs the user
  *   to speak again ([systemFailed] arms a one-shot local pick for the next utterance).
  * - A forced pick never falls back.
@@ -56,6 +62,7 @@ class RecognitionRouter(
     private val local: LocalAsr,
     private val log: EventLog = EventLog { },
     private val clock: Clock = Clock.System,
+    private val cloud: CloudRouting = CloudRouting.None,
 ) {
     @Volatile private var forceLocalOnce = false
 
@@ -63,15 +70,18 @@ class RecognitionRouter(
 
     /** Plan the next utterance would get, without consuming the one-shot local pick. */
     fun preview(systemAvailable: Boolean): AsrPlan =
-        ffi.chooseAsr(detector.current(), systemAvailable, local.isReady(), effectivePick())
+        ffi.chooseAsr(detector.current(), cloud.asrReady(), systemAvailable, local.isReady(), effectivePick())
 
     /** Takes the routing decision for one utterance. */
     fun prepare(systemAvailable: Boolean): Prepared {
         val pick = effectivePick()
         forceLocalOnce = false
         val lan = detector.current()
-        val plan = ffi.chooseAsr(lan, systemAvailable, local.isReady(), pick)
-        log.log("route lan=$lan pick=$pick primary=${plan.primary} fallback=${plan.fallback} hint=${plan.hint}")
+        val plan = ffi.chooseAsr(lan, cloud.asrReady(), systemAvailable, local.isReady(), pick)
+        log.log(
+            "route lan=$lan pick=$pick primary=${plan.primary} fallback=${plan.fallback} " +
+                "fallback2=${plan.fallback2} hint=${plan.hint}",
+        )
         return Prepared(lan, plan, pick)
     }
 
@@ -80,7 +90,12 @@ class RecognitionRouter(
         forceLocalOnce = false
     }
 
-    private fun effectivePick(): AsrPick = if (forceLocalOnce) AsrPick.LOCAL else prefs.pick
+    private fun effectivePick(): AsrPick = when {
+        forceLocalOnce -> AsrPick.LOCAL
+        // The cloud service was removed after the user forced it: back to automatic.
+        prefs.pick == AsrPick.CLOUD && !cloud.asrConfigured -> AsrPick.AUTO
+        else -> prefs.pick
+    }
 
     /**
      * The system recognizer failed with [errorClass]. Returns true when the next utterance will
@@ -123,14 +138,18 @@ class RecognitionRouter(
         return when (plan.primary) {
             AsrSource.LAN_TEA, AsrSource.LAN_BREEZE -> {
                 val lanResult = runLan(prepared, plan.primary, pcm)
-                when {
-                    lanResult != null -> finish(lanResult, plan.primary, fellBack = false)
-                    plan.fallback == AsrSource.LOCAL && local.isReady() -> {
-                        val localText = runLocal(pcm)
-                        if (localText == null) RecognizeResult.Failure(RouteFailure.FAILED)
-                        else finish(localText, AsrSource.LOCAL, fellBack = true)
-                    }
-                    else -> RecognizeResult.Failure(RouteFailure.LAN_FAILED_SAY_AGAIN)
+                if (lanResult != null) {
+                    finish(lanResult, plan.primary, fellBack = false)
+                } else {
+                    fallBack(plan, pcm, RouteFailure.LAN_FAILED_SAY_AGAIN)
+                }
+            }
+            AsrSource.CLOUD -> {
+                val cloudResult = runCloud(pcm)
+                if (cloudResult != null) {
+                    finish(cloudResult, AsrSource.CLOUD, fellBack = false)
+                } else {
+                    fallBack(plan, pcm, RouteFailure.CLOUD_FAILED_SAY_AGAIN)
                 }
             }
             AsrSource.LOCAL -> {
@@ -141,29 +160,65 @@ class RecognitionRouter(
         }
     }
 
+    /**
+     * The primary source failed: try the plan's fallbacks in order with the same PCM (plan
+     * section 8.1). A failing local model ends the chain as FAILED; with no usable fallback the
+     * user has to speak again ([sayAgain]).
+     */
+    private fun fallBack(plan: AsrPlan, pcm: ShortArray, sayAgain: RouteFailure): RecognizeResult {
+        for (source in listOf(plan.fallback, plan.fallback2)) {
+            when {
+                source == AsrSource.CLOUD && plan.primary != AsrSource.CLOUD && cloud.asrReady() -> {
+                    val text = runCloud(pcm)
+                    if (text != null) return finish(text, AsrSource.CLOUD, fellBack = true)
+                }
+                source == AsrSource.LOCAL && local.isReady() -> {
+                    val text = runLocal(pcm) ?: return RecognizeResult.Failure(RouteFailure.FAILED)
+                    return finish(text, AsrSource.LOCAL, fellBack = true)
+                }
+            }
+        }
+        return RecognizeResult.Failure(sayAgain)
+    }
+
     private fun finish(text: String, source: AsrSource, fellBack: Boolean): RecognizeResult =
         if (text.isBlank()) RecognizeResult.Failure(RouteFailure.NO_SPEECH)
         else RecognizeResult.Text(text, source, fellBack)
 
     /** Raw LAN transcript converted to zh-TW, or null on any failure. */
     private fun runLan(prepared: Prepared, source: AsrSource, pcm: ShortArray): String? {
+        val id = ffi.lanServiceId(prepared.lan, source)
+        if (id == null) {
+            log.log("lan no service id source=$source")
+            return null
+        }
+        return runService("lan source=$source", id, pcm)
+    }
+
+    /** Cloud transcript converted to zh-TW, or null on any failure. */
+    private fun runCloud(pcm: ShortArray): String? {
+        val id = cloud.asrServiceId()
+        if (id == null) {
+            log.log("cloud no service id")
+            return null
+        }
+        return runService("cloud source=${cloud.asrLabel()}", id, pcm)
+    }
+
+    /** Same PCM through one FFI service id; [tag] is a log prefix with names only. */
+    private fun runService(tag: String, id: String, pcm: ShortArray): String? {
         val started = clock.nowMs()
         return try {
-            val id = ffi.lanServiceId(prepared.lan, source)
-            if (id == null) {
-                log.log("lan no service id source=$source")
-                return null
-            }
             val pieces = PcmChunker.split(pcm)
             val raw = pieces.joinToString("") {
                 ffi.transcribePcm(PcmChunker.toLittleEndianBytes(it), PcmChunker.SAMPLE_RATE, id)
             }
             // A blank raw transcript is "no speech"; do not convert it into something non-blank.
             val text = if (raw.isBlank()) "" else ffi.toZhTw(raw)
-            log.log("lan done source=$source chunks=${pieces.size} pcm=${pcm.size} chars=${text.length} ms=${clock.nowMs() - started}")
+            log.log("$tag done chunks=${pieces.size} pcm=${pcm.size} chars=${text.length} ms=${clock.nowMs() - started}")
             text
         } catch (e: V2cFfiException) {
-            log.log("lan failed source=$source code=${e.code} ms=${clock.nowMs() - started}")
+            log.log("$tag failed code=${e.code} ms=${clock.nowMs() - started}")
             null
         }
     }

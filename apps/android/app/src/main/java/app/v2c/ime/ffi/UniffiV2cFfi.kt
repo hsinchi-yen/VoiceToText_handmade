@@ -3,6 +3,9 @@ package app.v2c.ime.ffi
 import uniffi.v2c_ffi.AsrHint as FAsrHint
 import uniffi.v2c_ffi.AsrPick as FAsrPick
 import uniffi.v2c_ffi.AsrSource as FAsrSource
+import uniffi.v2c_ffi.CloudProvider as FCloudProvider
+import uniffi.v2c_ffi.CloudServiceConfig as FCloudServiceConfig
+import uniffi.v2c_ffi.CloudUse as FCloudUse
 import uniffi.v2c_ffi.FfiException
 import uniffi.v2c_ffi.Lan as FLan
 
@@ -26,13 +29,35 @@ class UniffiV2cFfi : V2cFfi {
 
     override fun chooseAsr(
         lan: LanSite,
+        cloudReady: Boolean,
         systemAvailable: Boolean,
         localModelReady: Boolean,
         pick: AsrPick,
     ): AsrPlan = guard {
-        // T2.8 wires the real cloud readiness; until then the cloud source is never offered.
-        val p = uniffi.v2c_ffi.chooseAsr(lan.toFfi(), false, systemAvailable, localModelReady, pick.toFfi())
-        AsrPlan(p.primary.toApp(), p.fallback.toApp(), p.retrySpeak, p.hint.toApp())
+        val p = uniffi.v2c_ffi.chooseAsr(lan.toFfi(), cloudReady, systemAvailable, localModelReady, pick.toFfi())
+        AsrPlan(p.primary.toApp(), p.fallback.toApp(), p.retrySpeak, p.hint.toApp(), p.fallback2.toApp())
+    }
+
+    override fun setCloudServices(services: List<CloudServiceConfig>, keys: Map<String, String>) = guard {
+        uniffi.v2c_ffi.setCloudServices(
+            services.map {
+                FCloudServiceConfig(
+                    id = it.id,
+                    provider = it.provider.toFfi(),
+                    model = it.model,
+                    asrModel = it.asrModel,
+                    baseUrl = it.baseUrl,
+                    uses = it.uses.map { u -> u.toFfi() },
+                    asrTimeoutMs = it.asrTimeoutMs?.toULong(),
+                )
+            },
+            keys,
+        )
+    }
+
+    override fun testConnection(serviceId: String, use: CloudUse): CloudTestResult = guard {
+        val r = uniffi.v2c_ffi.testConnection(serviceId, use.toFfi())
+        CloudTestResult(r.latencyMs.toLong(), r.error?.toCode())
     }
 
     override fun lanServiceId(lan: LanSite, source: AsrSource): String? = guard {
@@ -87,6 +112,7 @@ class UniffiV2cFfi : V2cFfi {
         AsrPick.AUTO -> FAsrPick.AUTO
         AsrPick.TEA -> FAsrPick.TEA
         AsrPick.BREEZE -> FAsrPick.BREEZE
+        AsrPick.CLOUD -> FAsrPick.CLOUD
         AsrPick.SYSTEM -> FAsrPick.SYSTEM
         AsrPick.LOCAL -> FAsrPick.LOCAL
     }
@@ -95,6 +121,7 @@ class UniffiV2cFfi : V2cFfi {
         AsrSource.NONE -> FAsrSource.NONE
         AsrSource.LAN_TEA -> FAsrSource.LAN_TEA
         AsrSource.LAN_BREEZE -> FAsrSource.LAN_BREEZE
+        AsrSource.CLOUD -> FAsrSource.CLOUD
         AsrSource.SYSTEM -> FAsrSource.SYSTEM
         AsrSource.LOCAL -> FAsrSource.LOCAL
     }
@@ -105,8 +132,7 @@ class UniffiV2cFfi : V2cFfi {
         FAsrSource.LAN_BREEZE -> AsrSource.LAN_BREEZE
         FAsrSource.SYSTEM -> AsrSource.SYSTEM
         FAsrSource.LOCAL -> AsrSource.LOCAL
-        // Cloud is never produced while cloudReady is false (T2.8 adds the app-side value).
-        FAsrSource.CLOUD -> AsrSource.NONE
+        FAsrSource.CLOUD -> AsrSource.CLOUD
     }
 
     private fun FAsrHint.toApp(): AsrHint = when (this) {
@@ -115,6 +141,18 @@ class UniffiV2cFfi : V2cFfi {
         FAsrHint.LAN_UNREACHABLE -> AsrHint.LAN_UNREACHABLE
         FAsrHint.SYSTEM_UNAVAILABLE -> AsrHint.SYSTEM_UNAVAILABLE
         FAsrHint.LOCAL_MODEL_NOT_READY -> AsrHint.LOCAL_MODEL_NOT_READY
-        FAsrHint.CLOUD_NOT_READY -> AsrHint.NO_SOURCE_AVAILABLE
+        FAsrHint.CLOUD_NOT_READY -> AsrHint.CLOUD_NOT_READY
+    }
+
+    private fun CloudProvider.toFfi(): FCloudProvider = when (this) {
+        CloudProvider.GEMINI -> FCloudProvider.GEMINI
+        CloudProvider.OPENAI -> FCloudProvider.OPENAI
+        CloudProvider.CLAUDE -> FCloudProvider.CLAUDE
+        CloudProvider.CUSTOM -> FCloudProvider.CUSTOM
+    }
+
+    private fun CloudUse.toFfi(): FCloudUse = when (this) {
+        CloudUse.ASR -> FCloudUse.ASR
+        CloudUse.TRANSLATE -> FCloudUse.TRANSLATE
     }
 }

@@ -128,7 +128,7 @@ private fun TopRow(source: SourceController) {
     ) {
         if (menu.menuOpen) {
             // Inline menu instead of a popup window: popups are unreliable inside an IME window.
-            SourceMenuState.items.forEach { pick ->
+            source.menuItems().forEach { pick ->
                 val selected = pick == menu.pick
                 Box(
                     modifier = Modifier
@@ -165,7 +165,7 @@ private fun TopRow(source: SourceController) {
                     .padding(horizontal = 12.dp, vertical = 4.dp),
             ) {
                 Text(
-                    text = SourceMenuState.chipLabel(menu.pick, plan).text,
+                    text = source.chipText(),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
