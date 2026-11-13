@@ -1,0 +1,7 @@
+[v2c]
+format = 1
+
+[[cloud]]
+id = "g"
+kind = "gemini"
+base_url = "http://example.invalid/v1beta"

@@ -213,6 +213,6 @@
 
 ## Phase 5 — 組態檔匯出／匯入（2026-11-13）
 > 計畫：`tasks/plan.md` 第 14 節；`v2cplan.md` 第 2 節。金鑰不匯出；範圍＝服務＋用途＋詞庫；匯入＝合併並先預覽。
-- [ ] W22 T5.1 core `portable`（解析、驗證、合併計畫、匯出）＋`docs/config-file.md` 手寫規則＋範例檔
+- [x] W22 T5.1 core `portable`（解析、驗證、合併計畫、匯出）＋`docs/config-file.md` 手寫規則＋範例檔（已實作於分支 `t5.1-portable-config`，待審查與你核准合併；`portable::` 20 個測試、fixture 在 `tests/fixtures/config/`）
 - [ ] W23 T5.2 桌面匯出／匯入（Windows＋Linux 同一份 Tauri 程式）
 - [ ] W23 T5.3 FFI＋Android 匯出／匯入（需 T2.8）

@@ -1,0 +1,12 @@
+# Fixture: sections pasted from config.toml are ignored.
+[v2c]
+format = 1
+
+[hotkey]
+dictate = "RightCtrl"
+
+[audio]
+mic_mode = "always_on"
+
+[vocabulary]
+words = ["v2c"]

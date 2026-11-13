@@ -1,0 +1,10 @@
+[v2c]
+format = 1
+
+[[cloud]]
+id = "a"
+kind = "gemini"
+
+[[cloud]]
+id = "a"
+kind = "claude"

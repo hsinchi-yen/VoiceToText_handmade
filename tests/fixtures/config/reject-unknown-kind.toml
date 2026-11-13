@@ -1,0 +1,6 @@
+[v2c]
+format = 1
+
+[[cloud]]
+id = "x"
+kind = "gemni"

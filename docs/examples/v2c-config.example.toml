@@ -1,0 +1,24 @@
+# v2c config file example: Gemini for speech recognition, Claude for Chinese-to-English.
+# Full reference: docs/config-file.md
+[v2c]
+format = 1
+exported_from = "manual"
+
+[preset]
+needs_key = ["my-gemini", "my-claude"]
+
+[route]
+asr = "my-gemini"
+polish = "local"
+translate = "my-claude"
+cloud_fallback_to_local = true
+
+[[cloud]]
+id = "my-gemini"
+kind = "gemini"
+asr_model = "gemini-3.6-flash"
+
+[[cloud]]
+id = "my-claude"
+kind = "claude"
+llm_model = "claude-haiku-5-5"

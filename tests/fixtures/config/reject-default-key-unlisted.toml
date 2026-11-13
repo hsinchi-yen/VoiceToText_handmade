@@ -1,0 +1,10 @@
+[v2c]
+format = 1
+
+[preset]
+needs_key = []
+default_keys = { "g" = "placeholder" }
+
+[[cloud]]
+id = "g"
+kind = "gemini"
