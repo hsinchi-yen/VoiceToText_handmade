@@ -70,7 +70,7 @@ struct PendingLoad {
 /// Waits for the warm-up (if any), then takes the "after" snapshot and records the load.
 /// Returns the VRAM need now assumed for `estimate`.
 fn record_after_warmup(
-    guard: &mut GpuGuard,
+    guard: &Mutex<GpuGuard>,
     estimate: u64,
     before: Option<GpuSnapshot>,
     warmup: Option<local_asr::WarmupDone>,
@@ -81,8 +81,11 @@ fn record_after_warmup(
         // Ends on the signal, or when the warm-up thread is gone.
         let _ = done.recv();
     }
-    guard.record_load(estimate, before, snapshot(), now);
-    guard.breeze_need_mb(estimate)
+    // The guard is locked only for the update, never while waiting.
+    let after = snapshot();
+    let mut g = lock(guard);
+    g.record_load(estimate, before, after, now);
+    g.breeze_need_mb(estimate)
 }
 
 pub struct Engine {
@@ -398,9 +401,8 @@ impl Engine {
         let Some(p) = lock(&self.pending_load).take() else {
             return;
         };
-        let mut guard = lock(&self.guard);
         let need = record_after_warmup(
-            &mut guard,
+            &self.guard,
             p.estimate,
             p.before,
             p.warmup,
@@ -421,6 +423,8 @@ impl Engine {
     /// released first (see `LocalEngines::switch_model`). For a GPU model, the VRAM drop is
     /// recorded for the guard; a model whose config changed while loading is discarded.
     fn switch_to(&self, kind: Option<LocalAsrKind>, why: &'static str) -> Result<(), &'static str> {
+        // A load still waiting for its VRAM record is settled before the model changes.
+        self.settle_load();
         let cfg = self.config();
         let from = self.local.current();
         let started = Instant::now();
@@ -451,8 +455,6 @@ impl Engine {
         match result {
             Ok(()) if gpu.is_some() => {
                 // Record the guard's VRAM measurement only after the warm-up (`settle_load`).
-                // A previous pending record is settled first so none is lost.
-                self.settle_load();
                 *lock(&self.pending_load) = Some(PendingLoad {
                     estimate,
                     before,
@@ -847,6 +849,7 @@ impl Engine {
             tauri::async_runtime::spawn_blocking(move || me.ensure_model("test", false))
                 .await
                 .map_err(|_| "internal_error")?;
+        self.settle_load();
         if self.local.switching() {
             return Err(gpu_task::ASR_SWITCHING);
         }
@@ -1224,7 +1227,7 @@ mod tests {
     fn vram_is_recorded_from_the_snapshot_taken_after_the_warmup() {
         use std::sync::atomic::AtomicBool;
         const ESTIMATE: u64 = 1500;
-        let mut guard = GpuGuard::default();
+        let guard = Mutex::new(GpuGuard::default());
         let warmed = Arc::new(AtomicBool::new(false));
         let (tx, rx) = std::sync::mpsc::channel();
         let flag = Arc::clone(&warmed);
@@ -1236,7 +1239,7 @@ mod tests {
         });
         let flag = Arc::clone(&warmed);
         let need = record_after_warmup(
-            &mut guard,
+            &guard,
             ESTIMATE,
             snap(4000),
             Some(rx),
@@ -1252,11 +1255,11 @@ mod tests {
         );
         warm.join().unwrap();
         assert_eq!(need, 1800, "the need includes the warm-up's buffers");
-        assert_eq!(guard.breeze_need_mb(ESTIMATE), 1800);
+        assert_eq!(lock(&guard).breeze_need_mb(ESTIMATE), 1800);
         // No warm-up (SenseVoice, TEA): the snapshot is taken at once.
-        let mut other = GpuGuard::default();
+        let other = Mutex::new(GpuGuard::default());
         let need = record_after_warmup(
-            &mut other,
+            &other,
             ESTIMATE,
             snap(4000),
             None,
@@ -1390,6 +1393,25 @@ mod tests {
         };
         let (status, _) = broadcast::channel(16);
         Engine::new(paths, cfg, status, Arc::new(MemorySecretStore::new()))
+    }
+
+    #[test]
+    fn a_pending_load_is_settled_before_the_model_changes() {
+        let e = engine(Config::with_defaults());
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(()).unwrap();
+        *lock(&e.pending_load) = Some(PendingLoad {
+            estimate: 1500,
+            before: snap(4000),
+            why: "test",
+            asr: Some("breeze"),
+            started: Instant::now(),
+            loaded_at: Instant::now(),
+            warmup: Some(rx),
+        });
+        // Unloading (nothing loaded here) goes through `switch_to` like every other change.
+        e.switch_to(None, "test").unwrap();
+        assert!(lock(&e.pending_load).is_none(), "settled first");
     }
 
     #[tokio::test]
