@@ -53,7 +53,12 @@ impl v2c_platform::Foreground for NoForeground {
 
 /// Called from `setup` (UI thread): starts the controller right away with an injector that
 /// is filled in by a background thread once IBus / the portals have been probed.
-pub fn start_controller(app: &tauri::AppHandle, state: &AppState, recorder: Arc<Recorder>) {
+pub fn start_controller(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    recorder: Arc<Recorder>,
+    notes_rx: Option<broadcast::Receiver<StatusEvent>>,
+) {
     const TICK: Duration = Duration::from_millis(50);
 
     let notes = Notes::start();
@@ -63,8 +68,9 @@ pub fn start_controller(app: &tauri::AppHandle, state: &AppState, recorder: Arc<
         link: OnceLock::new(),
     });
 
-    if !crate::overlay_enabled() {
-        bridge_status_to_notes(state.status.subscribe(), notes.clone());
+    // Subscribed in `main()` before the ASR thread started, so early events are not lost.
+    if let Some(rx) = notes_rx {
+        bridge_status_to_notes(rx, notes.clone());
     }
 
     let (events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();

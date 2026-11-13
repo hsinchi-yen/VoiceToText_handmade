@@ -282,6 +282,10 @@ impl Inner {
             .lock()
             .map_err(|_| provider_error(ProviderErrorKind::Server))?;
 
+        // Note: whisper.cpp keeps the last `audio_ctx` (`exp_n_audio_ctx`) in the state between
+        // calls, so with `LanguageMode::Detect` the language detection below runs with the
+        // previous clip's context (the first call: the full window). The app default
+        // `Fixed(zh)` skips detection and is unaffected.
         let t0 = Instant::now();
         let (decode_lang, detected) = match self.opts.language {
             LanguageMode::Fixed(l) => (l, None),

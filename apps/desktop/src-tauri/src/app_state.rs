@@ -19,9 +19,6 @@ pub struct AppState {
     /// `engine.config()`.
     pub config: Arc<Config>,
     pub status: broadcast::Sender<StatusEvent>,
-    /// Receiver subscribed in `main()` before the ASR thread starts, so status events sent
-    /// while the Tauri window is still being built are not lost. The forwarder takes it once.
-    pub early_status: Mutex<Option<broadcast::Receiver<StatusEvent>>>,
     /// Latest status, for UI pages that open after the event was sent.
     pub last_status: Arc<Mutex<Option<StatusEvent>>>,
     pub engine: Arc<Engine>,
@@ -29,19 +26,6 @@ pub struct AppState {
     pub keep_alive: Mutex<Vec<Box<dyn std::any::Any + Send>>>,
     /// Run once at exit (stop the recorder, background loops).
     pub on_exit: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
-}
-
-/// The receiver for the status forwarder: the early one if still there (it holds everything
-/// sent since it was created), otherwise a fresh subscription.
-pub fn take_status_receiver(
-    early: &Mutex<Option<broadcast::Receiver<StatusEvent>>>,
-    status: &broadcast::Sender<StatusEvent>,
-) -> broadcast::Receiver<StatusEvent> {
-    early
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .take()
-        .unwrap_or_else(|| status.subscribe())
 }
 
 /// [`Config::with_defaults`] plus per-OS defaults the app applies without changing `v2c-core`.
@@ -146,23 +130,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
-    }
-
-    #[test]
-    fn early_status_events_reach_the_forwarder() {
-        let (tx, _) = broadcast::channel::<StatusEvent>(8);
-        let early = Mutex::new(Some(tx.subscribe()));
-        // Sent while the window is still being built: nobody has taken the receiver yet.
-        tx.send(StatusEvent::Error { code: "first" }).unwrap();
-        tx.send(StatusEvent::Error { code: "second" }).unwrap();
-        let mut rx = take_status_receiver(&early, &tx);
-        assert_eq!(rx.try_recv(), Ok(StatusEvent::Error { code: "first" }));
-        assert_eq!(rx.try_recv(), Ok(StatusEvent::Error { code: "second" }));
-        // The slot is now empty: a later call subscribes fresh and sees only new events.
-        let mut late = take_status_receiver(&early, &tx);
-        assert!(late.try_recv().is_err());
-        tx.send(StatusEvent::Error { code: "third" }).unwrap();
-        assert_eq!(late.try_recv(), Ok(StatusEvent::Error { code: "third" }));
     }
 
     #[test]
