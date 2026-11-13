@@ -560,7 +560,7 @@ id_prefix = "tn-"
 asr_choices = ["tn-tea-asr", "tn-breeze-asr"]   # 套用時讓使用者選一個當 route.asr
 needs_key = ["tn-tea-asr", "tn-breeze-asr"]     # 需要金鑰的服務（金鑰存進系統金鑰庫）
 default_keys = { "tn-tea-asr" = "tn8227", "tn-breeze-asr" = "tn8227" }  # 沒輸入時存這把共用金鑰（T4.8；TEA 於 2026-11-13 補上）
-detect_llm_model = true                         # 套用時查 /v1/models
+detect_llm_model = true                         # 2026-11-13 起電腦版忽略（套用不連網）
 
 [route]
 polish = "tn-qwen"
@@ -597,7 +597,7 @@ llm_model = "Qwen3.8-27B-UD-Q6_K_L"
   - 白名單：只採用 `[[cloud]]`、`[route]`、`[preset]`；其他區段一律忽略且不寫入。
   - 驗證沿用 `commands/cloud.rs` 既有規則（名稱、逾時範圍、`route::effective_base_url`）；服務 id 必須以 `id_prefix` 開頭，`route` 只能指向檔內服務或 `local`。任何一項不過就整份拒絕，`config.toml` 不變。
   - 既有服務被更新且主機改變時，照 `save_service` 的規則刪掉舊金鑰（不把金鑰送到新主機）；主機不變時保留金鑰。
-  - 文字模型：`detect_llm_model = true` 時向端點查模型清單（重用 `cloud_models` 的查詢），只有一個模型就用它，否則（包含查詢失敗、逾時 3 秒）用檔內的 `llm_model`。
+  - 文字模型：直接用檔內的 `llm_model`，預覽與套用都不連網（2026-11-13 使用者決定：0.3.0 驗收時套用 TN／RD 被遠端連線拖慢，改為只寫本機設定；連線由「服務」頁「測試連線」確認）。`detect_llm_model` 仍可出現在檔案中（格式相容），電腦版忽略。原設計：~~向端點查模型清單，只有一個模型就用它~~。
   - 一次原子寫入（持有 `CONFIG_LOCK`、toml_edit 保留註解），寫完發 `v2c:config-changed`。
   - 金鑰（T4.8）：存進系統金鑰庫（`SecretStore`）；寫設定失敗時還原金鑰（同 `save_service`）。`[preset] default_keys = { "<id>" = "<key>" }` 可為 `needs_key` 內的服務附預設金鑰（id 必須在 `needs_key`；值去頭尾空白、非空、無控制字元、≤256 字元，否則整份拒絕）。內建 TN、RD 各附 TEA 與 Breeze 的共用金鑰 `tn8227`（2026-11-12 使用者決定，入版控；TEA 於 2026-11-13 補上，Android 模擬器實測發現 `:8001` 也要金鑰）。每個 `needs_key` 服務依序選金鑰：(a) 對話框輸入的 → (b) 已存且端點未變的舊金鑰 → (c) `default_keys` → (d) 都沒有就列入 `key_missing`；未被選為語音辨識的 `needs_key` 服務也會補上預設金鑰（之後切到 Breeze 不用再貼）。端點改變時舊金鑰被 (a) 或 (c) 取代，都沒有才刪除。預覽只回 `has_default_key`，金鑰值不進 UI 與日誌。
   - 日誌只記預設檔名稱、服務數、錯誤碼、耗時。
