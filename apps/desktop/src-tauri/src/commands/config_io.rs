@@ -391,7 +391,14 @@ fn build_preview(
 ) -> Result<ConfigPreview, IoError> {
     let has_key = has_key_fn(stored);
     let plan = portable::plan_merge(cfg, vocab, file, &has_key);
-    check_plan(file, cfg, &plan, None)?;
+    // Plain file: its own `route.asr` decides. Preset file: the user picks later, so the ASR
+    // check waits for apply (`local` here means "nothing to check").
+    let asr_check = if file.asr_choices.is_empty() {
+        file.route.asr.as_deref()
+    } else {
+        Some(LOCAL)
+    };
+    check_plan(file, cfg, &plan, asr_check)?;
     let preset = !file.asr_choices.is_empty();
     let services = file
         .services
@@ -1316,6 +1323,28 @@ mod tests {
         // A file that also moves the route away is fine.
         let ok = format!("{no_model}[route]\nasr = \"local\"\n");
         apply(&d, &store, &ok, None, &keys(&[])).unwrap();
+    }
+
+    #[test]
+    fn file_moves_asr_away_from_a_service_it_also_breaks() {
+        let d = TempDir::new("route3");
+        let store = MemorySecretStore::new();
+        apply(&d, &store, COMPAT_X, None, &keys(&[])).unwrap();
+        let text = "[v2c]
+format = 1
+[route]
+asr = \"my-gemini\"
+[[cloud]]
+id = \"x\"
+kind = \"claude\"
+[[cloud]]
+id = \"my-gemini\"
+kind = \"gemini\"
+";
+        let p = preview(&d, &store, text).unwrap();
+        assert_eq!(p.route[0].new, "my-gemini");
+        apply(&d, &store, text, None, &keys(&[])).unwrap();
+        assert_eq!(load_config(&d.config()).unwrap().route.asr, "my-gemini");
     }
 
     #[test]
