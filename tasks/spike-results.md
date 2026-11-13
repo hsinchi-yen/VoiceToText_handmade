@@ -234,3 +234,17 @@ App startup ("v2c starting" to "speech recognition ready", seconds; installed 0.
 | Median | 4.88 | 3.64 | |
 
 - Startup gain: 1.24 s (threshold 1.5 s): FAIL (short by 0.26 s). Model files were warm in the page cache for all launches.
+
+### T4.10 background warm-up (2026-11-13)
+
+Worktree d498898 (ready is emitted right after model load; warm-up runs afterwards in a background thread). Release build, same DLLs as the installed app, 3 launches, v2c closed in between.
+
+| Launch | starting to "speech recognition ready" (s) | warm-up line (s after start) | warm-up ms (background=true) |
+|--------|--------------------------------------------|------------------------------|------------------------------|
+| 1 | 2.83 | 3.68 | 852 |
+| 2 | 2.72 | 3.57 | 849 |
+| 3 | 2.67 | 3.51 | 839 |
+| Median | 2.72 | 3.57 | 849 |
+
+- Baseline: the installed 0.2.0 median measured earlier the same day was 4.88 s (5.22/4.60/4.88), so the gain is about 2.16 s (threshold 1.5 s): PASS. Caveat: the baseline was not re-measured interleaved in this round, because the installed v2c.exe could not be launched from the non-elevated agent shell (UAC prompt cancelled).
+- No Xrun/ERROR/WARN lines during startup.
