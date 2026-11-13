@@ -3,7 +3,8 @@
   "bundle": {
     "resources": {
       "runtime-dlls/*.dll": "",
-      "../../../docs/*.md": "docs/"
+      "../../../docs/*.md": "docs/",
+      "../../../docs/examples/*.toml": "docs/examples/"
     }
   }
 }

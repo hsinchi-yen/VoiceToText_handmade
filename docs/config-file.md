@@ -199,7 +199,7 @@ format = 1
 words = ["Breeze-ASR", "台積電", "v2c"]
 ```
 
-可以直接複製範例檔 `docs/examples/v2c-config.example.toml` 來改。
+可以直接複製範例檔 `docs/examples/v2c-config.example.toml` 來改。安裝版也附了這份範例檔：Windows 在 `%LOCALAPPDATA%\v2c\docs\examples\`，Linux 在 v2c 安裝資料夾的 `docs/examples/`（.deb 通常是 `/usr/lib/v2c/docs/examples/`）。
 
 ## 常見錯誤訊息與修正方法
 

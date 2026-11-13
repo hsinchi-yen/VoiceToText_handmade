@@ -7,7 +7,8 @@
     "targets": ["deb", "appimage"],
     "longDescription": "Typeless-style voice input for Linux (GNOME, IBus). Hold Right Ctrl, speak Traditional Chinese (Taiwan) or English, and the polished text is typed at the cursor. Local models by default.",
     "resources": {
-      "../../../docs/*.md": "docs/"
+      "../../../docs/*.md": "docs/",
+      "../../../docs/examples/*.toml": "docs/examples/"
     },
     "linux": {
       "deb": {
