@@ -59,18 +59,5 @@ export const preview = (source) => invoke("presets_preview", { source });
 export const apply = (source, asrChoice, keys) =>
   invoke("presets_apply", { source, asrChoice, keys });
 
-/** Runs the existing connection test against one applied service (its stored key is used). */
-export function testService(s) {
-  return cloud.test({
-    id: s.id,
-    kind: "open_ai_compat",
-    name: s.name,
-    base_url: s.base_url,
-    asr_model: s.asr_model,
-    llm_model: s.llm_model,
-    asr_timeout_ms: s.asr_timeout_ms,
-  });
-}
-
 export const purposeLabel = { asr: "語音辨識", polish: "潤飾", translate: "中翻英" };
 export const sourceLabel = { detected: "自動偵測", file: "預設值" };

@@ -19,8 +19,6 @@
   let busy = $state(false);
   let error = $state("");
   let applied = $state(null);
-  // id -> { state: "testing" | "done", result?, error? }
-  let tests = $state({});
 
   onMount(() => {
     api.list().then((l) => (builtins = l)).catch((c) => (error = api.describe(c)));
@@ -72,7 +70,6 @@
     preview?.services.find((s) => s.id === asrChoice)?.has_default_key ?? false,
   );
   const asrOptions = $derived((preview?.asr_choices ?? []).map((c) => ({ value: c.id, label: c.name })));
-  const testing = $derived(Object.values(tests).some((t) => t.state === "testing"));
 
   async function apply() {
     busy = true;
@@ -86,27 +83,11 @@
       applied = await api.apply(source, asrChoice, pasted);
       keys = {};
       step = 3;
-      runTests();
     } catch (code) {
       error = api.describe(code);
     } finally {
       busy = false;
     }
-  }
-
-  async function runTests() {
-    tests = Object.fromEntries(applied.services.map((s) => [s.id, { state: "testing" }]));
-    // The backend emits v2c:config-changed before presets_apply returns; tauri 2.12 runs its
-    // listen_any handler (the engine reload) synchronously inside emit, so no wait is needed.
-    await Promise.all(
-      applied.services.map(async (s) => {
-        try {
-          tests[s.id] = { state: "done", result: await api.testService(s) };
-        } catch (code) {
-          tests[s.id] = { state: "done", error: api.describe(code) };
-        }
-      }),
-    );
   }
 
   const nameOf = (id) => {
@@ -123,15 +104,6 @@
     ]
       .filter(Boolean)
       .join("・");
-  const testText = (t) =>
-    !t || t.state === "testing"
-      ? "測試連線中…"
-      : t.error
-        ? `測試失敗：${t.error}`
-        : t.result.ok
-          ? `連線成功（${t.result.latency_ms} ms）`
-          : t.result.summary;
-  const testOk = (t) => t?.state === "done" && !t.error && t.result.ok;
 </script>
 
 <Dialog bind:open title="套用預設組態" dismissible={!busy} {onclose}>
@@ -196,20 +168,17 @@
     {#if applied.key_missing.length}
       <Banner variant="warning">尚未設定金鑰：{applied.key_missing.join("、")}。到「服務」頁補上後才能連線。</Banner>
     {/if}
-    {#if testing}<LinearProgress label="測試連線中" />{/if}
     <div class="list">
       {#each applied.services as s (s.id)}
-        {@const t = tests[s.id]}
-        <ListItem headline={s.name ?? s.id} supporting="{s.base_url}　{testText(t)}">
-          {#snippet leading()}
-            <span class="result" class:ok={testOk(t)} class:fail={t?.state === "done" && !testOk(t)}>
-              <Icon name={testOk(t) ? "check" : t?.state === "done" ? "error" : "refresh"} />
-            </span>
-          {/snippet}
+        <ListItem headline={s.name ?? s.id} supporting={s.base_url}>
+          {#snippet leading()}<Icon name="check" />{/snippet}
         </ListItem>
       {/each}
     </div>
+    <p class="hint">要確認連得上，請到「服務」頁按各服務的「測試連線」。</p>
   {/if}
+
+  {#if busy}<LinearProgress label={step === 2 ? "套用中" : "讀取中"} />{/if}
 
   {#if error}<Banner variant="error">{error}</Banner>{/if}
 
@@ -247,15 +216,5 @@
   .label {
     font-size: var(--md-type-label-size);
     color: var(--md-on-surface-variant);
-  }
-  .result {
-    display: inline-flex;
-    color: var(--md-on-surface-variant);
-  }
-  .result.ok {
-    color: var(--md-success);
-  }
-  .result.fail {
-    color: var(--md-error);
   }
 </style>

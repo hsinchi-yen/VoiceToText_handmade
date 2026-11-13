@@ -44,7 +44,7 @@ use super::cloud::{
     check_caller, config_lock, config_path, load_config, secret_store, set_str, set_value,
     update_config, upsert_service,
 };
-use super::presets::{detect_one, restore_keys, update_keys, Keys};
+use super::presets::{detect_one, file_sources, restore_keys, update_keys, Keys};
 use crate::app_state::AppState;
 use crate::tray::CONFIG_CHANGED_EVENT;
 
@@ -357,8 +357,8 @@ fn resolve_asr(file: &PortableFile, choice: Option<&str>) -> Result<Option<Strin
 async fn detect_models(file: &mut PortableFile, http: &CloudHttp) -> HashMap<String, &'static str> {
     let mut sources = HashMap::new();
     let timeouts = TimeoutConfig {
-        asr_cloud_ms: 3000,
-        llm_cloud_ms: 3000,
+        asr_cloud_ms: 1000,
+        llm_cloud_ms: 1000,
     };
     let mut detected = 0usize;
     for svc in &mut file.services {
@@ -787,10 +787,11 @@ pub async fn config_import_preview(
 ) -> Result<ConfigPreview, IoError> {
     check_caller(window.label())?;
     let started = Instant::now();
-    let (mut file, hash) = load_file(path, None)
+    let (file, hash) = load_file(path, None)
         .await
         .inspect_err(|e| warn!(code = e.code, "config import preview refused"))?;
-    let sources = detect_models(&mut file, &http_client()?).await;
+    // No model detection here: the preview must open at once (detection runs on apply).
+    let sources = file_sources(&file.services);
     let (cfg_path, vocab) = (config_path(&app), vocab_path(&app));
     let result = tauri::async_runtime::spawn_blocking(move || {
         preview_file(&cfg_path, &vocab, &secret_store()?, &file, &sources, &hash)

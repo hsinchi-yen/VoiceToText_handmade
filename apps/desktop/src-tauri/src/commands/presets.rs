@@ -54,8 +54,19 @@ use super::cloud::{
 };
 use crate::tray::CONFIG_CHANGED_EVENT;
 
-/// Model-list query timeout during detection.
-const DETECT_TIMEOUT: Duration = Duration::from_secs(3);
+/// Model-list query timeout during detection (apply only). A LAN server answers in tens of
+/// milliseconds; off the LAN the file's model is used after this wait.
+const DETECT_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Model source per service with a text model, without asking the network (`file`). The
+/// preview uses it so opening a preset or file never waits on an unreachable LAN server.
+pub(crate) fn file_sources(services: &[CloudService]) -> HashMap<String, &'static str> {
+    services
+        .iter()
+        .filter(|s| s.llm_model.is_some())
+        .map(|s| (s.id.clone(), "file"))
+        .collect()
+}
 
 const BUILTINS: &[(&str, &str)] = &[
     ("TN", include_str!("../../presets/TN_CUSTOM_LLM_ADDR.toml")),
@@ -768,7 +779,8 @@ pub async fn presets_preview(
         blocking(move || load_source(&source)).await
     }
     .inspect_err(|code| warn!(code, "preset preview refused"))?;
-    detect_models(&mut resolved, &http_client()?).await;
+    // No model detection here: the preview must open at once (detection runs on apply).
+    resolved.sources = file_sources(&resolved.preset.services);
     let path = config_path(&app);
     let label = resolved.label.clone();
     let result = blocking(move || build_preview(&path, &secret_store()?, &mut resolved)).await;
@@ -1645,6 +1657,15 @@ llm_model = "t"
         let mut r = resolved(&mock_preset(&server.uri()));
         detect_models(&mut r, &route::cloud_http_client().unwrap()).await;
         r
+    }
+
+    #[test]
+    fn preview_sources_never_touch_the_network() {
+        let r = resolved(TN);
+        let s = file_sources(&r.preset.services);
+        // Only the text model service gets a source, and it is the file's own value.
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.get("tn-qwen"), Some(&"file"));
     }
 
     fn qwen_model(r: &Resolved) -> String {
