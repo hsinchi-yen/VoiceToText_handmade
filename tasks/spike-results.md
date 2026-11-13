@@ -192,3 +192,59 @@ $env:CMAKE_CUDA_ARCHITECTURES = '75'         # 只編 RTX 2060 (Turing)，省很
 
 - 預設量化：**q5_0**（2026-11-09 實測）
 - 是否需要備案（Whisper large-v3-turbo）：**否**（速度與準確度都達標；VRAM 待你實測）
+
+## T4.10 辨識加速與啟動提前（2026-11-13，agent 實測）
+
+**量測條件（重要）**：你的 v2c.exe 正在執行並占用 GPU，所以 bench 的 GPU 是**與執行中的 App 共用**，數字偏慢且波動大（第一組前後差 2 倍以上）。要驗收請關掉 v2c 後重跑。App 內「啟動到 speech recognition ready」**沒有量**（不能關你的 App，dev 版也會跟它搶單一實例與熱鍵）。
+
+指令（q8_0、`--lang zh` 同 App、每組 3 輪共 30 次；改前加 `--audio-ctx 1500` = 完整 30 秒視窗，改後不加 = 依錄音長度）：
+`v2c-cli bench --asr breeze --model models\ggml-breeze-asr-25-q8_0.bin --lang zh [--audio-ctx 1500] --repeat 3 tests\fixtures\audio`
+
+| 組別 | 改前 ASR 平均／最大 | 改後 ASR 平均／最大 | 變化 | 改前／改後 平均 CER |
+|------|---------------------|---------------------|------|---------------------|
+| 第 1 組（GPU 被占用，波動大） | 3785／6745 ms | 1819／5841 ms | −52% | 3.6%／3.3% |
+| 第 2 組（較穩定） | 2013／2499 ms | 1459／1881 ms | −27.5% | 3.6%／3.3% |
+
+- 第 2 組逐輪平均：改前 2047／2013／1978，改後 1482／1464／1432 ms（中位數 1962 → 1422，−27.5%）。
+- 錯字率沒有變差（3.6% → 3.3%，同上次 q8 ctx 768 的結果）；10 段音檔都在 14 秒內，實際使用 ctx 768。
+- 驗收要求 ≥ −30%：第 2 組 −27.5% 略低，第 1 組與先前調查（−37%）高於；GPU 共用時分母被其他程式的負載墊高，**需關掉 App 後重量**才能下定論。
+- 暖機（bench 內，含載入後第一次推論）：改前 1.77～1.83 秒，改後 1.21～1.27 秒（ctx 768）；App 的暖機另外限制 8 個 token。
+- 模型載入 9～36 秒（讀檔 I/O，受磁碟快取與其他程式影響很大），與改動無關。
+
+### T4.10 (GPU free, 2026-11-13)
+
+Measured with v2c closed (RTX 2060, q8_0, `--lang zh`, 3 interleaved rounds, `--repeat 3` = 30 clips per run). Before = `--audio-ctx 1500`, after = no flag.
+
+| Round | Before ASR mean/max (ms) | After ASR mean/max (ms) | Before/After CER | Before/After warm-up (ms) |
+|-------|--------------------------|-------------------------|------------------|---------------------------|
+| 1 | 1968 / 2511 | 1312 / 1590 | 3.6% / 3.3% | 1497 / 840 |
+| 2 | 1939 / 2254 | 1311 / 1596 | 3.6% / 3.3% | 1435 / 854 |
+| 3 | 1927 / 2228 | 1297 / 1584 | 3.6% / 3.3% | 1415 / 835 |
+| Median | 1939 | 1311 | 3.6% / 3.3% | 1435 / 840 |
+
+- ASR mean change: -32.4% (threshold -30%): PASS. CER not worse: PASS.
+
+App startup ("v2c starting" to "speech recognition ready", seconds; installed 0.2.0 vs T4.10 release build with the same DLLs, alternating, one instance at a time):
+
+| Launch | 0.2.0 baseline | T4.10 | overlay ready (base/new) |
+|--------|----------------|-------|--------------------------|
+| 1 | 5.22 | 3.77 | 1.20 / 0.83 |
+| 2 | 4.60 | 3.62 | 0.67 / 0.69 |
+| 3 | 4.88 | 3.64 | 0.69 / 0.69 |
+| Median | 4.88 | 3.64 | |
+
+- Startup gain: 1.24 s (threshold 1.5 s): FAIL (short by 0.26 s). Model files were warm in the page cache for all launches.
+
+### T4.10 background warm-up (2026-11-13)
+
+Worktree d498898 (ready is emitted right after model load; warm-up runs afterwards in a background thread). Release build, same DLLs as the installed app, 3 launches, v2c closed in between.
+
+| Launch | starting to "speech recognition ready" (s) | warm-up line (s after start) | warm-up ms (background=true) |
+|--------|--------------------------------------------|------------------------------|------------------------------|
+| 1 | 2.83 | 3.68 | 852 |
+| 2 | 2.72 | 3.57 | 849 |
+| 3 | 2.67 | 3.51 | 839 |
+| Median | 2.72 | 3.57 | 849 |
+
+- Baseline: the installed 0.2.0 median measured earlier the same day was 4.88 s (5.22/4.60/4.88), so the gain is about 2.16 s (threshold 1.5 s): PASS. Caveat: the baseline was not re-measured interleaved in this round, because the installed v2c.exe could not be launched from the non-elevated agent shell (UAC prompt cancelled).
+- No Xrun/ERROR/WARN lines during startup.

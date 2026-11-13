@@ -33,6 +33,11 @@ pub trait AudioSource: Send + Sync {
     fn cancel(&self);
     /// Current input level (RMS of the latest audio block), for the overlay meter.
     fn level(&self) -> f32;
+    /// Dropped-sample events (`Xrun`) during the clip last returned by [`AudioSource::finish`];
+    /// reading resets the count. Sources that cannot tell return 0.
+    fn take_xruns(&self) -> u32 {
+        0
+    }
 }
 
 /// Stream state changes, reported to the controller (codes only, no audio).
@@ -175,11 +180,43 @@ impl AudioSource for Recorder {
     fn level(&self) -> f32 {
         f32::from_bits(self.shared.level_bits.load(Ordering::Relaxed))
     }
+
+    fn take_xruns(&self) -> u32 {
+        self.lock().take_finished_xruns()
+    }
 }
 
 impl Drop for Recorder {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+/// Minimum gap between two "audio stream notice" debug lines.
+const NOTICE_LOG_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Lets one event through per `interval`.
+struct RateLimit {
+    interval: Duration,
+    last: Option<Instant>,
+}
+
+impl RateLimit {
+    fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            last: None,
+        }
+    }
+
+    fn allow(&mut self, now: Instant) -> bool {
+        match self.last {
+            Some(t) if now.saturating_duration_since(t) < self.interval => false,
+            _ => {
+                self.last = Some(now);
+                true
+            }
+        }
     }
 }
 
@@ -221,6 +258,7 @@ impl Manager {
         let mut want_open = self.mic_mode == MicMode::AlwaysOn;
         let mut next_attempt = Instant::now();
         let mut failure_reported = false;
+        let mut notice_log = RateLimit::new(NOTICE_LOG_INTERVAL);
 
         loop {
             if want_open && active.is_none() && Instant::now() >= next_attempt {
@@ -283,7 +321,13 @@ impl Manager {
                 }) => {
                     if active.as_ref().is_some_and(|a| a.generation == g) {
                         if stream_survives(kind) {
-                            debug!(?kind, "audio stream notice");
+                            if kind == cpal::ErrorKind::Xrun {
+                                self.lock().note_xrun();
+                            }
+                            // An xrun can repeat every few ms; log at most once a second.
+                            if notice_log.allow(Instant::now()) {
+                                debug!(?kind, "audio stream notice");
+                            }
                         } else {
                             warn!(?kind, "audio stream lost; reopening");
                             active = None;
@@ -594,6 +638,10 @@ struct Capture {
     preroll: VecDeque<f32>,
     preroll_cap: usize,
     recording: Option<Vec<f32>>,
+    /// Xruns seen during the current clip.
+    xruns: u32,
+    /// Xruns of the clip returned by the last `finish`, until read.
+    finished_xruns: u32,
 }
 
 impl Capture {
@@ -602,7 +650,20 @@ impl Capture {
             preroll: VecDeque::with_capacity(preroll_cap),
             preroll_cap,
             recording: None,
+            xruns: 0,
+            finished_xruns: 0,
         }
+    }
+
+    /// Counts a dropped-sample event; only while a clip is being recorded.
+    fn note_xrun(&mut self) {
+        if self.recording.is_some() {
+            self.xruns = self.xruns.saturating_add(1);
+        }
+    }
+
+    fn take_finished_xruns(&mut self) -> u32 {
+        std::mem::take(&mut self.finished_xruns)
     }
 
     fn push(&mut self, samples: &[f32]) {
@@ -623,9 +684,11 @@ impl Capture {
         let mut clip = Vec::with_capacity(self.preroll.len() + SAMPLE_RATE as usize * 10);
         clip.extend(self.preroll.drain(..));
         self.recording = Some(clip);
+        self.xruns = 0;
     }
 
     fn finish(&mut self) -> AudioClip {
+        self.finished_xruns = std::mem::take(&mut self.xruns);
         AudioClip::new(self.recording.take().unwrap_or_default())
     }
 
@@ -645,6 +708,33 @@ impl Capture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xruns_are_counted_per_clip_and_only_while_recording() {
+        let mut c = Capture::new(0);
+        c.note_xrun(); // idle: ignored
+        c.begin();
+        c.note_xrun();
+        c.note_xrun();
+        let _ = c.finish();
+        c.note_xrun(); // after finish: ignored
+        assert_eq!(c.take_finished_xruns(), 2);
+        assert_eq!(c.take_finished_xruns(), 0, "reading resets");
+        c.begin();
+        let _ = c.finish();
+        assert_eq!(c.take_finished_xruns(), 0, "the count starts over per clip");
+    }
+
+    #[test]
+    fn notice_log_is_limited_to_one_line_per_interval() {
+        let t0 = Instant::now();
+        let mut r = RateLimit::new(Duration::from_secs(1));
+        assert!(r.allow(t0));
+        assert!(!r.allow(t0 + Duration::from_millis(10)));
+        assert!(!r.allow(t0 + Duration::from_millis(999)));
+        assert!(r.allow(t0 + Duration::from_secs(1)));
+        assert!(!r.allow(t0 + Duration::from_millis(1500)));
+    }
 
     #[test]
     fn stall_only_counts_while_recording() {

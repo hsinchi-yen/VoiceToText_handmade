@@ -49,7 +49,8 @@ pub struct BreezeArgs {
     /// Disable whisper.cpp flash attention.
     #[arg(long)]
     pub no_flash_attn: bool,
-    /// Encoder context override (1..=1500; 1500 = 30 s window). Experimental speed knob.
+    /// Encoder context (1..=1500). Default: chosen per clip from its length, like the app
+    /// (`max(768, secs*50+50)`, 1500 above 14 s). `--audio-ctx 1500` = the full 30 s window.
     #[arg(long)]
     pub audio_ctx: Option<u32>,
     /// CPU threads for whisper.cpp (default: logical cores, max 8).

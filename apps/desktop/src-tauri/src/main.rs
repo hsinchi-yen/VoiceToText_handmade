@@ -1,8 +1,10 @@
 //! v2c desktop app: hold Right Ctrl, speak, and the text is typed at the cursor.
 //!
-//! Startup: logging -> config -> keyring store -> engine -> Tauri. In `setup`: overlay window,
-//! tray icon, status forwarder, local ASR selection + VRAM guard (background thread), LM Studio
-//! check, recorder, hotkey hook, the controller task, and the config-reload listener. OS-specific
+//! Startup: logging -> config -> keyring store -> engine -> status subscriptions -> Tauri. The
+//! local ASR selection + VRAM guard thread starts from a plugin right after the single-instance
+//! check (so a second launch never loads a model) and overlaps window creation. In `setup`:
+//! tray icon, status forwarder, LM Studio check, recorder, hotkey hook, the controller task, and
+//! the config-reload listener; the overlay window is created right after the main window is shown. OS-specific
 //! calls go through `v2c-platform` (the overlay's window styles are isolated in `overlay::win`).
 //! At exit (`RunEvent::Exit`) the hook, microphone, and background loops are stopped and the
 //! log is flushed.
@@ -61,6 +63,11 @@ fn main() {
     let secrets = install_keyring();
     let (status, _) = broadcast::channel::<StatusEvent>(256);
     let engine = Engine::new(paths.clone(), config.clone(), status.clone(), secrets);
+    // Subscribed before the ASR thread starts (it starts from a plugin, below): events it sends
+    // while WebView2 and the windows are still being created wait in these receivers until
+    // `setup` hands them to the forwarder, overlay and notification bridge.
+    let early = EarlyStatus::subscribe(&status);
+    let asr_engine = Arc::clone(&engine);
     let state = AppState {
         paths,
         config: Arc::new(config),
@@ -88,6 +95,17 @@ fn main() {
                 let _ = w.set_focus();
             }
         }))
+        // Model loading is I/O bound and needs nothing from Tauri. Plugins are set up in order
+        // after the single-instance check (which exits a second launch), and the windows are
+        // created later in `run()`, so loading overlaps WebView2 and window creation.
+        .plugin(
+            tauri::plugin::Builder::<tauri::Wry>::new("v2c-asr")
+                .setup(move |_app, _api| {
+                    start_asr_thread(&asr_engine);
+                    Ok(())
+                })
+                .build(),
+        )
         .manage(state)
         // Start with Windows (HKCU Run key); the entry passes AUTOSTART_ARG to start hidden.
         .plugin(tauri_plugin_autostart::init(
@@ -147,17 +165,29 @@ fn main() {
         .setup(move |app| {
             let handle = app.handle();
             commands::history::init(handle); // before the controller reads the sinks
-                                             // Before the background tasks so the overlay sees their first status events.
-            if !overlay_enabled() {
+            let EarlyStatus {
+                forwarder,
+                overlay: overlay_rx,
+                notes,
+            } = early;
+            if overlay_rx.is_none() {
                 info!("overlay disabled on Wayland (notifications instead)");
-            } else if let Err(e) = overlay::start(handle, &handle.state::<AppState>().status) {
-                error!(error = %e, "overlay window could not be created");
             }
             if let Err(e) = tray::start(handle) {
                 error!(error = %e, "tray icon could not be created");
             }
-            start_background(handle, config_error);
+            start_background(handle, config_error, forwarder, notes);
             show_main_unless_autostart(handle);
+            // The overlay webview (~115 ms) is created after the main window is shown, off the
+            // setup path.
+            if let Some(rx) = overlay_rx {
+                let handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = overlay::start(&handle, rx) {
+                        error!(error = %e, "overlay window could not be created");
+                    }
+                });
+            }
             #[cfg(debug_assertions)]
             overlay::start_demo_if_requested(&handle.state::<AppState>().status);
             Ok(())
@@ -272,11 +302,55 @@ fn shutdown(app: &tauri::AppHandle) {
         .clear();
 }
 
-fn start_background(app: &tauri::AppHandle, config_error: Option<&'static str>) {
+/// The status receivers every consumer needs, subscribed before the ASR thread starts so none of
+/// them misses the events it sends during startup (`model_missing`, GPU fallback notices, ...).
+struct EarlyStatus {
+    /// Webview forwarder + `last_status`.
+    forwarder: broadcast::Receiver<StatusEvent>,
+    /// Overlay window (Windows, Linux X11); `None` where the overlay is off.
+    overlay: Option<broadcast::Receiver<StatusEvent>>,
+    /// Linux Wayland notification bridge, used instead of the overlay.
+    notes: Option<broadcast::Receiver<StatusEvent>>,
+}
+
+impl EarlyStatus {
+    fn subscribe(status: &broadcast::Sender<StatusEvent>) -> Self {
+        let overlay_on = overlay_enabled();
+        Self {
+            forwarder: status.subscribe(),
+            overlay: overlay_on.then(|| status.subscribe()),
+            notes: (!overlay_on).then(|| status.subscribe()),
+        }
+    }
+}
+
+/// Local ASR selection and loading, then the VRAM guard, off the async workers. Started from
+/// the `v2c-asr` plugin (after the single-instance check).
+fn start_asr_thread(engine: &Arc<Engine>) {
+    let engine = Arc::clone(engine);
+    let spawned = std::thread::Builder::new()
+        .name("v2c-asr".into())
+        .spawn(move || {
+            engine.startup_blocking();
+            engine.guard_loop();
+        });
+    if spawned.is_err() {
+        error!("could not spawn the ASR thread");
+    }
+}
+
+fn start_background(
+    app: &tauri::AppHandle,
+    config_error: Option<&'static str>,
+    forwarder: broadcast::Receiver<StatusEvent>,
+    notes: Option<broadcast::Receiver<StatusEvent>>,
+) {
+    #[cfg(not(target_os = "linux"))]
+    let _ = notes; // only the Linux Wayland bridge uses it
     let state = app.state::<AppState>();
 
     // Forward status events to the webview and remember the latest one.
-    let mut rx = state.status.subscribe();
+    let mut rx = forwarder;
     let last = Arc::clone(&state.last_status);
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -300,19 +374,6 @@ fn start_background(app: &tauri::AppHandle, config_error: Option<&'static str>) 
         let _ = state.status.send(StatusEvent::Error { code });
     }
 
-    // Local ASR selection and loading, then the VRAM guard, off the async workers.
-    {
-        let engine = Arc::clone(&state.engine);
-        let spawned = std::thread::Builder::new()
-            .name("v2c-asr".into())
-            .spawn(move || {
-                engine.startup_blocking();
-                engine.guard_loop();
-            });
-        if spawned.is_err() {
-            error!("could not spawn the ASR thread");
-        }
-    }
     tauri::async_runtime::spawn(Arc::clone(&state.engine).lm_check_loop());
 
     // Config reload after the tray (or, later, the settings page) saved config.toml.
@@ -366,7 +427,7 @@ fn start_background(app: &tauri::AppHandle, config_error: Option<&'static str>) 
     }
 
     #[cfg(target_os = "linux")]
-    linux_app::start_controller(app, &state, recorder);
+    linux_app::start_controller(app, &state, recorder, notes);
     #[cfg(not(target_os = "linux"))]
     start_controller(&state, recorder);
 }
@@ -437,4 +498,32 @@ fn start_controller(state: &AppState, recorder: Arc<Recorder>) {
     let _ = state.status.send(StatusEvent::Error {
         code: "platform_unsupported",
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_consumer_gets_events_sent_before_setup() {
+        let (tx, _) = broadcast::channel::<StatusEvent>(8);
+        let early = EarlyStatus::subscribe(&tx);
+        // The ASR thread reports while WebView2 and the windows are still being created.
+        tx.send(StatusEvent::Error {
+            code: "model_missing",
+        })
+        .unwrap();
+        let mut got = vec![early.forwarder];
+        got.extend(early.overlay);
+        got.extend(early.notes);
+        assert!(got.len() >= 2, "forwarder plus overlay or notes");
+        for mut rx in got {
+            assert_eq!(
+                rx.try_recv(),
+                Ok(StatusEvent::Error {
+                    code: "model_missing"
+                })
+            );
+        }
+    }
 }
