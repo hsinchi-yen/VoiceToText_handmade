@@ -1,16 +1,17 @@
 <script>
   import { emit, listen } from "@tauri-apps/api/event";
   import Wave from "../overlay/Wave.svelte";
-  import Progress from "../overlay/Progress.svelte";
+  import Orb from "../overlay/Orb.svelte";
 
   // Floating status pill (T1.3). Payloads come from src-tauri/src/overlay.rs (`v2c:overlay`):
   // states, a volume level, and fixed UI strings. Never any recognised text.
-  // Look (T4.7): a black pill; recording = scrolling green ECG trace, transcribing/polishing =
-  // one estimated progress bar, errors/notices = short text.
+  // Look (T4.7, recoloured 2026-11-14): a black pill; recording = golden ECG trace travelling
+  // left to right (green head dot); transcribing/polishing/done = the pill shrinks to a circle
+  // holding a gold orb that fills to 100% and blooms; errors/notices = short text.
   // Once the listener is registered we emit `v2c:overlay-ready`; Rust then re-sends whatever
   // was emitted before we were listening (e.g. a startup error).
   const FADE_MS = 300;
-  // The "done" pill only lives ~250 ms: its fade is shorter so the bar is seen at 100% first.
+  // The "done" pill only lives ~550 ms: its fade is shorter so the orb's finish is seen first.
   const DONE_FADE_MS = 150;
 
   let view = $state({ kind: "hidden" });
@@ -64,7 +65,8 @@
     <div
       class={`pill ${view.kind}`}
       class:fading
-      class:compact={!isNotice && !(view.kind === "recording" && view.hands_free)}
+      class:compact={!isNotice && !isProgress && !(view.kind === "recording" && view.hands_free)}
+      class:orb={isProgress}
       class:handsfree={view.kind === "recording" && view.hands_free}
       style:--fade={`${fadeMs}ms`}
       role="status"
@@ -81,7 +83,7 @@
           <span class="hf-hint">按右 Ctrl 結束</span>
         {/if}
       {:else if isProgress}
-        <Progress kind={view.kind} />
+        <Orb kind={view.kind} />
       {:else}
         <span class={`accent ${view.kind}`}></span>
         <span class="label">{view.message ?? ""}</span>
@@ -118,7 +120,10 @@
     white-space: nowrap;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
     opacity: 1;
-    transition: opacity var(--fade, 300ms) ease-out;
+    transition:
+      opacity var(--fade, 300ms) ease-out,
+      width 340ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      padding 340ms cubic-bezier(0.2, 0.8, 0.2, 1);
   }
   .pill.compact {
     width: 200px;
@@ -126,10 +131,16 @@
   .pill.handsfree {
     width: 320px;
   }
+  /* Processing: the pill shrinks to a circle around the progress orb. */
+  .pill.orb {
+    width: 40px;
+    padding: 0;
+    justify-content: center;
+  }
   .hf-hint {
     flex: none;
     font-size: 13px;
-    color: #9fe8b4;
+    color: #f3d98a;
   }
   .pill.fading {
     opacity: 0;
@@ -143,8 +154,8 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #39ff6a;
-    box-shadow: 0 0 6px rgba(57, 255, 106, 0.8);
+    background: #9b7bff;
+    box-shadow: 0 0 6px rgba(155, 123, 255, 0.85);
   }
   .accent {
     flex: none;

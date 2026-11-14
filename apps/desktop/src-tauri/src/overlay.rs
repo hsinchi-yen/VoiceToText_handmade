@@ -37,8 +37,8 @@ const WIDTH: f64 = 420.0;
 const HEIGHT: f64 = 56.0;
 const BOTTOM_MARGIN: f64 = 48.0;
 
-/// "Done" is only the bar snapping to 100% and a quick fade (the webview runs the fade).
-const DONE_MS: u64 = 250;
+/// "Done": the progress orb tops up to 100%, blooms, then fades (the webview runs all of it).
+const DONE_MS: u64 = 550;
 /// Informational messages (nothing recognised, microphone back) stay a little longer.
 const INFO_MS: u64 = 1_500;
 /// Errors stay 3 s.
@@ -675,7 +675,7 @@ mod tests {
 
     #[test]
     fn done_hides_quickly_and_error_after_three_seconds() {
-        assert!((150..=400).contains(&DONE_MS));
+        assert!((150..=700).contains(&DONE_MS));
         assert_eq!(ERROR_MS, 3_000);
     }
 
