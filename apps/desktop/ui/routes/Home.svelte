@@ -1,16 +1,14 @@
 <script>
-  // 首頁 (T4.2): status hero, what is in use, active preset, and two one-click controls that
-  // save immediately through `settings_apply` (not the Settings draft). Never shows user text.
+  // 首頁 (T4.2): status hero and the active preset. What is in use lives on the 服務 page and
+  // the quick controls on the 設定 page. Never shows user text.
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import * as api from "../settings/api.js";
-  import { displayName } from "../cloud-setup/api.js";
   import * as presets from "../presets/api.js";
-  import RuntimeStatus from "../settings/RuntimeStatus.svelte";
   import PresetDialog from "../presets/PresetDialog.svelte";
   import ConfigImportDialog from "../config-io/ConfigImportDialog.svelte";
-  import { Banner, Button, Card, Icon, LinearProgress, Select, Switch } from "../lib/index.js";
-  import { activePreset, asrSelectOptions, heroState } from "../home/logic.js";
+  import { Banner, Button, Card, Icon, LinearProgress } from "../lib/index.js";
+  import { activePreset, heroState } from "../home/logic.js";
 
   // Status codes from src-tauri/src/controller.rs (StatusEvent). Never contains user text.
   const errorText = {
@@ -35,28 +33,20 @@
 
   let info = $state(null);
   let status = $state(null);
-  let latency = $state(null);
   let view = $state(null);
   let presetList = $state([]);
   let presetOpen = $state(false);
   let importPath = $state(null);
-  let polish = $state(true);
-  let asr = $state("");
-  let saving = $state(false);
   let error = $state("");
   let presetsFailed = $state(false);
 
   function onStatus(s) {
-    if (!s) return;
-    status = s;
-    if (s.kind === "done" && s.chars > 0) latency = s.latency_ms;
+    if (s) status = s;
   }
 
   async function loadSettings() {
     try {
       view = await api.get();
-      polish = view.config.polish.enabled;
-      asr = view.asr_choice;
     } catch (code) {
       error = api.describe(code);
     }
@@ -77,31 +67,6 @@
     };
   });
 
-  /** Saves one control right away; puts it back and shows the reason if refused. */
-  async function applyNow(changes, revert) {
-    saving = true;
-    error = "";
-    try {
-      await api.apply(changes);
-    } catch (code) {
-      error = api.describe(code);
-      revert();
-    } finally {
-      saving = false;
-    }
-  }
-
-  function onPolish(e) {
-    const next = e.currentTarget.checked;
-    applyNow([{ field: "polish_enabled", value: next }], () => (polish = !next));
-  }
-
-  function onAsr(e) {
-    const next = e.currentTarget.value;
-    const prev = view.asr_choice;
-    applyNow(api.asrChoiceChanges(next), () => (asr = prev));
-  }
-
   const hero = $derived(heroState(status, info));
   const heroDetail = $derived(status?.kind === "error" ? (errorText[status.code] ?? "") : "");
   const level = $derived(status?.kind === "recording" ? Math.min(1, status.rms * 8) : 0);
@@ -109,10 +74,6 @@
     status?.kind === "error" && (status.code === "model_missing" || status.code === "sensevoice_not_available"),
   );
   const presetTitle = $derived(view ? activePreset(view.config.route, presetList) : "");
-  // settings_get gives cloud rows as {id, kind, supports_asr}; names live in config.cloud.
-  const serviceLabel = (s) =>
-    `${api.kindLabels[s.kind] ?? s.kind}：${displayName(view.config.cloud.find((c) => c.id === s.id) ?? s)}`;
-  const asrOptions = $derived(view ? asrSelectOptions(api.localAsrOptions(view), view.cloud, serviceLabel) : []);
   const keys = [
     { combo: ["右 Ctrl"], text: "說話" },
     { combo: ["Shift", "右 Ctrl"], text: "中翻英" },
@@ -130,9 +91,7 @@
       {#if hero.sub}<p class="sub">{hero.sub}</p>{/if}
       {#if hero.note}<p class="sub">{hero.note}</p>{/if}
       {#if heroDetail && !hero.note}<p class="sub">{heroDetail}</p>{/if}
-      {#if hero.tone === "ready" && status?.kind !== "recording"}
-        <p class="sub">{latency != null ? `上次放開到出字 ${latency} ms` : "放開後文字會輸入到游標位置"}</p>
-      {/if}
+      {#if hero.tone === "ready"}<p class="sub">放開後文字會輸入到游標位置</p>{/if}
       {#if needsModel}
         <p class="sub"><a href="#/onboarding">前往初次設定</a>　或　<a href="#/services">改用雲端服務</a></p>
       {/if}
@@ -154,45 +113,17 @@
     <Banner variant="error" onclose={() => (error = "")}>{error}</Banner>
   {/if}
 
-  <div class="grid">
-    <RuntimeStatus />
-
-    <div class="col">
-      <Card tag="section" aria-labelledby="preset-title">
-        <h2 id="preset-title">預設組態</h2>
-        {#if view}
-          <p class="current"><Icon name="services" size={20} /> <strong>{presetTitle}</strong></p>
-          {#if presetsFailed}<p class="hint">讀不到預設組態清單，目前組態可能顯示為「自訂」。</p>{/if}
-        {:else}
-          <p class="hint">讀取中…</p>
-        {/if}
-        <p class="hint">一次設定語音辨識、潤飾與中翻英要用哪一組區網服務。</p>
-        <div class="row"><Button variant="tonal" icon="download" onclick={() => (presetOpen = true)}>套用預設組態</Button></div>
-      </Card>
-
-      <Card tag="section" aria-labelledby="quick-title">
-        <h2 id="quick-title">常用設定</h2>
-        {#if view}
-          <div class="controls">
-            <Switch bind:checked={polish} disabled={saving} onchange={onPolish} label="潤飾（去贅字、確保繁體）" />
-            <Select
-              label="語音辨識由誰處理"
-              bind:value={asr}
-              options={asrOptions}
-              disabled={saving}
-              onchange={onAsr}
-            />
-          </div>
-        {:else}
-          <p class="hint">讀取中…</p>
-        {/if}
-      </Card>
-    </div>
-  </div>
-
-  {#if info}
-    <p class="info hint">版本 {info.version}・CUDA {info.cuda ? "已啟用" : "未啟用"}</p>
-  {/if}
+  <Card tag="section" aria-labelledby="preset-title">
+    <h2 id="preset-title">預設組態</h2>
+    {#if view}
+      <p class="current"><Icon name="services" size={20} /> <strong>{presetTitle}</strong></p>
+      {#if presetsFailed}<p class="hint">讀不到預設組態清單，目前組態可能顯示為「自訂」。</p>{/if}
+    {:else}
+      <p class="hint">讀取中…</p>
+    {/if}
+    <p class="hint">一次設定語音辨識、潤飾與中翻英要用哪一組區網服務。</p>
+    <div class="row"><Button variant="tonal" icon="download" onclick={() => (presetOpen = true)}>套用預設組態</Button></div>
+  </Card>
 </div>
 
 {#if presetOpen}
@@ -310,20 +241,6 @@
     font-weight: 600;
     white-space: nowrap;
   }
-  .grid {
-    display: grid;
-    gap: var(--md-space-4);
-    align-items: start;
-  }
-  .col {
-    display: grid;
-    gap: var(--md-space-4);
-  }
-  @media (min-width: 720px) {
-    .grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
   @media (max-width: 480px) {
     .hero {
       grid-template-columns: minmax(0, 1fr);
@@ -348,12 +265,5 @@
   }
   .row {
     display: flex;
-  }
-  .controls {
-    display: grid;
-    gap: var(--md-space-5);
-  }
-  .info {
-    margin: 0;
   }
 </style>

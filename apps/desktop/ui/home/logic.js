@@ -53,11 +53,3 @@ export function activePreset(route, presets) {
   }
   return "自訂";
 }
-
-/** Options for the 語音辨識 select: local engines first, then cloud services with ASR. */
-export function asrSelectOptions(localOptions, cloud, label) {
-  return [
-    ...localOptions.map((o) => ({ value: "local:" + o.value, label: "地端：" + o.label })),
-    ...cloud.filter((s) => s.supports_asr).map((s) => ({ value: s.id, label: label(s) })),
-  ];
-}

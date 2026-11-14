@@ -1,5 +1,6 @@
 <script>
-  // 服務 page (T1.7b, restyled T4.4): connected services grouped by preset + wizard (plan §6.2).
+  // 服務 page (T1.7b, restyled T4.4): 「目前使用中」 on top, then connected services grouped by
+  // preset + wizard (plan §6.2).
   import { listen } from "@tauri-apps/api/event";
   import * as api from "../cloud-setup/api.js";
   import Wizard from "../cloud-setup/Wizard.svelte";
@@ -7,6 +8,7 @@
   import RouteSummary from "../cloud-setup/RouteSummary.svelte";
   import * as presetsApi from "../presets/api.js";
   import { Banner } from "../lib/index.js";
+  import RuntimeStatus from "../settings/RuntimeStatus.svelte";
 
   let kinds = $state([]);
   let presets = $state([]);
@@ -66,6 +68,7 @@
   {/key}
 {:else}
   <h1>服務</h1>
+  <div class="runtime"><RuntimeStatus /></div>
   <p class="hint lead">公司區網請用<a href="#/">首頁的「套用預設組態」</a></p>
   <RouteSummary {services} />
   <ServiceList
@@ -88,6 +91,9 @@
 {#if message}<div class="msg"><Banner variant="error">{message}</Banner></div>{/if}
 
 <style>
+  .runtime {
+    margin: 0 0 var(--md-space-4);
+  }
   .lead {
     margin: 0 0 var(--md-space-4);
   }

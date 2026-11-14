@@ -1,10 +1,12 @@
 <script>
-  // 匯出／匯入設定 (T5.2): bottom of the 設定 page. The exported file has no keys but does
-  // carry the vocabulary.
+  // 匯出／匯入設定 (T5.2): inside 設定 → 進階. The exported file has no keys but does carry the
+  // vocabulary. `heading` = false when the surrounding group already shows the title.
   import * as api from "./api.js";
   import * as logic from "./logic.js";
   import { Banner, Button } from "../lib/index.js";
   import ConfigImportDialog from "./ConfigImportDialog.svelte";
+
+  let { heading = true } = $props();
 
   let busy = $state(false);
   let message = $state("");
@@ -48,7 +50,7 @@
 </script>
 
 <section class="io">
-  <h2>匯出與匯入設定</h2>
+  {#if heading}<h2>匯出與匯入設定</h2>{/if}
   <p class="hint">把雲端／區網服務、各用途由誰處理與詞庫存成一個檔案，換電腦或分享給同事時匯入。檔案不含金鑰，但含詞庫，分享前請確認。</p>
   <p class="buttons">
     <Button variant="outlined" icon="upload" disabled={busy} onclick={exportConfig}>匯出設定</Button>

@@ -1,6 +1,7 @@
 <script>
-  // 「目前使用中」: what the running engine actually uses (`settings_runtime_status`), not what
-  // config.toml says. Refreshes on status / config events and every 3 s while visible.
+  // 「目前使用中」 (top of the 服務 page): what the running engine actually uses
+  // (`settings_runtime_status`), not what config.toml says. Refreshes on status / config events
+  // and every 3 s while visible.
   import { listen } from "@tauri-apps/api/event";
   import * as api from "./api.js";
   import { Banner, Card, Icon, ListItem } from "../lib/index.js";

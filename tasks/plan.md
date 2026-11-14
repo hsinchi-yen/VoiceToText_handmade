@@ -609,12 +609,13 @@ llm_model = "Qwen3.8-27B-UD-Q6_K_L"
 
 | 頁面 | 網址 | 內容 |
 |------|------|------|
-| 首頁 | `#/` | 目前使用中（原 RuntimeStatus）、套用預設組態、常用開關（潤飾、語音辨識由誰處理） |
-| 服務 | `#/services` | 各用途由誰處理、服務清單（依預設組分組）、新增服務精靈 |
+| 首頁 | `#/` | 狀態（含快速鍵、出錯時的連結）、套用預設組態 |
+| 服務 | `#/services` | 目前使用中（原 RuntimeStatus，頂端）、各用途由誰處理、服務清單（依預設組分組）、新增服務精靈 |
 | 詞庫與紀錄 | `#/library`（分頁 `vocab`／`history`） | 原詞庫頁與紀錄頁 |
-| 設定 | `#/settings` | 常用（麥克風、用途選擇、潤飾、開機自動啟動）＋「進階」（預設收合：熱鍵時間、地端語音模型、顯示卡記憶體、App 規則、輸入紀錄設定、麥克風模式、雲端失敗改用地端）；底部「重新執行初次設定」 |
+| 設定 | `#/settings` | 主畫面只有麥克風、一般（潤飾、開機自動啟動）＋「進階」（預設收合：各用途由誰處理、地端語音模型、App 規則、輸入紀錄設定、匯出／匯入設定、「重新執行初次設定」；再一層「專家」：熱鍵時間、顯示卡記憶體、麥克風模式、雲端失敗改用地端）；最底下一行版本與 CUDA |
 
-  舊網址 `#/cloud-setup` → `#/services`、`#/vocab` → `#/library?tab=vocab`、`#/history` → `#/library?tab=history` 轉址；`#/onboarding` 仍可直接開（首次啟動與設定頁底部的入口）。
+  舊網址 `#/cloud-setup` → `#/services`、`#/vocab` → `#/library?tab=vocab`、`#/history` → `#/library?tab=history` 轉址；`#/onboarding` 仍可直接開（首次啟動與「設定 → 進階」的入口）。
+  2026-11-14 你決定再精簡（給一般使用者）：功能都保留，只把不常用的往「進階」「專家」裡搬；收合的群組標題仍顯示「N 項未儲存」，儲存列與離開確認不變。首頁不再有常用開關與「上次放開到出字」。
 - 視覺：Material 3 Expressive 風格。`ui/app.css` 定義 token（色彩角色 primary／on-primary／secondary-container／surface、surface-container-{lowest…highest}／outline／error 等，淺色與深色兩組；圓角 xs 4／sm 8／md 12／lg 16／xl 28／full；字級 display／headline／title／body／label；間距 4 的倍數；動態曲線與時間，`prefers-reduced-motion` 時關閉）。只用系統字型（不下載字型，符合 CSP）；不使用 Google 商標或圖檔，圖示自繪成行內 SVG。
 - 共用元件 `ui/lib/`：Button（filled／tonal／outlined／text）、IconButton、Switch、Select、TextField、Card、ListItem、Dialog、SegmentedButton、Tabs、Banner、LinearProgress、NavRail、Icon（行內 SVG 圖庫）。各頁用元件取代重複的 `.hint`／`.bad` 樣式。
 - 開發輔助：`ui/dev-mock.js` 在沒有 Tauri 時（`window.__TAURI_INTERNALS__` 不存在）提供假的 `invoke`／`listen`，只在 `npm run dev` 使用，不進正式版。`package.json` 新增 `check`（svelte-check）、`test`（vitest，只測純 JS）。
