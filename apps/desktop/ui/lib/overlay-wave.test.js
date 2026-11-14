@@ -5,8 +5,10 @@ import {
   ProgressEstimator,
   POLISH_TARGET,
   TRANSCRIBE_TARGET,
+  WINDOW_SECS,
   amplitude,
   buildTrace,
+  traceOffset,
   ecgShape,
 } from "../overlay/wave.js";
 
@@ -72,16 +74,54 @@ describe("trace", () => {
     expect(peak(buildTrace(loud, 3, 100))).toBeGreaterThan(0.5);
   });
 
-  it("scrolls: the same shape moves left as time advances", () => {
+  it("marquee: the same shape moves right as time advances", () => {
     const h = new LevelHistory();
     for (let i = 0; i < 100; i++) h.push(1, i * 0.05);
-    const a = buildTrace(h, 4, 200);
-    const b = buildTrace(h, 4 + (20 * 1.2) / 199, 200); // exactly 20 points later
-    // Later time = same shape 20 points further left.
+    const step = WINDOW_SECS / 199;
+    const t0 = (Math.floor(4 / step) + 0.5) * step; // between grid points
+    const a = buildTrace(h, t0, 200);
+    const b = buildTrace(h, t0 + 20 * step, 200); // exactly 20 points later
+    // Later time = same shape 20 points further right.
     const shift = 20;
     let diff = 0;
-    for (let i = 0; i < 150; i++) diff = Math.max(diff, Math.abs(b[i] - a[i + shift]));
+    for (let i = 0; i < 150; i++) diff = Math.max(diff, Math.abs(b[i + shift] - a[i]));
     expect(diff).toBeLessThan(1e-6);
+  });
+
+  it("marquee: spikes keep their height from frame to frame (no shimmer)", () => {
+    const h = new LevelHistory();
+    for (let i = 0; i < 100; i++) h.push(1, i * 0.05);
+    const count = 110;
+    const peaks = [];
+    for (let f = 0; f < 60; f++) peaks.push(peak(buildTrace(h, 4 + f / 60, count)));
+    expect(Math.max(...peaks) - Math.min(...peaks)).toBeLessThan(0.02);
+    // Between grid points the offset grows with time and stays within one point spacing.
+    const step = WINDOW_SECS / (count - 1);
+    const g = Math.floor(4 / step) * step;
+    expect(traceOffset(g + 0.25 * step, count)).toBeCloseTo(0.25, 6);
+    expect(traceOffset(g + 0.75 * step, count)).toBeCloseTo(0.75, 6);
+  });
+
+  it("marquee: a loud stretch keeps its size while it travels to the right", () => {
+    const h = new LevelHistory();
+    // Silence, a 0.3 s loud burst at 1.0..1.3 s, then silence again.
+    for (let i = 0; i <= 60; i++) {
+      const t = i * 0.05;
+      h.push(t >= 1.0 && t < 1.3 ? 1 : 0, t);
+    }
+    const count = 200;
+    // Where in the trace (0 = left/newest .. 1 = right/oldest) the loud part sits.
+    const loudCentre = (now) => {
+      const tr = buildTrace(h, now, count);
+      const loud = tr.map((y, i) => [Math.abs(y), i]).filter(([y]) => y > 0.3);
+      expect(loud.length).toBeGreaterThan(0);
+      return loud.reduce((s, [, i]) => s + i, 0) / loud.length / (count - 1);
+    };
+    const early = loudCentre(1.6);
+    const late = loudCentre(2.4);
+    expect(late).toBeGreaterThan(early + 0.25);
+    // Still just as loud after travelling.
+    expect(peak(buildTrace(h, 2.4, count))).toBeGreaterThan(0.5);
   });
 
   it("reduced motion freezes the shape and only scales by level", () => {
@@ -167,9 +207,9 @@ describe("LevelSampler", () => {
     expect(h.sampleAt(jump - 0.1)).toBeLessThan(0.02);
     expect(h.sampleAt(jump - 1)).toBe(0);
     expect(h.sampleAt(t)).toBeGreaterThan(0.7);
-    // The trace's older part is flat while the onset sits at the right edge.
+    // The onset sits at the left edge; the trace's older (right) part is still flat.
     const tr = buildTrace(h, t, 100);
-    expect(Math.max(...tr.slice(0, 60).map(Math.abs))).toBeLessThan(0.15);
+    expect(Math.max(...tr.slice(40).map(Math.abs))).toBeLessThan(0.15);
   });
 
   it("a stall decays towards 0 instead of holding the last value", () => {

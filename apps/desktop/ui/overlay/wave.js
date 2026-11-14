@@ -3,8 +3,11 @@
 
 /** Samples older than this (seconds) are dropped from the history. */
 export const HISTORY_SECS = 3;
-/** The trace shows this many seconds of signal across the pill width. */
-export const WINDOW_SECS = 1.2;
+/**
+ * The trace shows this many seconds of signal across the pill width. Long enough that a loud
+ * stretch is seen travelling across like a marquee (must stay below HISTORY_SECS).
+ */
+export const WINDOW_SECS = 2;
 /** Rendering lags the newest sample by this much so there is always a next sample to lerp to. */
 export const RENDER_DELAY_SECS = 0.06;
 
@@ -51,8 +54,9 @@ export class LevelHistory {
 const bump = (x, c, w) => Math.exp(-(((x - c) / w) ** 2));
 
 /**
- * Unit-ish heartbeat/sine mix at time `t` (seconds): a PQRST-like beat every 0.5 s plus two sines
- * so the line is never a stiff repeat. Result is within [-1, 1].
+ * Unit-ish heartbeat/sine mix at time `t` (seconds): a PQRST-like beat every 0.5 s plus two slow
+ * sines so the line is never a stiff repeat. The sines are kept low and slow so the beats stay
+ * distinct and are seen moving across instead of blurring into jitter. Result is within [-1, 1].
  */
 export function ecgShape(t) {
   const period = 0.5;
@@ -63,8 +67,8 @@ export function ecgShape(t) {
     1.0 * bump(ph, 0.215, 0.02) - // R (spike)
     0.4 * bump(ph, 0.25, 0.02) + // S
     0.22 * bump(ph, 0.36, 0.05); // T
-  const sines = 0.35 * Math.sin(2 * Math.PI * 9 * t) + 0.25 * Math.sin(2 * Math.PI * 17 * t + 1.3);
-  return Math.max(-1, Math.min(1, 0.85 * beat + 0.4 * sines));
+  const sines = 0.3 * Math.sin(2 * Math.PI * 5 * t) + 0.2 * Math.sin(2 * Math.PI * 11 * t + 1.3);
+  return Math.max(-1, Math.min(1, 0.9 * beat + 0.3 * sines));
 }
 
 /** Amplitude (0..1 of the half height) for a level: a gentle idle wiggle at silence. */
@@ -73,10 +77,11 @@ export function amplitude(level) {
 }
 
 /**
- * The trace as `count` y values in -1..1 (index 0 = oldest/left, last = now/right). Each point
- * reads the level at its own time (interpolated), so the shape scrolls right to left and
- * jumps with the voice. With `scroll` false (reduced motion) the shape is frozen in time and
- * only scaled by the current level.
+ * The trace as `count` y values in -1..1 (index 0 = now/left, last = oldest/right). Each point
+ * reads the level at its own time (interpolated), so new signal enters on the left and the
+ * whole trace travels left to right like a marquee, each stretch keeping the size it had when
+ * it was spoken. With `scroll` false (reduced motion) the shape is frozen in time and only
+ * scaled by the current level.
  */
 export function buildTrace(history, now, count, { scroll = true } = {}) {
   const out = new Array(count);
@@ -85,12 +90,26 @@ export function buildTrace(history, now, count, { scroll = true } = {}) {
     for (let i = 0; i < count; i++) out[i] = a * ecgShape((i / (count - 1)) * WINDOW_SECS);
     return out;
   }
+  // Sample on an absolute time grid (not relative to `now`): every frame then draws the same
+  // points of the shape, just moved right by `traceOffset`, so narrow spikes keep their height
+  // instead of shimmering as the sampling phase changes from frame to frame.
+  const step = WINDOW_SECS / (count - 1);
+  const base = Math.floor(now / step) * step;
   for (let i = 0; i < count; i++) {
-    const t = now - (1 - i / (count - 1)) * WINDOW_SECS;
+    const t = base - i * step;
     const a = amplitude(history.sampleAt(t - RENDER_DELAY_SECS));
     out[i] = a * ecgShape(t);
   }
   return out;
+}
+
+/**
+ * How far (in points, 0..1) the grid-sampled trace of `buildTrace` has moved right since its
+ * newest grid point: draw point `i` at position `i + traceOffset(now, count)`.
+ */
+export function traceOffset(now, count) {
+  const step = WINDOW_SECS / (count - 1);
+  return now / step - Math.floor(now / step);
 }
 
 // ---- Estimated progress -------------------------------------------------------------------
