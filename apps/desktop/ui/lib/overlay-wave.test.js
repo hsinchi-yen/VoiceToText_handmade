@@ -6,7 +6,12 @@ import {
   POLISH_TARGET,
   TRANSCRIBE_TARGET,
   WINDOW_SECS,
+  BLOOM_RISE_SECS,
+  BLOOM_SECS,
+  DONE_FILL_SECS,
   amplitude,
+  easeToFull,
+  orbLook,
   buildTrace,
   traceOffset,
   ecgShape,
@@ -227,5 +232,60 @@ describe("LevelSampler", () => {
     for (let t = 0; t < 1; t += 1 / 60) s.tick(t);
     expect(h.t.length).toBeGreaterThanOrEqual(18);
     expect(h.t.length).toBeLessThanOrEqual(21);
+  });
+});
+
+describe("progress orb", () => {
+  it("fill follows progress and the core light grows with it", () => {
+    const a = orbLook(0.2, 1);
+    const b = orbLook(0.7, 1);
+    expect(a.fill).toBeCloseTo(0.2, 6);
+    expect(b.core).toBeGreaterThan(a.core);
+    expect(a.hot).toBe(0);
+    expect(a.bloom).toBe(0);
+    expect(orbLook(2, 1).fill).toBe(1);
+    expect(orbLook(NaN, 1).fill).toBe(0);
+  });
+
+  it("an empty ball has a flat surface; a filling one has a small wave", () => {
+    expect(orbLook(0, 1).wave).toBe(0);
+    expect(orbLook(0.5, 1).wave).toBeGreaterThan(0);
+    expect(orbLook(0.5, 1).wave).toBeLessThan(0.2);
+  });
+
+  it("the core light breathes while processing, holds still once done", () => {
+    const cores = [];
+    for (let t = 0; t < 2; t += 0.05) cores.push(orbLook(0.5, t).core);
+    expect(Math.max(...cores) - Math.min(...cores)).toBeGreaterThan(0.02);
+    expect(orbLook(1, 3, 0.5).core).toBe(orbLook(1, 4, 0.5).core);
+  });
+
+  it("done: the wave calms, the ball turns white-hot, the bloom rises then fades", () => {
+    expect(orbLook(1, 1, 0.3).wave).toBe(0);
+    expect(orbLook(1, 1, 0).hot).toBe(0);
+    expect(orbLook(1, 1, 0.2).hot).toBe(1);
+    const peak = orbLook(1, 1, BLOOM_RISE_SECS).bloom;
+    expect(peak).toBeCloseTo(1, 6);
+    expect(orbLook(1, 1, 0.02).bloom).toBeLessThan(peak);
+    expect(orbLook(1, 1, 0.25).bloom).toBeLessThan(peak);
+    expect(orbLook(1, 1, BLOOM_SECS).bloom).toBe(0);
+    expect(orbLook(1, 1, 1).bloom).toBe(0);
+  });
+
+  it("done tops the fill up from where it was, never backwards", () => {
+    expect(easeToFull(0.8, 0)).toBeCloseTo(0.8, 6);
+    expect(easeToFull(0.8, DONE_FILL_SECS)).toBeCloseTo(1, 6);
+    let last = 0.8;
+    for (let d = 0; d <= DONE_FILL_SECS; d += 0.01) {
+      const v = easeToFull(0.8, d);
+      expect(v).toBeGreaterThanOrEqual(last - 1e-12);
+      last = v;
+    }
+    expect(easeToFull(0, 1)).toBe(1);
+  });
+
+  it("the whole finish fits inside the done pill's lifetime", () => {
+    // DONE_MS in src-tauri/src/overlay.rs is 550 ms, of which the last 150 ms is the fade.
+    expect(Math.max(DONE_FILL_SECS, BLOOM_SECS)).toBeLessThanOrEqual(0.55 - 0.15 + 1e-9);
   });
 });

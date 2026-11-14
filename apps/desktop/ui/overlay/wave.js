@@ -13,6 +13,18 @@ export const RENDER_DELAY_SECS = 0.06;
 
 const clamp01 = (v) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
 
+// ---- Colours (user decision 2026-11-14) --------------------------------------------------
+
+/** Golden gradient for the trace and the progress orb: light gold -> gold -> amber. */
+export const GOLD_STOPS = [
+  [0, "#ffe680"],
+  [0.35, "#f7c52b"],
+  [0.7, "#ee9b1f"],
+  [1, "#e07a1f"],
+];
+/** Recording dots (trace head, hands-free dot) keep v2c's green. */
+export const RECORD_GREEN = "#39ff6a";
+
 /** Time-stamped level history (a ring buffer by age). Times are in seconds. */
 export class LevelHistory {
   constructor(maxAgeSecs = HISTORY_SECS) {
@@ -162,6 +174,47 @@ export class ProgressEstimator {
         return 0;
     }
   }
+}
+
+// ---- Progress orb ---------------------------------------------------------------------------
+// A gold liquid rises in a ball while transcribing / polishing (option A), with a soft core
+// light breathing behind it; at "done" the ball fills up, turns white-hot and blooms outward
+// (option C's finish). These helpers return plain numbers so the look is unit-testable.
+
+/** "done": the liquid tops up from where it was to 100% over this long. */
+export const DONE_FILL_SECS = 0.12;
+/** "done": the outward bloom peaks after BLOOM_RISE_SECS and is gone after BLOOM_SECS. */
+export const BLOOM_RISE_SECS = 0.08;
+export const BLOOM_SECS = 0.4;
+
+/** Fill (0..1) at `doneSecs` after "done", easing out from `from` to 1. */
+export function easeToFull(from, doneSecs) {
+  const k = clamp01(doneSecs / DONE_FILL_SECS);
+  const f = clamp01(from);
+  return f + (1 - f) * (1 - (1 - k) ** 3);
+}
+
+/**
+ * Look of the orb for fill `p` (0..1) at time `t` (s). `doneSecs` is the time since "done"
+ * (null before). Returns:
+ * - `fill`: liquid level 0..1
+ * - `wave`: surface wave amplitude as a fraction of the radius (calms down when done)
+ * - `core`: radius of the breathing core light as a fraction of the radius
+ * - `hot`: 0..1 white-hot overlay at the finish
+ * - `bloom`: 0..1 strength of the outward glow at the finish
+ */
+export function orbLook(p, t, doneSecs = null) {
+  const fill = clamp01(p);
+  const done = doneSecs != null;
+  const d = done ? Math.max(0, doneSecs) : 0;
+  const calm = done ? Math.max(0, 1 - d / 0.15) : 1;
+  const wave = 0.12 * calm * Math.min(1, fill * 8);
+  const breathe = done ? 1 : 1 + 0.05 * Math.sin(t * 4.2);
+  const core = done ? 1.25 : (0.35 + 0.65 * Math.sqrt(fill)) * breathe;
+  const hot = done ? clamp01(d / 0.15) : 0;
+  let bloom = 0;
+  if (done) bloom = d < BLOOM_RISE_SECS ? d / BLOOM_RISE_SECS : Math.max(0, 1 - (d - BLOOM_RISE_SECS) / (BLOOM_SECS - BLOOM_RISE_SECS));
+  return { fill, wave, core, hot, bloom };
 }
 
 // ---- Steady sampling ----------------------------------------------------------------------
