@@ -22,8 +22,9 @@
       if (doneAt == null) doneAt = t;
     } else {
       doneAt = null;
-      est.setPhase(kind, t);
     }
+    // Every kind, including done: a later "transcribing" then restarts from 0.
+    est.setPhase(kind, t);
   });
 
   $effect(() => {
@@ -32,6 +33,7 @@
     let stopped = false;
     let size = 0;
     let dpr = 1;
+    let lastFilter = "";
 
     function fit() {
       const s = canvas.clientWidth;
@@ -117,10 +119,15 @@
       ctx.lineWidth = 1.5;
       ctx.stroke();
 
-      canvas.style.filter =
+      // Blur capped at 9 px: the overlay window leaves ~13 px around the orb.
+      const filter =
         look.bloom > 0
-          ? `drop-shadow(0 0 ${(12 * look.bloom).toFixed(1)}px rgba(255, 214, 90, ${(0.85 * look.bloom).toFixed(2)}))`
+          ? `drop-shadow(0 0 ${(9 * look.bloom).toFixed(1)}px rgba(255, 214, 90, ${(0.85 * look.bloom).toFixed(2)}))`
           : "";
+      if (filter !== lastFilter) {
+        canvas.style.filter = filter;
+        lastFilter = filter;
+      }
       raf = requestAnimationFrame(frame);
     }
     frame();
