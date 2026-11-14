@@ -15,7 +15,7 @@ bash releases/linux/build.sh           # 建置，需要幾分鐘
 cd releases/linux
 sha256sum -c --ignore-missing SHA256SUMS.txt
 sudo apt install ./v2c_*_amd64.deb
-ibus restart        # 或登出再登入
+systemctl --user restart org.freedesktop.IBus.session.GNOME.service   # 或登出再登入；GNOME 上不要用 ibus restart
 ```
 
 接著加入「v2c 語音輸入」輸入來源，步驟見 [docs/linux-setup.md](../../docs/linux-setup.md) 第 7 節（用指令加入見 7.2.1）。

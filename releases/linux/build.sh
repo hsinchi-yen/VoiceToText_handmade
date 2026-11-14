@@ -38,5 +38,6 @@ echo
 echo "Done. Install with:"
 echo "  cd \"$here\" && sha256sum -c --ignore-missing SHA256SUMS.txt"
 echo "  sudo apt install ./v2c_*_amd64.deb"
-echo "Then run 'ibus restart' (or log out and in) and add the \"v2c\" input source"
+echo "Then log out and in (or run 'systemctl --user restart org.freedesktop.IBus.session.GNOME.service';"
+echo "not 'ibus restart', which leaves IBus stopped on GNOME) and add the \"v2c\" input source"
 echo "(docs/linux-setup.md section 7.2, or 7.2.1 for the command line)."

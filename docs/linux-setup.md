@@ -316,17 +316,19 @@ Wayland 下不顯示浮動指示條，也比照 Windows 版的浮動指示條「
 ```sh
 sha256sum -c --ignore-missing SHA256SUMS.txt     # 在 releases/linux/ 資料夾裡執行，確認檔案沒有損壞
 sudo apt install ./v2c_0.3.0_amd64.deb            # 會一併安裝相依套件（ibus、libwebkit2gtk-4.1-0、libayatana-appindicator3-1…）
-ibus restart                                      # 讓 ibus-daemon 讀到新的 v2c 元件（或登出再登入）
+systemctl --user restart org.freedesktop.IBus.session.GNOME.service   # 讓 ibus-daemon 讀到新的 v2c 元件（或登出再登入）
 ```
 
-`ibus restart` 會重新啟動所有 App 共用的輸入法服務：執行當下各 App 的輸入法會中斷一下，目前選用的輸入來源也可能被重設。比較穩妥的做法是登出再登入。
+這個指令會重新啟動所有 App 共用的輸入法服務：執行當下各 App 的輸入法會中斷一下，目前選用的輸入來源也可能被重設。比較穩妥的做法是登出再登入。
+
+GNOME 上**不要用 `ibus restart`**：GNOME 用 systemd 使用者服務管理 ibus-daemon，`ibus restart` 讓它結束後不會自己再啟動（2026-11-14 在 Ubuntu 22.04／GNOME 42 實測），所有輸入法都會失效。已經發生時執行 `systemctl --user start org.freedesktop.IBus.session.GNOME.service` 即可恢復，v2c 會在約 1 分鐘內自動重新連上。
 
 要用 `apt install ./檔名`（前面有 `./`），不要用 `dpkg -i`，否則相依套件不會自動安裝。解除安裝：`sudo apt remove v2c`（設定與紀錄在 `~/.config/v2c/`，不會被刪除）。
 
 ### 7.2 加入 v2c 輸入來源（GNOME）
 
 1. 「設定」→「鍵盤」→「輸入來源」→「＋」→ 選中文（台灣）語言（元件的語言是 `zh_TW`；GNOME 顯示的名稱依介面語言而定，也可以在搜尋框輸入「v2c」）→「**v2c 語音輸入**」→「新增」。
-   清單裡沒有 v2c：執行 `ibus restart` 或重新登入後再試；`ibus list-engine | grep v2c` 應該看得到。
+   清單裡沒有 v2c：執行 `systemctl --user restart org.freedesktop.IBus.session.GNOME.service` 或重新登入後再試；`ibus list-engine | grep v2c` 應該看得到。
    「設定」裡加不進去（找不到、按鈕沒反應、遠端連線沒有「設定」視窗）：改用下方 7.2.1 的指令。
 2. 要說話時，用 Super+空白鍵切到 v2c 輸入來源，在輸入框裡按住右 Ctrl 說話（見第 6.2 節）。切到 v2c 時 v2c 還沒執行，ibus-daemon 會自動啟動它（`/usr/bin/v2c --ibus`，不開主視窗）。
 3. 主視窗從應用程式選單的「v2c」打開。
@@ -335,13 +337,13 @@ ibus restart                                      # 讓 ibus-daemon 讀到新的
 
 GNOME 的輸入來源清單存在 `org.gnome.desktop.input-sources sources`，「設定」視窗改的也是它，所以用 `gsettings` 改的效果一樣。以下指令都在**你自己登入桌面的帳號**下、一般權限執行（不要加 sudo）；從 SSH 連進來時，要在已登入桌面的同一個帳號下執行。
 
-1. 確認 ibus-daemon 認得 v2c 引擎（裝完 .deb 後要先 `ibus restart` 或重新登入）：
+1. 確認 ibus-daemon 認得 v2c 引擎（裝完 .deb 後要先重新啟動 IBus（第 7.1 節）或重新登入）：
 
    ```sh
    ibus list-engine | grep v2c          # 應該看到：  v2c - v2c 語音輸入
    ```
 
-   沒有輸出：確認 `/usr/share/ibus/component/v2c.xml` 存在，再執行 `ibus restart`。
+   沒有輸出：確認 `/usr/share/ibus/component/v2c.xml` 存在，再執行 `systemctl --user restart org.freedesktop.IBus.session.GNOME.service`。
 
 2. 先看目前的清單，記下來（要還原時用得到）：
 
