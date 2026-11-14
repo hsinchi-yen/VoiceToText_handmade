@@ -1,10 +1,11 @@
 <script>
-  import { LevelHistory, LevelSampler, buildTrace } from "./wave.js";
+  import { LevelHistory, LevelSampler, buildTrace, traceOffset } from "./wave.js";
 
   // Green oscilloscope/ECG trace driven by the ~20 Hz `level` of the recording view. Levels go
   // into a time-stamped history; every animation frame the trace is rebuilt from it (with
-  // interpolation) so it scrolls right to left smoothly at display rate. The rAF loop only
-  // exists while this component is mounted, i.e. while the overlay shows "recording".
+  // interpolation) so it enters on the left and travels to the right like a marquee, smoothly
+  // at display rate. The rAF loop only exists while this component is mounted, i.e. while the
+  // overlay shows "recording".
   // `view` is a new object per overlay event, so the effect below also runs for repeated equal
   // levels (needed to tell "steady" from "no events").
   let { view } = $props();
@@ -12,6 +13,8 @@
   const history = new LevelHistory();
   const sampler = new LevelSampler(history);
   const now = () => performance.now() / 1000;
+  /** Radius (CSS px) of the bright dot at the newest (left) end of the trace. */
+  const HEAD_R = 2.2;
 
   let canvas;
 
@@ -56,18 +59,26 @@
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, cw, ch);
       const count = Math.max(8, Math.floor(cw / 1.5));
-      const trace = buildTrace(history, now(), count, { scroll: !motion.matches });
+      const t = now();
+      const scroll = !motion.matches;
+      const trace = buildTrace(history, t, count, { scroll });
+      const off = scroll ? traceOffset(t, count) : 0;
       const mid = ch / 2;
       const half = ch / 2 - 2;
-      const pts = trace.map((y, i) => [(i / (count - 1)) * cw, mid - y * half]);
+      // Leave room on the left for the head dot (the newest point).
+      const x0 = HEAD_R + 1;
+      const dx = (cw - x0) / (count - 1);
+      const pts = trace.map((y, i) => [x0 + (i + off) * dx, mid - y * half]);
+      // Keep the line (and the head dot) attached to the left edge between grid points.
+      pts.unshift([x0, pts[0][1]]);
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
       stroke(pts, 7, "rgba(57, 255, 106, 0.10)"); // soft glow
       stroke(pts, 4, "rgba(57, 255, 106, 0.22)");
       stroke(pts, 1.6, "#39ff6a"); // core line
-      const [hx, hy] = pts[pts.length - 1];
+      const [hx, hy] = pts[0];
       ctx.beginPath();
-      ctx.arc(hx - 1, hy, 2.2, 0, Math.PI * 2);
+      ctx.arc(hx, hy, HEAD_R, 0, Math.PI * 2);
       ctx.fillStyle = "#d8ffe2";
       ctx.fill();
       raf = requestAnimationFrame(frame);
@@ -87,7 +98,8 @@
     flex: 1;
     min-width: 0;
     height: 32px;
-    /* Fade both ends so the scrolling line enters and leaves softly. */
-    mask-image: linear-gradient(to right, transparent, #000 14%, #000 88%, transparent);
+    /* The newest signal (and its head dot) enters sharp on the left; the trail fades out as it
+       travels off to the right. */
+    mask-image: linear-gradient(to right, #000, #000 65%, transparent);
   }
 </style>
