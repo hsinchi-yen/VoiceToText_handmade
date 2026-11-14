@@ -258,4 +258,10 @@
   - [x] AppImage 實測：套用 TN（TEA）25 ms 生效、匯入 RD 範例檔（Breeze）15 ms 生效，六個 TN／RD 服務測試連線全過
   - [x] .deb 由你安裝後冒煙測試：套用 TN（TEA）17 ms、RD（Breeze）18 ms 都顯示「設定立即生效」並立即重建服務；六個服務測試連線全過；日誌 0 ERROR、0 金鑰、0 中文；設定已還原
   - [ ] 🧑 Windows：拉最新 main 重建安裝檔，測同樣兩個流程（見 human-checklist「0.3.0 修正」）
+- [x] 2026-11-14 Linux 重新打包（main `b715341`，含 ui-slim、overlay-gold、對話框修正；照 `linux_handover.md`）
+  - [x] 第 3 節全部 exit 0：`cargo test --workspace` 861 通過／0 失敗／21 忽略（比交接預期 858 多的 3 項是 11-13 修正新增的測試）；clippy、fmt；`npm ci`／`check`（204 檔 0／0）／`test`（57）／`build`；`build-linux.sh --check`／建置。沒有 Linux 專屬失敗，不需修正分支
+  - [x] `releases/linux/v2c_0.3.0_amd64.deb` 22.0 MiB，SHA-256 `7651095d…5e55904e`；`v2c_0.3.0_amd64.AppImage` 96.3 MiB，`8cbffec2…5e4d66db`；`SHA256SUMS.txt` 已更新並核對通過
+  - [x] 你安裝 .deb 後（`/usr/bin/v2c` 與 .deb 內容一致，`dpkg --audit` 無問題）啟動：版本 0.3.0；Secret Service 接上後 1 ms 重建雲端服務；IBus 引擎已註冊；SenseVoice 就緒（安裝後第一次啟動 `load_ms=2353`，上一輪約 1.3 秒，可能是剛安裝、檔案還沒進快取）
+  - [x] 本次 24 行日誌：0 ERROR、0 金鑰、0 中文；詞庫只記筆數；`config.toml` 沒有金鑰、未被改動
+  - [ ] 🧑 第 4.1 節介面目視、4.2 節 X11 浮動標籤（選做）、4.3 節說話輸入：見 human-checklist「Linux 0.3.0 重新打包」
 - [ ] 🧑 安裝 0.3.0（Windows、Android、Linux）實機驗收：見 `tasks/human-checklist.md` Phase 5 與 T4.10 項目
