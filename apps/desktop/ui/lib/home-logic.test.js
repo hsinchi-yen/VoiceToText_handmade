@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activePreset, asrSelectOptions, heroState } from "../home/logic.js";
+import { activePreset, heroState } from "../home/logic.js";
 
 const presets = [
   { title: "TN 區網服務", id_prefix: "tn-" },
@@ -50,19 +50,5 @@ describe("heroState", () => {
   });
   it("recording is busy", () => {
     expect(heroState({ kind: "recording", rms: 0.1 }, {}).tone).toBe("busy");
-  });
-});
-
-describe("asrSelectOptions", () => {
-  it("lists local then ASR-capable cloud", () => {
-    const o = asrSelectOptions(
-      [{ value: "auto", label: "自動" }],
-      [{ id: "a", supports_asr: true }, { id: "b", supports_asr: false }],
-      (s) => "雲端：" + s.id,
-    );
-    expect(o).toEqual([
-      { value: "local:auto", label: "地端：自動" },
-      { value: "a", label: "雲端：a" },
-    ]);
   });
 });

@@ -3,14 +3,15 @@
   // `save(changes)` (still returns true/false), which validates the whole draft with
   // `settings_preview` and shows the result, writing nothing. 「儲存」 sends the draft to
   // `settings_apply` in one call (config.toml is rewritten, the engine reloads); 「開機自動啟動」
-  // is applied after it. Leaving the page with unsaved changes asks first.
+  // is applied after it. Leaving the page with unsaved changes asks first. Main surface: 麥克風
+  // and 一般; everything else is under 進階 (settings/Advanced.svelte).
+  import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import * as api from "../settings/api.js";
   import { Banner, Button, Card } from "../lib/index.js";
   import General from "../settings/General.svelte";
   import Microphone from "../settings/Microphone.svelte";
   import Advanced from "../settings/Advanced.svelte";
-  import ConfigIoSection from "../config-io/ConfigIoSection.svelte";
 
   const SELF = "#/settings";
   // Not a config.toml key: applied with `settings_set_autostart` after the rest.
@@ -32,6 +33,8 @@
   let leaveTo = $state(null);
   /** The window was closed (hidden) with unsaved changes. */
   let hiddenWithDraft = $state(false);
+  /** Version and CUDA build flag (`app_info`), shown at the bottom. */
+  let info = $state(null);
 
   const count = $derived(Object.keys(pending).length);
   const view = $derived(
@@ -195,7 +198,8 @@
 
   $effect(() => {
     load();
-    // The tray, the Home quick controls and the 服務 page also change config.toml (and so does our own 「儲存」).
+    invoke("app_info").then((i) => (info = i)).catch(() => {});
+    // The tray, Home's 套用預設組態 and the 服務 page also change config.toml (and so does our own 「儲存」).
     const un = listen("v2c:config-changed", async () => {
       if (saving) return;
       let fresh;
@@ -248,7 +252,7 @@
 <div class="settings-page">
   <h1>設定</h1>
   <p class="top">
-    <a href="#/">查看目前使用中 → 首頁</a>
+    <a href="#/services">查看目前使用中 → 服務</a>
     {#if count === 0 && !leaveTo}<span class="ok">所有設定已儲存</span>{/if}
   </p>
   {#if restartNote}
@@ -261,10 +265,10 @@
     <Microphone {view} {save} />
     <General {view} {save} />
     <Advanced {view} {save} />
-    <ConfigIoSection />
-    <p class="foot">
-      <Button variant="outlined" icon="refresh" href="#/onboarding">重新執行初次設定</Button>
-    </p>
+  {/if}
+
+  {#if info}
+    <p class="info hint">版本 {info.version}・CUDA {info.cuda ? "已啟用" : "未啟用"}</p>
   {/if}
 
   {#if count > 0 || leaveTo || message || incoming}
@@ -324,7 +328,7 @@
     gap: var(--md-space-2) var(--md-space-4);
     margin: 0;
   }
-  .foot {
+  .info {
     margin: 0;
   }
   /* Floating save bar: stays at the bottom of the window (above the bottom menu on phones). */

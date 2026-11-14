@@ -1,5 +1,5 @@
 # v2c config file: TN LAN services (10.20.30.23).
-# Import it from Settings > "匯入設定" (Windows / Linux). Same content as the built-in TN preset.
+# Import it from Settings > 進階 > 匯出／匯入設定 > "匯入設定" (Windows / Linux). Same content as the built-in TN preset.
 # Android only accepts HTTPS, so these HTTP LAN endpoints are skipped there (the phone has them built in).
 # Full reference: docs/config-file.md
 [v2c]

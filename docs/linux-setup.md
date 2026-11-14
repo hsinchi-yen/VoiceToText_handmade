@@ -408,7 +408,7 @@ EOF
 
 **方法二：手動改設定檔**（和方法一等效，下面是原本的步驟）：
 
-（設定檔的欄位與手寫規則見 [config-file.md](config-file.md)；設好的服務也可以用「設定 → 匯出設定」存成檔案，在另一台「匯入設定」。）
+（設定檔的欄位與手寫規則見 [config-file.md](config-file.md)；設好的服務也可以用「設定 → 進階 → 匯出／匯入設定 → 匯出設定」存成檔案，在另一台「匯入設定」。）
 
 1. 先啟動一次 v2c，讓它建立 `~/.config/v2c/config.toml`（Linux 預設 `[gpu] enabled = false`）。
 2. 結束 v2c（系統匣圖示 → 結束），用文字編輯器打開 `~/.config/v2c/config.toml`，照第 4 節的範例加入 `[route]`、`[timeouts]`、`[local]` 與兩個 `[[cloud]]`（語音辨識 `:8001` 的 `tea-asr-1`、文字模型 `:8000`），把 IP 換成你的伺服器。並照第 3 節「放入 SenseVoice 模型」放好本機備援模型。
