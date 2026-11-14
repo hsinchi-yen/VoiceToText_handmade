@@ -22,8 +22,8 @@ export const GOLD_STOPS = [
   [0.7, "#ee9b1f"],
   [1, "#e07a1f"],
 ];
-/** Recording dots (trace head, hands-free dot) keep v2c's green. */
-export const RECORD_GREEN = "#39ff6a";
+/** Recording dots (trace head, hands-free dot) use v2c's purple (icon violet, brightened for the black pill). */
+export const RECORD_PURPLE = "#9b7bff";
 
 /** Time-stamped level history (a ring buffer by age). Times are in seconds. */
 export class LevelHistory {

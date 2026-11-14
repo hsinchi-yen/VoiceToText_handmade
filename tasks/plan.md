@@ -616,7 +616,7 @@ llm_model = "Qwen3.8-27B-UD-Q6_K_L"
 
   舊網址 `#/cloud-setup` → `#/services`、`#/vocab` → `#/library?tab=vocab`、`#/history` → `#/library?tab=history` 轉址；`#/onboarding` 仍可直接開（首次啟動與「設定 → 進階」的入口）。
   2026-11-14 你決定再精簡（給一般使用者）：功能都保留，只把不常用的往「進階」「專家」裡搬；收合的群組標題仍顯示「N 項未儲存」，儲存列與離開確認不變。首頁不再有常用開關與「上次放開到出字」。
-- 浮動標籤（2026-11-14 你決定）：錄音波形改為金黃色漸層（淡金 → 金 → 琥珀），由左往右流動，最新的一端是綠色圓點（免持的綠點也保留綠色）；不理會 `prefers-reduced-motion`（Windows 關閉「動畫效果」時也照樣流動）。辨識／潤飾／完成時標籤縮成圓形，內有金色液體圓球依估計進度填滿（選項 A），背後有呼吸的核心光；完成時補滿 100%、變白熱並向外發光（選項 C 的收尾），取代原本的進度條。「完成」顯示時間 250 → 550 ms（`overlay.rs` `DONE_MS`）。
+- 浮動標籤（2026-11-14 你決定）：錄音波形改為金黃色漸層（淡金 → 金 → 琥珀），由左往右流動，最新的一端是 v2c 紫色圓點 `#9b7bff`（圖示的紫色調亮，免持圓點同色；原本的綠色改掉）；不理會 `prefers-reduced-motion`（Windows 關閉「動畫效果」時也照樣流動）。辨識／潤飾／完成時標籤縮成圓形，內有金色液體圓球依估計進度填滿（選項 A），背後有呼吸的核心光；完成時補滿 100%、變白熱並向外發光（選項 C 的收尾），取代原本的進度條。「完成」顯示時間 250 → 550 ms（`overlay.rs` `DONE_MS`）。
 - 視覺：Material 3 Expressive 風格。`ui/app.css` 定義 token（色彩角色 primary／on-primary／secondary-container／surface、surface-container-{lowest…highest}／outline／error 等，淺色與深色兩組；圓角 xs 4／sm 8／md 12／lg 16／xl 28／full；字級 display／headline／title／body／label；間距 4 的倍數；動態曲線與時間，`prefers-reduced-motion` 時關閉）。只用系統字型（不下載字型，符合 CSP）；不使用 Google 商標或圖檔，圖示自繪成行內 SVG。
 - 共用元件 `ui/lib/`：Button（filled／tonal／outlined／text）、IconButton、Switch、Select、TextField、Card、ListItem、Dialog、SegmentedButton、Tabs、Banner、LinearProgress、NavRail、Icon（行內 SVG 圖庫）。各頁用元件取代重複的 `.hint`／`.bad` 樣式。
 - 開發輔助：`ui/dev-mock.js` 在沒有 Tauri 時（`window.__TAURI_INTERNALS__` 不存在）提供假的 `invoke`／`listen`，只在 `npm run dev` 使用，不進正式版。`package.json` 新增 `check`（svelte-check）、`test`（vitest，只測純 JS）。

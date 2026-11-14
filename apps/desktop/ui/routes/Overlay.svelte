@@ -154,8 +154,8 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #39ff6a;
-    box-shadow: 0 0 6px rgba(57, 255, 106, 0.8);
+    background: #9b7bff;
+    box-shadow: 0 0 6px rgba(155, 123, 255, 0.85);
   }
   .accent {
     flex: none;

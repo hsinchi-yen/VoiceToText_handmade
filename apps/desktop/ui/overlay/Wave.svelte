@@ -1,5 +1,5 @@
 <script>
-  import { GOLD_STOPS, LevelHistory, LevelSampler, RECORD_GREEN, buildTrace, traceOffset } from "./wave.js";
+  import { GOLD_STOPS, LevelHistory, LevelSampler, RECORD_PURPLE, buildTrace, traceOffset } from "./wave.js";
 
   // Golden oscilloscope/ECG trace driven by the ~20 Hz `level` of the recording view. Levels go
   // into a time-stamped history; every animation frame the trace is rebuilt from it (with
@@ -80,12 +80,12 @@
       stroke(pts, 7, "rgba(247, 197, 43, 0.12)"); // soft glow
       stroke(pts, 4, "rgba(247, 197, 43, 0.26)");
       stroke(pts, 1.7, gold); // core line
-      // The head dot keeps v2c's recording green.
+      // The head dot uses v2c's purple.
       const [hx, hy] = pts[0];
       ctx.beginPath();
       ctx.arc(hx, hy, HEAD_R, 0, Math.PI * 2);
-      ctx.fillStyle = RECORD_GREEN;
-      ctx.shadowColor = "rgba(57, 255, 106, 0.8)";
+      ctx.fillStyle = RECORD_PURPLE;
+      ctx.shadowColor = "rgba(155, 123, 255, 0.85)";
       ctx.shadowBlur = 5;
       ctx.fill();
       ctx.shadowBlur = 0;
