@@ -8,6 +8,7 @@ import {
   WINDOW_SECS,
   amplitude,
   buildTrace,
+  traceOffset,
   ecgShape,
 } from "../overlay/wave.js";
 
@@ -76,13 +77,29 @@ describe("trace", () => {
   it("marquee: the same shape moves right as time advances", () => {
     const h = new LevelHistory();
     for (let i = 0; i < 100; i++) h.push(1, i * 0.05);
-    const a = buildTrace(h, 4, 200);
-    const b = buildTrace(h, 4 + (20 * WINDOW_SECS) / 199, 200); // exactly 20 points later
+    const step = WINDOW_SECS / 199;
+    const t0 = (Math.floor(4 / step) + 0.5) * step; // between grid points
+    const a = buildTrace(h, t0, 200);
+    const b = buildTrace(h, t0 + 20 * step, 200); // exactly 20 points later
     // Later time = same shape 20 points further right.
     const shift = 20;
     let diff = 0;
     for (let i = 0; i < 150; i++) diff = Math.max(diff, Math.abs(b[i + shift] - a[i]));
     expect(diff).toBeLessThan(1e-6);
+  });
+
+  it("marquee: spikes keep their height from frame to frame (no shimmer)", () => {
+    const h = new LevelHistory();
+    for (let i = 0; i < 100; i++) h.push(1, i * 0.05);
+    const count = 110;
+    const peaks = [];
+    for (let f = 0; f < 60; f++) peaks.push(peak(buildTrace(h, 4 + f / 60, count)));
+    expect(Math.max(...peaks) - Math.min(...peaks)).toBeLessThan(0.02);
+    // Between grid points the offset grows with time and stays within one point spacing.
+    const step = WINDOW_SECS / (count - 1);
+    const g = Math.floor(4 / step) * step;
+    expect(traceOffset(g + 0.25 * step, count)).toBeCloseTo(0.25, 6);
+    expect(traceOffset(g + 0.75 * step, count)).toBeCloseTo(0.75, 6);
   });
 
   it("marquee: a loud stretch keeps its size while it travels to the right", () => {

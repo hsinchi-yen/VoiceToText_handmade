@@ -90,12 +90,26 @@ export function buildTrace(history, now, count, { scroll = true } = {}) {
     for (let i = 0; i < count; i++) out[i] = a * ecgShape((i / (count - 1)) * WINDOW_SECS);
     return out;
   }
+  // Sample on an absolute time grid (not relative to `now`): every frame then draws the same
+  // points of the shape, just moved right by `traceOffset`, so narrow spikes keep their height
+  // instead of shimmering as the sampling phase changes from frame to frame.
+  const step = WINDOW_SECS / (count - 1);
+  const base = Math.floor(now / step) * step;
   for (let i = 0; i < count; i++) {
-    const t = now - (i / (count - 1)) * WINDOW_SECS;
+    const t = base - i * step;
     const a = amplitude(history.sampleAt(t - RENDER_DELAY_SECS));
     out[i] = a * ecgShape(t);
   }
   return out;
+}
+
+/**
+ * How far (in points, 0..1) the grid-sampled trace of `buildTrace` has moved right since its
+ * newest grid point: draw point `i` at position `i + traceOffset(now, count)`.
+ */
+export function traceOffset(now, count) {
+  const step = WINDOW_SECS / (count - 1);
+  return now / step - Math.floor(now / step);
 }
 
 // ---- Estimated progress -------------------------------------------------------------------
