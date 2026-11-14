@@ -28,7 +28,7 @@ const errorText = {
   busy: "正在聽寫中，請說完再測試",
   asr_switching: "正在切換語音模型，請稍候再測試",
   asr_loading: "語音模型還在載入，請稍後再試",
-  model_missing: "沒有安裝地端語音模型，請用「設定」頁最下面的「重新執行初次設定」下載或匯入",
+  model_missing: "沒有安裝地端語音模型，請用「設定 → 進階 → 重新執行初次設定」下載或匯入",
   model_load_failed: "語音模型無法載入（原因見記錄檔）",
   sensevoice_not_available: "SenseVoice 無法載入（原因見記錄檔）",
   internal_error: "內部錯誤",
