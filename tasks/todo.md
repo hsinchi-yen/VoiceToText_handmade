@@ -265,3 +265,12 @@
   - [x] 本次 24 行日誌：0 ERROR、0 金鑰、0 中文；詞庫只記筆數；`config.toml` 沒有金鑰、未被改動
   - [ ] 🧑 第 4.1 節介面目視、4.2 節 X11 浮動標籤（選做）、4.3 節說話輸入：見 human-checklist「Linux 0.3.0 重新打包」
 - [ ] 🧑 安裝 0.3.0（Windows、Android、Linux）實機驗收：見 `tasks/human-checklist.md` Phase 5 與 T4.10 項目
+
+## 遠端改用 vLLM（2026-11-24）
+> 遠端文字模型從 llama.cpp 改成 vLLM 0.31.0（`Qwen3.8-27B-FP8`，舊名 `Qwen3.8-27B-UD-Q6_K_L` 只剩別名）；TEA 改名 `tea-asr-1.1`。
+- [x] Linux 冒煙測試（改版前的 v2c-core 完整流程，TN／RD 實際伺服器，共 15 分半）：378 次 0 錯誤、0 次退回基本整理、翻譯 0 殘留中文；潤飾 p50 約 380 ms（最慢 448 ms），翻譯 p50 約 336 ms；五個服務測試連線全過。v2c 原有程式不用改
+- [x] 你決定：模型名稱改成連上 API 後自動偵測。`open_ai_compat` 的 `asr_model`／`llm_model = "auto"`（`v2c-core` 新增 `auto_model`、`OpenAiCompatLlm::with_model_detection`）；內建 TN／RD 預設組態與 `docs/examples/` 改用 `"auto"`；介面顯示「自動偵測」。874 項測試、clippy、fmt、npm test 59／check 0／0 通過；實際伺服器 217 次全 `"auto"` 流程 0 錯誤；獨立審查兩輪後通過，經你核准合併（`93250b6`）
+- [x] `windows_handover.md`：Windows 重建與驗證步驟、給 Windows agent 的提示詞
+- [ ] 🧑 Windows：拉 main 重建安裝檔，照 `windows_handover.md` 第 5 節驗證
+- [ ] 🧑 Android：重建 APK（這台 Linux 的 SDK 已移除），新預設組態才會進到手機；舊 APK 用舊名稱照常可用
+- [ ] Linux：需要時重建 .deb／AppImage（這次只合併程式，沒有重新打包）
