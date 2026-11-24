@@ -8,6 +8,7 @@
 
 pub mod asr;
 pub mod audio;
+pub mod auto_model;
 pub mod config;
 pub mod error;
 pub mod history;

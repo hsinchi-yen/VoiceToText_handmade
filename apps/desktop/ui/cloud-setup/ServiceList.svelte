@@ -3,6 +3,7 @@
   // Connected services: 測試連線／修改／移除.
   import * as api from "./api.js";
   import { Banner, Button, Card } from "../lib/index.js";
+  import { modelLabel } from "../lib/model-label.js";
 
   // `presets` is the `presets_list` answer: services whose id starts with a preset's
   // `id_prefix` are grouped under it; everything else goes to 「其他」.
@@ -105,7 +106,7 @@
             {/if}
             {#if s.asr_model}
               <dt>辨識模型</dt>
-              <dd>{s.asr_model}</dd>
+              <dd>{modelLabel(s.asr_model)}</dd>
             {/if}
             {#if s.asr_timeout_ms != null}
               <dt>辨識逾時</dt>
@@ -113,7 +114,7 @@
             {/if}
             {#if s.llm_model}
               <dt>文字模型</dt>
-              <dd>{s.llm_model}</dd>
+              <dd>{modelLabel(s.llm_model)}</dd>
             {/if}
             <dt>金鑰</dt>
             <dd>{s.has_key ? (s.key_last4 ? `末 4 碼 ${s.key_last4}` : "已儲存") : "未設定"}</dd>

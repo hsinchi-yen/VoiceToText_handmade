@@ -57,13 +57,17 @@ enabled = false
 id = "lan-llm"                    # 自己取的名稱；[route] 用它指定
 kind = "open_ai_compat"
 base_url = "http://192.168.1.50:8000/v1"
-llm_model = "Qwen3.8-27B-UD-Q6_K_L"   # 自訂端點沒有預設模型，一定要填
+llm_model = "auto"   # 自訂端點沒有預設模型，一定要填：寫伺服器的模型 id，或 "auto" 自動向伺服器查詢
 ```
+
+- `"auto"`（只限 `[[cloud]]` 的 `open_ai_compat`，伺服器要提供 `GET /models`）：v2c 第一次用到時查詢清單，用第一個模型；伺服器改名（例如 2026-11 改用 vLLM 後名稱變成 `Qwen3.8-27B-FP8`）時不用改設定。詳見 `docs/config-file.md`。
 
 - 自訂端點可以用 `http://`（區網伺服器）；需要金鑰時在主視窗的「服務」頁貼上，存在系統金鑰庫，不寫進設定檔。不需要金鑰就留空。
 - 走這條路時，潤飾的時間預算是 `[timeouts] llm_cloud_ms`（預設 3 秒），比方法 A 的 1 秒寬鬆，比較適合較慢的大模型。
 
 ### 會「思考」的模型（Qwen3 等）
+
+（2026-11-24 起伺服器改用 vLLM 0.31.0；v2c 送出的關閉思考參數在 vLLM 同樣有效，思考內容若開啟會放在 `reasoning` 欄位，v2c 一樣不取用。以下是 llama.cpp 時期的紀錄。）
 
 這台開發機的 llama.cpp 預設會先「思考」再回答（回應裡有獨立的 `reasoning_content` 欄位；v2c 只取 `content`，也會去掉夾在內容裡的 `<think>…</think>`）。2026-11-10 實測（合成測試句，思考開啟）：
 

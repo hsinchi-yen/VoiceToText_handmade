@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use super::LlmProvider;
 use crate::{
+    auto_model::{is_auto, AutoModel, DetectError},
     error::{ProviderErrorKind, Stage},
     postprocess::fillers::strip_fillers,
     prompts::{self, TRANSCRIPT_CLOSE, TRANSCRIPT_OPEN},
@@ -48,6 +49,9 @@ pub struct OpenAiCompatLlm {
     base_url: String,
     api_key: Option<String>,
     model: Option<String>,
+    /// Set when the configured model is `"auto"` (then `model` is `None`): the id comes from
+    /// the server's `/models` (see [`crate::auto_model`]).
+    auto: Option<AutoModel>,
     timeout: Duration,
     stage: Stage,
 }
@@ -70,7 +74,8 @@ impl OpenAiCompatLlm {
             name: "lmstudio".into(),
             base_url,
             api_key: api_key.filter(|k| !k.is_empty()),
-            model: model.filter(|m| !m.is_empty()),
+            model: model.filter(|m| !m.trim().is_empty()),
+            auto: None,
             timeout,
             stage: Stage::Polish,
         }
@@ -80,6 +85,18 @@ impl OpenAiCompatLlm {
     /// `CloudService::id` for a self-hosted endpoint.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
+        self
+    }
+
+    /// Treat a configured model of `"auto"` as "ask the server's `/models` on first use" (see
+    /// [`crate::auto_model`]). Only for self-hosted OpenAI-compatible services: on the official
+    /// OpenAI API the first listed model is arbitrary, and LM Studio already answers with the
+    /// loaded model when the field is omitted. Without this call `"auto"` is sent as written.
+    pub fn with_model_detection(mut self) -> Self {
+        if self.model.as_deref().is_some_and(is_auto) {
+            self.model = None;
+            self.auto = Some(AutoModel::default());
+        }
         self
     }
 
@@ -115,6 +132,33 @@ impl OpenAiCompatLlm {
             stage: self.stage,
             provider: self.name.clone(),
             kind,
+        }
+    }
+
+    /// The model to request: the configured one, or the detected one for `"auto"`.
+    async fn model(&self) -> Result<Option<String>> {
+        match &self.auto {
+            None => Ok(self.model.clone()),
+            Some(auto) => auto
+                .get(
+                    &self.client,
+                    &self.base_url,
+                    self.api_key.as_deref(),
+                    self.timeout,
+                )
+                .await
+                .map(Some)
+                .map_err(|e| self.detect_err(e)),
+        }
+    }
+
+    fn detect_err(&self, e: DetectError) -> V2cError {
+        match e {
+            DetectError::Status(s) => {
+                self.err(status_error(s).unwrap_or(ProviderErrorKind::BadResponse))
+            }
+            DetectError::Transport(e) => self.send_error(&e),
+            DetectError::NoModel => self.err(ProviderErrorKind::BadResponse),
         }
     }
 
@@ -172,6 +216,7 @@ impl fmt::Debug for OpenAiCompatLlm {
             .field("base_url", &self.base_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("model", &self.model)
+            .field("auto_model", &self.auto.as_ref().map(AutoModel::cached))
             .field("timeout", &self.timeout)
             .field("stage", &self.stage)
             .finish()
@@ -251,34 +296,36 @@ impl LlmProvider for OpenAiCompatLlm {
 
     async fn complete(&self, system: &str, user: &str) -> Result<String> {
         let transcript = prompts::unwrap_transcript(user);
-        let body = ChatRequest {
-            model: self.model.as_deref(),
-            messages: [
-                Message {
-                    role: "system",
-                    content: system,
-                },
-                Message {
-                    role: "user",
-                    content: user,
-                },
-            ],
-            temperature: TEMPERATURE,
-            max_tokens: max_tokens_for(transcript),
-            stream: false,
-            chat_template_kwargs: TemplateKwargs {
-                enable_thinking: false,
-            },
-        };
-        let mut req = self
-            .client
-            .post(format!("{}/chat/completions", self.base_url))
-            .timeout(self.timeout)
-            .json(&body);
-        if let Some(key) = &self.api_key {
-            req = req.bearer_auth(key);
+        let model = self.model().await?;
+        let mut resp = self
+            .send_with_stale_retry(self.chat_request(model.as_deref(), system, user, transcript))
+            .await?;
+        // `auto`: a 404 means the detected model is gone (renamed on the server). Detect once
+        // more and resend if the server now names a different model.
+        if let (Some(auto), Some(stale), reqwest::StatusCode::NOT_FOUND) =
+            (&self.auto, model.as_deref(), resp.status())
+        {
+            let fresh = auto
+                .refresh(
+                    stale,
+                    &self.client,
+                    &self.base_url,
+                    self.api_key.as_deref(),
+                    self.timeout,
+                )
+                .await
+                .map_err(|e| self.detect_err(e))?;
+            if let Some(fresh) = fresh {
+                resp = self
+                    .send_with_stale_retry(self.chat_request(
+                        Some(&fresh),
+                        system,
+                        user,
+                        transcript,
+                    ))
+                    .await?;
+            }
         }
-        let resp = self.send_with_stale_retry(req).await?;
         if let Some(kind) = status_error(resp.status()) {
             return Err(self.err(kind));
         }
@@ -303,6 +350,45 @@ impl LlmProvider for OpenAiCompatLlm {
             return Err(self.err(ProviderErrorKind::BadResponse));
         }
         Ok(text)
+    }
+}
+
+impl OpenAiCompatLlm {
+    fn chat_request(
+        &self,
+        model: Option<&str>,
+        system: &str,
+        user: &str,
+        transcript: &str,
+    ) -> reqwest::RequestBuilder {
+        let body = ChatRequest {
+            model,
+            messages: [
+                Message {
+                    role: "system",
+                    content: system,
+                },
+                Message {
+                    role: "user",
+                    content: user,
+                },
+            ],
+            temperature: TEMPERATURE,
+            max_tokens: max_tokens_for(transcript),
+            stream: false,
+            chat_template_kwargs: TemplateKwargs {
+                enable_thinking: false,
+            },
+        };
+        let req = self
+            .client
+            .post(format!("{}/chat/completions", self.base_url))
+            .timeout(self.timeout)
+            .json(&body);
+        match &self.api_key {
+            Some(key) => req.bearer_auth(key),
+            None => req,
+        }
     }
 }
 
@@ -943,5 +1029,163 @@ mod wire_tests {
             .with_stage(Stage::Translate)
             .with_name("my-server");
         assert_eq!(stage_named.name(), "my-server");
+    }
+
+    fn models(ids: &[&str]) -> ResponseTemplate {
+        let data: Vec<Value> = ids.iter().map(|id| json!({ "id": id })).collect();
+        ResponseTemplate::new(200).set_body_json(json!({ "object": "list", "data": data }))
+    }
+
+    async fn chat_models(server: &MockServer) -> Vec<Value> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path().ends_with("/chat/completions"))
+            .map(|r| serde_json::from_slice::<Value>(&r.body).unwrap()["model"].clone())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn auto_model_is_detected_once_and_sent() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .and(header("authorization", "Bearer k"))
+            .respond_with(models(&["Qwen3.8-27B-FP8", "Qwen3.8-27B-UD-Q6_K_L"]))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(reply("好"))
+            .mount(&server)
+            .await;
+        let l = llm(&server, Some("k"), Some(" Auto ")).with_model_detection();
+        assert_eq!(l.complete(SYSTEM, USER).await.unwrap(), "好");
+        assert_eq!(l.clone().complete(SYSTEM, USER).await.unwrap(), "好");
+        assert_eq!(
+            chat_models(&server).await,
+            vec![json!("Qwen3.8-27B-FP8"), json!("Qwen3.8-27B-FP8")]
+        );
+        assert!(format!("{l:?}").contains("Qwen3.8-27B-FP8"));
+    }
+
+    #[tokio::test]
+    async fn auto_model_is_detected_again_after_404() {
+        let server = MockServer::start().await;
+        // The server renamed its model after the first detection.
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(models(&["old"]))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(models(&["new"]))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(wiremock::matchers::body_partial_json(
+                json!({ "model": "old" }),
+            ))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(wiremock::matchers::body_partial_json(
+                json!({ "model": "new" }),
+            ))
+            .respond_with(reply("好"))
+            .mount(&server)
+            .await;
+        let l = llm(&server, None, Some("auto")).with_model_detection();
+        assert_eq!(l.complete(SYSTEM, USER).await.unwrap(), "好");
+        assert_eq!(chat_models(&server).await, vec![json!("old"), json!("new")]);
+        // The new id is cached: no further detection.
+        assert_eq!(l.complete(SYSTEM, USER).await.unwrap(), "好");
+        let gets = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method.as_str() == "GET")
+            .count();
+        assert_eq!(gets, 2);
+    }
+
+    #[tokio::test]
+    async fn auto_model_404_with_same_id_is_not_resent() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(models(&["m"]))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let e = llm(&server, None, Some("auto"))
+            .with_model_detection()
+            .complete(SYSTEM, USER)
+            .await
+            .unwrap_err();
+        assert_eq!(kind(e), ProviderErrorKind::Unsupported);
+    }
+
+    #[tokio::test]
+    async fn auto_model_detection_failures_map_to_kinds() {
+        for (resp, want) in [
+            (ResponseTemplate::new(401), ProviderErrorKind::Unauthorized),
+            (ResponseTemplate::new(404), ProviderErrorKind::Unsupported),
+            (models(&[]), ProviderErrorKind::BadResponse),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/models"))
+                .respond_with(resp)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .respond_with(reply("不該送出"))
+                .expect(0)
+                .mount(&server)
+                .await;
+            let e = llm(&server, Some("secret-k"), Some("auto"))
+                .with_model_detection()
+                .complete(SYSTEM, USER)
+                .await
+                .unwrap_err();
+            assert!(!format!("{e:?}{e}").contains("secret-k"));
+            assert_eq!(kind(e), want);
+        }
+    }
+
+    #[tokio::test]
+    async fn fixed_model_never_asks_for_the_list() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(models(&["other"]))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let e = llm(&server, None, Some("gone-model"))
+            .complete(SYSTEM, USER)
+            .await
+            .unwrap_err();
+        assert_eq!(kind(e), ProviderErrorKind::Unsupported);
     }
 }

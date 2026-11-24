@@ -5,6 +5,7 @@
   import * as api from "./api.js";
   import * as logic from "./logic.js";
   import { Banner, Button, Dialog, Icon, ListItem, SegmentedButton, Select, TextField } from "../lib/index.js";
+  import { modelLabel } from "../lib/model-label.js";
 
   let { path, onclose = () => {} } = $props();
 
@@ -58,8 +59,8 @@
   const detail = (s) =>
     [
       s.base_url,
-      s.asr_model ? `語音辨識模型 ${s.asr_model}` : "",
-      s.llm_model ? `文字模型 ${s.llm_model}` : "",
+      s.asr_model ? `語音辨識模型 ${modelLabel(s.asr_model)}` : "",
+      s.llm_model ? `文字模型 ${modelLabel(s.llm_model)}` : "",
       s.asr_timeout_ms ? `逾時 ${s.asr_timeout_ms} ms` : "",
     ]
       .filter(Boolean)

@@ -53,33 +53,26 @@ impl OpenAiAsr {
         self.call.provider = name.into();
         self
     }
-}
 
-impl std::fmt::Debug for OpenAiAsr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OpenAiAsr")
-            .field("name", &self.call.provider)
-            .field("base_url", &self.base_url)
-            .field("model", &self.model)
-            .field("has_key", &self.api_key.is_some())
-            .finish()
-    }
-}
-
-#[async_trait]
-impl AsrProvider for OpenAiAsr {
-    fn name(&self) -> &str {
-        &self.call.provider
+    pub(crate) fn call_site(&self) -> &CallSite {
+        &self.call
     }
 
-    async fn transcribe(&self, clip: &AudioClip, ctx: &AsrContext) -> Result<Transcript> {
+    /// Like [`AsrProvider::transcribe`], but with `model` instead of the configured one (used
+    /// by `CompatAsr` for `asr_model = "auto"`).
+    pub(crate) async fn transcribe_as(
+        &self,
+        clip: &AudioClip,
+        ctx: &AsrContext,
+        model: &str,
+    ) -> Result<Transcript> {
         let file = Part::bytes(encode_wav_pcm16(clip))
             .file_name("audio.wav")
             .mime_str("audio/wav")
             .map_err(|_| self.call.error(ProviderErrorKind::BadResponse))?;
         let mut form = Form::new()
             .part("file", file)
-            .text("model", self.model.clone())
+            .text("model", model.to_owned())
             .text("response_format", "json");
         if !ctx.prompt.is_empty() {
             form = form.text("prompt", ctx.prompt.clone());
@@ -101,6 +94,28 @@ impl AsrProvider for OpenAiAsr {
             .to_owned();
         let lang = script_lang(&text);
         Ok(Transcript { text, lang })
+    }
+}
+
+impl std::fmt::Debug for OpenAiAsr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiAsr")
+            .field("name", &self.call.provider)
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("has_key", &self.api_key.is_some())
+            .finish()
+    }
+}
+
+#[async_trait]
+impl AsrProvider for OpenAiAsr {
+    fn name(&self) -> &str {
+        &self.call.provider
+    }
+
+    async fn transcribe(&self, clip: &AudioClip, ctx: &AsrContext) -> Result<Transcript> {
+        self.transcribe_as(clip, ctx, &self.model).await
     }
 }
 

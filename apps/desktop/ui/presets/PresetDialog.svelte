@@ -5,6 +5,7 @@
   import * as api from "./api.js";
   import * as configIo from "../config-io/api.js";
   import { Banner, Button, Dialog, Icon, LinearProgress, ListItem, SegmentedButton, Select, TextField } from "../lib/index.js";
+  import { isAutoModel, modelLabel } from "../lib/model-label.js";
 
   // `onfile(path)`: the user picked a configuration file; the caller opens the import dialog.
   let { onclose = () => {}, onfile = undefined } = $props();
@@ -98,8 +99,12 @@
   const detail = (s) =>
     [
       s.base_url,
-      s.asr_model ? `語音辨識模型 ${s.asr_model}` : "",
-      s.llm_model ? `文字模型 ${s.llm_model}（${api.sourceLabel[s.model_source] ?? "預設值"}）` : "",
+      s.asr_model ? `語音辨識模型 ${modelLabel(s.asr_model)}` : "",
+      s.llm_model
+        ? isAutoModel(s.llm_model)
+          ? "文字模型 自動偵測"
+          : `文字模型 ${s.llm_model}（${api.sourceLabel[s.model_source] ?? "預設值"}）`
+        : "",
       s.asr_timeout_ms ? `逾時 ${s.asr_timeout_ms} ms` : "",
     ]
       .filter(Boolean)
