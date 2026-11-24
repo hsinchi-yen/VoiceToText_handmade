@@ -268,6 +268,11 @@ agent 做完自己的部分後會在這裡新增項目，然後停下來等你�
 
 
 ### 遠端改用 vLLM：模型名稱自動偵測（2026-11-24，main `93250b6` 之後）
-- [ ] Windows：重建安裝檔後套用 TN（或 RD）預設組態，三個服務都顯示「自動偵測」；服務頁三個服務測試連線全過（步驟見 `windows_handover.md` 第 5 節）
-- [ ] Windows：按住熱鍵說中文、用翻譯熱鍵說中文都正常；日誌 `llm_ms` 約 0.3～0.5 秒、沒有 `PolishFellBack`
+- [x] Windows 建置環境（重建安裝檔之前；2026-11-24 已在沒有顯示卡的電腦裝好 Node.js 26.13.1 與 LLVM 23.1.6，建出 CPU 版）：
+  1. 把 Node.js 升到 22 LTS（至少 20.19）。`tools/setup-dev.ps1` 看到已經有 `node` 就會跳過，不會升級，要自己升，例如 `winget upgrade OpenJS.NodeJS.LTS`，或從 <https://nodejs.org> 安裝
+  2. 安裝 LLVM 到 `C:\Program Files\LLVM`（`tools/setup-dev.ps1` 會裝，並設定 `LIBCLANG_PATH`）
+  3. 開新的 PowerShell，跑 `powershell -ExecutionPolicy Bypass -File tools\build-windows.ps1 -CheckOnly`，LLVM 和 Node.js 都不能顯示 MISSING
+  4. 要 GPU（CUDA）版安裝檔，得在有 NVIDIA 顯示卡、裝了 CUDA 12 以上的電腦上建；沒有顯示卡的電腦只能建 CPU 版（只有 SenseVoice）
+- [x] Windows：重建安裝檔後套用 TN（或 RD）預設組態，三個服務都顯示「自動偵測」；服務頁三個服務測試連線全過（步驟見 `windows_handover.md` 第 5 節）（2026-11-24 CPU 版，TN）
+- [x] Windows：按住熱鍵說中文、用翻譯熱鍵說中文都正常；日誌 `llm_ms` 約 0.3～0.5 秒、沒有 `PolishFellBack`（2026-11-24：潤飾 373 ms、翻譯 209 ms，0 次退回）
 - [ ] Android：重建 APK 後在手機上用 TN／RD 服務各說一句

@@ -271,6 +271,10 @@
 - [x] Linux 冒煙測試（改版前的 v2c-core 完整流程，TN／RD 實際伺服器，共 15 分半）：378 次 0 錯誤、0 次退回基本整理、翻譯 0 殘留中文；潤飾 p50 約 380 ms（最慢 448 ms），翻譯 p50 約 336 ms；五個服務測試連線全過。v2c 原有程式不用改
 - [x] 你決定：模型名稱改成連上 API 後自動偵測。`open_ai_compat` 的 `asr_model`／`llm_model = "auto"`（`v2c-core` 新增 `auto_model`、`OpenAiCompatLlm::with_model_detection`）；內建 TN／RD 預設組態與 `docs/examples/` 改用 `"auto"`；介面顯示「自動偵測」。874 項測試、clippy、fmt、npm test 59／check 0／0 通過；實際伺服器 217 次全 `"auto"` 流程 0 錯誤；獨立審查兩輪後通過，經你核准合併（`93250b6`）
 - [x] `windows_handover.md`：Windows 重建與驗證步驟、給 Windows agent 的提示詞
-- [ ] 🧑 Windows：拉 main 重建安裝檔，照 `windows_handover.md` 第 5 節驗證
+- [x] 🧑 Windows：拉 main 重建安裝檔，照 `windows_handover.md` 第 5 節驗證（2026-11-24，CPU 版；GPU 版另外在有顯示卡的電腦建）
+  - 2026-11-24 Windows 第一次嘗試（`44c8e8a`）：`v2c-core` 254、`v2c-ffi` 49、`v2c-platform` 51 項通過（2 項忽略），這三個 crate 的 clippy `-D warnings` 和 `cargo fmt --check` 乾淨。`v2c-asr-local`／`v2c-cli`／`v2c-desktop` 與安裝檔沒建：這台缺 LLVM（libclang），也沒有 NVIDIA 顯示卡和 CUDA（只能建 CPU 版）。`npm run check`／`npm test`／`npm run build` 失敗：Node.js 20.17.0 低於 vite 8／rolldown 要求的 `^20.19.0 || >=22.12.0`，npm 略過了 `@rolldown/binding-win32-x64-msvc`。見 human-checklist「Windows 建置環境」
+  - [x] 2026-11-24 裝好 Node.js 26.13.1 LTS 與 LLVM 23.1.6 後重跑（`44c8e8a`）：`cargo test --workspace` 712 項通過、0 失敗、5 項忽略（比 Linux 的 874 項少，是 Linux 專屬 cfg 的測試）；`cargo clippy --workspace --all-targets -D warnings`、`cargo fmt --check` 乾淨；`npm run check` 206 個檔案 0／0，`npm test` 59 項通過，`npm run build` 成功
+  - [x] CPU 版安裝檔（這台沒有 NVIDIA 顯示卡，只有 SenseVoice）：`tools/build-installer.ps1 -CpuOnly -Jobs 2` → `releases/v2c_0.3.0_x64-setup.exe` 12.1 MiB，SHA-256 `bfd7c4f6274b085d38ca1f30d8700b0147c1f0525c845c680f401ef58f08162a`（已寫進 `releases/SHA256SUMS.txt`）；Defender 掃描安裝檔與 `v2c.exe` 都沒有威脅。GPU 版要在有顯示卡的電腦重建
+  - [x] 第 5 節實機確認（CPU 版安裝檔）：套用 TN 預設組態 `key_missing=0`，三個服務在 `config.toml` 都是 `"auto"`；六個服務測試連線全部 ok（tn-qwen 108 ms、tn-tea-asr 431 ms、tn-breeze-asr 5576 ms）。說話輸入 `mode=Dictate` `llm_ms` 373、放開到出字 967 ms；翻譯 `mode=TranslateZhToEn` `llm_ms` 209、804 ms。日誌 0 次 `PolishFellBack`、0 個 WARN／ERROR、沒有中文字（辨識文字）也沒有金鑰；`config.toml` 沒有金鑰欄位
 - [ ] 🧑 Android：重建 APK（這台 Linux 的 SDK 已移除），新預設組態才會進到手機；舊 APK 用舊名稱照常可用
 - [ ] Linux：需要時重建 .deb／AppImage（這次只合併程式，沒有重新打包）
