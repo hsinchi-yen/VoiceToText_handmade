@@ -574,6 +574,14 @@ fn openai_llm(
         )
         .with_name(svc.id.clone()),
     )
+    // Same rule as `route::build_cloud_llm`: `"auto"` is detected only for compatible servers.
+    .map(|llm| {
+        if svc.kind == CloudKind::OpenAiCompat {
+            llm.with_model_detection()
+        } else {
+            llm
+        }
+    })
 }
 
 /// Runs the wizard's connection test for `draft`. The key comes from the draft, else from

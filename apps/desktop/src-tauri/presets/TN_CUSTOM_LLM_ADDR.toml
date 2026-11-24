@@ -13,7 +13,8 @@ needs_key = ["tn-tea-asr", "tn-breeze-asr"]
 # (TEA and Breeze both require it; found by the Android emulator test 2026-11-13),
 # deliberately committed to git per the project owner's decision (2026-11-12).
 default_keys = { "tn-tea-asr" = "tn8227", "tn-breeze-asr" = "tn8227" }
-# Ask the endpoint for its model list; use it when it names exactly one model.
+# Old apply-time detection; ignored by the desktop (2026-11-13). Model ids below use "auto"
+# instead, which is resolved at run time from the server's /models.
 detect_llm_model = true
 
 [route]
@@ -27,14 +28,14 @@ id = "tn-tea-asr"
 name = "TN TEA-ASR"
 kind = "open_ai_compat"
 base_url = "http://10.20.30.23:8001/v1"
-asr_model = "tea-asr-1"
+asr_model = "auto"
 
 [[cloud]]
 id = "tn-breeze-asr"
 name = "TN Breeze-ASR"
 kind = "open_ai_compat"
 base_url = "http://10.20.30.23:8002/v1"
-asr_model = "breeze-asr-25"
+asr_model = "auto"
 # Breeze is slower than the global default.
 asr_timeout_ms = 8000
 
@@ -43,4 +44,5 @@ id = "tn-qwen"
 name = "TN Qwen3.8 27B"
 kind = "open_ai_compat"
 base_url = "http://10.20.30.23:8000/v1"
-llm_model = "Qwen3.8-27B-UD-Q6_K_L"
+# "auto": v2c asks the server's /models on first use, so a server-side rename needs no config change.
+llm_model = "auto"

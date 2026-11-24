@@ -855,21 +855,21 @@ mod tests {
                 tea.base_url.as_deref(),
                 Some(format!("http://{host}:8001/v1").as_str())
             );
-            assert_eq!(tea.asr_model.as_deref(), Some("tea-asr-1"));
+            assert_eq!(tea.asr_model.as_deref(), Some("auto"));
             assert_eq!(tea.asr_timeout_ms, None);
             let breeze = by("breeze-asr");
             assert_eq!(
                 breeze.base_url.as_deref(),
                 Some(format!("http://{host}:8002/v1").as_str())
             );
-            assert_eq!(breeze.asr_model.as_deref(), Some("breeze-asr-25"));
+            assert_eq!(breeze.asr_model.as_deref(), Some("auto"));
             assert_eq!(breeze.asr_timeout_ms, Some(8000));
             let qwen = by("qwen");
             assert_eq!(
                 qwen.base_url.as_deref(),
                 Some(format!("http://{host}:8000/v1").as_str())
             );
-            assert_eq!(qwen.llm_model.as_deref(), Some("Qwen3.8-27B-UD-Q6_K_L"));
+            assert_eq!(qwen.llm_model.as_deref(), Some("auto"));
             assert!(p.services.iter().all(|s| s
                 .name
                 .as_deref()
@@ -1382,9 +1382,9 @@ polish = \"gemini\"
         let store = MemorySecretStore::new();
         let cases = [
             // An ASR choice without an ASR model.
-            TN.replace("asr_model = \"tea-asr-1\"", ""),
+            TN.replacen("asr_model = \"auto\"", "", 1),
             // Polish / translate target without a text model.
-            TN.replace("llm_model = \"Qwen3.8-27B-UD-Q6_K_L\"", ""),
+            TN.replace("llm_model = \"auto\"", ""),
             TN.replace("translate = \"tn-qwen\"", "translate = \"tn-tea-asr\""),
         ];
         for text in cases {
@@ -1581,7 +1581,7 @@ llm_model = "t"
         apply(&dir.config(), &store, TN, "tn-tea-asr", &Keys::of(&[])).unwrap();
         let cfg = load_config(&dir.config()).unwrap();
         let qwen = cfg.cloud_service("tn-qwen").unwrap();
-        assert_eq!(qwen.llm_model.as_deref(), Some("Qwen3.8-27B-UD-Q6_K_L"));
+        assert_eq!(qwen.llm_model.as_deref(), Some("auto"));
         assert_eq!(cfg.route.asr, "tn-tea-asr");
     }
 

@@ -373,6 +373,12 @@ pub fn build_cloud_llm(
             )
             .with_name(&service.id)
             .with_stage(stage);
+            // `"auto"` is resolved from `/models` only for self-hosted servers (see `auto_model`).
+            let llm = if service.kind == CloudKind::OpenAiCompat {
+                llm.with_model_detection()
+            } else {
+                llm
+            };
             Ok(Some(Box::new(llm)))
         }
         CloudKind::Gemini | CloudKind::Claude => {
@@ -1117,6 +1123,80 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(llm.complete("sys", "你好").await.unwrap(), "Hello.");
+    }
+
+    #[tokio::test]
+    async fn auto_model_is_detected_only_for_compat_services() {
+        let server = MockServer::start().await;
+        let chat_ok = || {
+            ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"message": {"content": "Hello."}, "finish_reason": "stop"}]
+            }))
+        };
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"id": "Qwen3.8-27B-FP8"}, {"id": "alias"}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(chat_ok())
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": "hi"})))
+            .mount(&server)
+            .await;
+        let http = cloud_http_client().unwrap();
+        let t = Duration::from_secs(2);
+        let sent = |reqs: &[wiremock::Request]| -> Vec<String> {
+            reqs.iter()
+                .filter(|r| r.url.path().ends_with("/chat/completions"))
+                .map(|r| serde_json::from_slice::<Value>(&r.body).unwrap()["model"].to_string())
+                .collect()
+        };
+
+        let mut compat = svc("lan", CloudKind::OpenAiCompat);
+        compat.base_url = Some(format!("{}/v1", server.uri()));
+        compat.llm_model = Some("auto".into());
+        compat.asr_model = Some("auto".into());
+        let none = MemorySecretStore::new();
+        let llm = build_cloud_llm(&compat, &none, &http, t, Stage::Polish)
+            .unwrap()
+            .unwrap();
+        assert_eq!(llm.complete("sys", "你好").await.unwrap(), "Hello.");
+        let asr = build_cloud_asr(&compat, &none, &http, t).unwrap().unwrap();
+        asr.transcribe(&probe_clip(500), &AsrContext::default())
+            .await
+            .unwrap();
+        let reqs = server.received_requests().await.unwrap();
+        assert_eq!(sent(&reqs), ["\"Qwen3.8-27B-FP8\""]);
+        let gets = reqs.iter().filter(|r| r.method.as_str() == "GET").count();
+        assert_eq!(
+            gets, 2,
+            "one detection each for the LLM and the ASR provider"
+        );
+        server.reset().await;
+
+        // Official OpenAI: `"auto"` is not special (its list is not one server's model).
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(chat_ok())
+            .mount(&server)
+            .await;
+        let mut openai = svc("oa", CloudKind::OpenAi);
+        openai.base_url = Some(format!("{}/v1", server.uri()));
+        openai.llm_model = Some("auto".into());
+        let llm = build_cloud_llm(&openai, &secrets("oa", "sk-TEST"), &http, t, Stage::Polish)
+            .unwrap()
+            .unwrap();
+        llm.complete("sys", "你好").await.unwrap();
+        let reqs = server.received_requests().await.unwrap();
+        assert_eq!(sent(&reqs), ["\"auto\""]);
+        assert!(reqs.iter().all(|r| r.method.as_str() == "POST"));
     }
 
     #[tokio::test]

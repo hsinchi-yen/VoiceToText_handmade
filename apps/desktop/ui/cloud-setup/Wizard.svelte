@@ -317,7 +317,7 @@
     </datalist>
     {#if isCompat}
       <p class="hint">
-        端點：<code>{draft.base_url}</code>（{roles[role].label}）。模型名稱要和伺服器上的一樣；伺服器有提供清單時，點欄位就會出現。
+        端點：<code>{draft.base_url}</code>（{roles[role].label}）。模型名稱要和伺服器上的一樣；伺服器有提供清單時，點欄位就會出現。填 <code>auto</code> 則由 v2c 自動向伺服器查詢（伺服器改名也不用改設定）。
       </p>
     {/if}
     <div class="fields">

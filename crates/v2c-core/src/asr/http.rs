@@ -67,7 +67,7 @@ impl CallSite {
         }
     }
 
-    fn transport_error(&self, e: &reqwest::Error) -> V2cError {
+    pub(crate) fn transport_error(&self, e: &reqwest::Error) -> V2cError {
         if e.is_timeout() {
             self.timeout_error()
         } else if e.is_decode() || e.is_body() {

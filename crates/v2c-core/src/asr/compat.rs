@@ -2,6 +2,9 @@
 //! another PC's service). Same wire format as [`super::openai::OpenAiAsr`]; the API key is
 //! optional. Servers that only implement chat completions answer 404/405/501 on
 //! `/audio/transcriptions`, which surfaces as `ProviderErrorKind::Unsupported`.
+//!
+//! `model = "auto"` reads the id from the server's `/models` on first use and detects again
+//! after a 404 (see [`crate::auto_model`]).
 
 use std::time::Duration;
 
@@ -9,13 +12,29 @@ use async_trait::async_trait;
 
 use super::openai::OpenAiAsr;
 use super::{AsrContext, AsrProvider, Transcript};
-use crate::asr::http::CloudHttp;
+use crate::asr::http::{failure_kind, CloudHttp};
 use crate::audio::AudioClip;
+use crate::auto_model::{is_auto, AutoModel, DetectError};
+use crate::error::ProviderErrorKind;
 use crate::secrets::ApiKey;
-use crate::Result;
+use crate::{Result, V2cError};
 
 #[derive(Debug)]
-pub struct CompatAsr(OpenAiAsr);
+pub struct CompatAsr {
+    inner: OpenAiAsr,
+    /// `Some` when the configured model is `"auto"`.
+    auto: Option<Auto>,
+}
+
+/// What detection needs besides the cache (the inner provider keeps its fields private).
+#[derive(Debug)]
+struct Auto {
+    model: AutoModel,
+    http: CloudHttp,
+    base_url: String,
+    api_key: Option<ApiKey>,
+    timeout: Duration,
+}
 
 impl CompatAsr {
     pub fn new(
@@ -25,22 +44,79 @@ impl CompatAsr {
         model: impl Into<String>,
         timeout: Duration,
     ) -> Self {
-        Self(OpenAiAsr::new(http, base_url, api_key, model, timeout).with_name("compat"))
+        let (base_url, model) = (base_url.into(), model.into());
+        let auto = is_auto(&model).then(|| Auto {
+            model: AutoModel::default(),
+            http: http.clone(),
+            base_url: base_url.clone(),
+            api_key: api_key.clone(),
+            timeout,
+        });
+        Self {
+            inner: OpenAiAsr::new(http, base_url, api_key, model, timeout).with_name("compat"),
+            auto,
+        }
     }
 
     pub fn with_name(self, name: impl Into<String>) -> Self {
-        Self(self.0.with_name(name))
+        Self {
+            inner: self.inner.with_name(name),
+            auto: self.auto,
+        }
+    }
+
+    fn detect_err(&self, e: DetectError) -> V2cError {
+        let call = self.inner.call_site();
+        match e {
+            DetectError::Status(s) => call.error(failure_kind(s, "")),
+            DetectError::Transport(e) => call.transport_error(&e),
+            DetectError::NoModel => call.error(ProviderErrorKind::BadResponse),
+        }
+    }
+}
+
+impl Auto {
+    fn key(&self) -> Option<&str> {
+        self.api_key.as_ref().map(ApiKey::expose)
     }
 }
 
 #[async_trait]
 impl AsrProvider for CompatAsr {
     fn name(&self) -> &str {
-        self.0.name()
+        self.inner.name()
     }
 
     async fn transcribe(&self, clip: &AudioClip, ctx: &AsrContext) -> Result<Transcript> {
-        self.0.transcribe(clip, ctx).await
+        let Some(a) = &self.auto else {
+            return self.inner.transcribe(clip, ctx).await;
+        };
+        let client = a.http.client();
+        let model = a
+            .model
+            .get(client, &a.base_url, a.key(), a.timeout)
+            .await
+            .map_err(|e| self.detect_err(e))?;
+        match self.inner.transcribe_as(clip, ctx, &model).await {
+            // 404 (reported as Unsupported): the detected model may have been renamed. 405/501
+            // map to Unsupported too (no transcription endpoint); re-detecting then costs one
+            // extra GET and still ends as Unsupported.
+            Err(V2cError::Provider {
+                kind: ProviderErrorKind::Unsupported,
+                ..
+            }) => {
+                let fresh = a
+                    .model
+                    .refresh(&model, client, &a.base_url, a.key(), a.timeout)
+                    .await
+                    .map_err(|e| self.detect_err(e))?;
+                match fresh {
+                    Some(m) => self.inner.transcribe_as(clip, ctx, &m).await,
+                    None => Err(self.inner.call_site().error(ProviderErrorKind::Unsupported)),
+                }
+            }
+            r => r,
+        }
     }
 }
 
@@ -186,5 +262,137 @@ mod tests {
             ),
             "{err:?}"
         );
+    }
+
+    fn auto_asr(server: &MockServer) -> CompatAsr {
+        CompatAsr::new(
+            cloud_http_client().unwrap(),
+            format!("{}/v1", server.uri()),
+            Some(ApiKey::new("local-key")),
+            "auto",
+            Duration::from_millis(500),
+        )
+        .with_name("rd-tea-asr")
+    }
+
+    fn models(ids: &[&str]) -> ResponseTemplate {
+        let data: Vec<_> = ids
+            .iter()
+            .map(|id| serde_json::json!({ "id": id }))
+            .collect();
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": data }))
+    }
+
+    fn sent_models(reqs: &[wiremock::Request]) -> Vec<String> {
+        reqs.iter()
+            .filter(|r| r.method.as_str() == "POST")
+            .map(|r| {
+                let body = String::from_utf8_lossy(&r.body).to_string();
+                let rest = body
+                    .split("name=\"model\"\r\n\r\n")
+                    .nth(1)
+                    .unwrap()
+                    .to_owned();
+                rest.split("\r\n").next().unwrap().to_owned()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn auto_model_is_detected_with_the_key_and_cached() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .and(header("authorization", "Bearer local-key"))
+            .respond_with(models(&["tea-asr-1.1"]))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"text": "hi"})),
+            )
+            .mount(&server)
+            .await;
+        let a = auto_asr(&server);
+        assert_eq!(a.name(), "rd-tea-asr");
+        a.transcribe(&tone(), &ctx()).await.unwrap();
+        a.transcribe(&tone(), &ctx()).await.unwrap();
+        let reqs = server.received_requests().await.unwrap();
+        assert_eq!(sent_models(&reqs), vec!["tea-asr-1.1", "tea-asr-1.1"]);
+    }
+
+    #[tokio::test]
+    async fn auto_model_is_detected_again_after_404() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(models(&["tea-asr-1"]))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(models(&["tea-asr-1.1"]))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(404))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"text": "hi"})),
+            )
+            .mount(&server)
+            .await;
+        auto_asr(&server).transcribe(&tone(), &ctx()).await.unwrap();
+        let reqs = server.received_requests().await.unwrap();
+        assert_eq!(sent_models(&reqs), vec!["tea-asr-1", "tea-asr-1.1"]);
+    }
+
+    #[tokio::test]
+    async fn auto_model_failures_keep_error_kinds_and_hide_the_key() {
+        for (resp, kind) in [
+            (ResponseTemplate::new(401), ProviderErrorKind::Unauthorized),
+            (models(&[]), ProviderErrorKind::BadResponse),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(resp)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(0)
+                .mount(&server)
+                .await;
+            let err = auto_asr(&server)
+                .transcribe(&tone(), &ctx())
+                .await
+                .unwrap_err();
+            assert_provider_err(&err, Stage::Asr, kind);
+            assert_no_secrets(&err, &["local-key", "HINT"]);
+        }
+        // Same model still listed after a 404: report it, do not resend.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(models(&["m"]))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let err = auto_asr(&server)
+            .transcribe(&tone(), &ctx())
+            .await
+            .unwrap_err();
+        assert_provider_err(&err, Stage::Asr, ProviderErrorKind::Unsupported);
     }
 }

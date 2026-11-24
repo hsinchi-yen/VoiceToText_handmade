@@ -72,10 +72,16 @@
 | `id` | 必填 | 服務代號，見下方「id 規則」。 |
 | `kind` | 必填 | `gemini`、`open_ai`、`claude`、`open_ai_compat` 其中之一。 |
 | `name` | 選填 | 顯示名稱，只有 `open_ai_compat` 有效（其他種類會忽略）。最長 32 字元、不可有控制字元、不可是 `local`，也不可和其他服務的名稱或 id 重複（不分大小寫）。 |
-| `asr_model` | 選填 | 語音辨識模型。留白＝使用建議值（`open_ai_compat` 沒有建議值）。Claude 沒有語音辨識。 |
-| `llm_model` | 選填 | 文字模型（潤飾、中翻英）。留白＝使用建議值。 |
+| `asr_model` | 選填 | 語音辨識模型。留白＝使用建議值（`open_ai_compat` 沒有建議值）。Claude 沒有語音辨識。`open_ai_compat` 可寫 `"auto"`（自動偵測，見下方說明）。 |
+| `llm_model` | 選填 | 文字模型（潤飾、中翻英）。留白＝使用建議值。`open_ai_compat` 可寫 `"auto"`（自動偵測，見下方說明）。 |
 | `base_url` | `open_ai_compat` 必填 | 服務網址。官方服務（gemini／open_ai／claude）通常不用寫；要寫就必須是 `https://`（本機 `localhost` 可用 `http://`）。`open_ai_compat` 可以用 `http://`（區網）。結尾的 `/` 會被去掉。 |
 | `asr_timeout_ms` | 選填 | 這個服務的語音辨識逾時，毫秒，1000 到 60000。留白＝用全域設定。 |
+
+**`"auto"`（自動偵測模型名稱，只限 `open_ai_compat`）**：v2c 第一次用到這個服務時，會向伺服器查詢模型清單（`GET {base_url}/models`），用清單上的**第一個**模型並記住；設定重新載入（例如儲存設定、套用預設組態）後會重新查詢。之後如果伺服器回「找不到這個模型」（404，例如伺服器改了名稱），會重新查詢一次再重送。伺服器換模型或改名時，不用改設定。內建的 TN／RD 預設組態都用 `"auto"`。
+
+- 伺服器必須提供 `GET /models`（vLLM、llama.cpp、LM Studio、TEA／Breeze 服務都有）；沒有的話會連線失敗，請改寫明確的名稱。
+- 如果伺服器同時提供好幾個**不同**的模型，第一個不一定是你要的，這時請寫明確的名稱。
+- 其他種類（`gemini`、`open_ai`、`claude`）和 `[local] llm_model` 不會自動偵測，`"auto"` 會原樣送出。`[local]` 想用 LM Studio 目前載入的模型時，`llm_model` 留空即可。
 
 ### `[vocabulary]`（選填）
 
@@ -184,7 +190,7 @@ id = "lan-llm"
 name = "區網 Qwen"
 kind = "open_ai_compat"
 base_url = "http://192.168.1.10:8000/v1"
-llm_model = "Qwen3.8-27B-UD-Q6_K_L"
+llm_model = "auto"                # 自動向伺服器查詢模型名稱
 ```
 
 ### 範例三：只有詞庫
